@@ -132,6 +132,15 @@ b1_decisions:
   关键字冲突: type -> r#type（JSON 键不变）
   Modrinth ModLoaderType: 逐变体 #[serde(rename)]（neoForge/liteLoader 等）
 
+# ── B2 定案（2026-08-06，CHECKPOINT_BATCH_2）────────
+b2_decisions:
+  MurmurHash2: from_le_bytes + wrapping + h as i64（uint 零扩展）；尾部 goto 穿透为累积异或
+  class 常量池: 17 种 CONSTANT_* 1:1 移植（version_json.rs）
+  NBT: 仅支持 Byte/String/List(Compound)/Compound，其余抛错（同源）
+  OS 版本匹配: 无 std 等价 → 恒不匹配（可选 os_info crate）
+  MinecraftDateTime: 轻量结构（year i32 + 时分秒 u8 + offset_minutes），无 chrono
+  launcher_profiles.json: 源 AOT 无实现 → 暂缓（B11 评估）
+
 # ── 事件映射（Public/Events/ → src/event.rs）──────
 events:
   进度报告事件 -> CoreEvent::Progress { task, current, total }
