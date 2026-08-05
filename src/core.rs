@@ -9,9 +9,6 @@
 //! - `IDisposable` → 无对应（Rust 所有权 + Drop 自动释放，无需 Dispose）
 //!
 //! 待补清单（后续批次）：
-//! - ⚠️ `installer_factory`：源属性 `IInstallerFactory Installer`（6 种安装器创建），
-//!   其 trait（InstallerFactory）在 api/installer.rs 尚未定义（B3 标注"属另一源文件，
-//!   后续批次补充"）→ 本批不引入字段，待 B5+ 定义 trait 后补充字段/参数/访问器
 //! - HttpClient 字段：本批不引入（B13 网络层定 reqwest 共享 client，届时统一注入）
 //! - `create_modrinth_source` / `create_curseforge_source` / `create_ftb_source`：
 //!   源实现依赖 Services/Expansion 具体类（B13 批次）→ 本批不实现
@@ -21,7 +18,7 @@ use std::sync::Arc;
 
 use crate::api::auth::AuthProvider;
 use crate::api::download::DownloadSourceManager;
-use crate::api::installer::InstallerProvider;
+use crate::api::installer::{InstallerFactory, InstallerProvider};
 use crate::api::java::JavaProvider;
 use crate::api::launch::LaunchExecutor;
 use crate::api::local::LocalResourcesFactory;
@@ -45,6 +42,8 @@ pub struct GameCore {
     java_provider: Arc<dyn JavaProvider + Send + Sync>,
     /// 安装器提供方（源：InstallerProvider 属性，IInstallerProvider）
     installer_provider: Arc<dyn InstallerProvider + Send + Sync>,
+    /// 安装器工厂（源：Installer 属性，IInstallerFactory）
+    installer_factory: Arc<dyn InstallerFactory + Send + Sync>,
     /// 版本定位器（源：Locator 属性，IVersionLocator）
     locator: Arc<dyn VersionLocator + Send + Sync>,
     /// 游戏选项提供方（源：Options 属性，IOptionsProvider?，可空）
@@ -69,13 +68,14 @@ impl GameCore {
     /// - `download_manager` / `local_resource_provider`：C# 可空参数但以 `!` 强制非空
     ///   赋值 → 必填
     /// - `http`（HttpClient）：本批不引入（B13 网络层定 reqwest 共享 client）
-    /// - `installer_factory`（IInstallerFactory）：⚠️ 缺失（trait 未定义，见文件头待补清单）
+    /// - `installer_factory`（IInstallerFactory）：必填（源构造参数，见文件头）
     pub fn new(
         version: Arc<dyn VersionManagement + Send + Sync>,
         auth: Arc<dyn AuthProvider + Send + Sync>,
         launch: Arc<dyn LaunchExecutor + Send + Sync>,
         java_provider: Arc<dyn JavaProvider + Send + Sync>,
         installer_provider: Arc<dyn InstallerProvider + Send + Sync>,
+        installer_factory: Arc<dyn InstallerFactory + Send + Sync>,
         locator: Arc<dyn VersionLocator + Send + Sync>,
         game_root: String,
         options: Option<Arc<dyn OptionsProvider + Send + Sync>>,
@@ -89,6 +89,7 @@ impl GameCore {
             launch,
             java_provider,
             installer_provider,
+            installer_factory,
             locator,
             options,
             server,
@@ -121,6 +122,16 @@ impl GameCore {
     /// 安装器提供方（源：`InstallerProvider` 属性）
     pub fn installer_provider(&self) -> &dyn InstallerProvider {
         self.installer_provider.as_ref()
+    }
+
+    /// 安装器工厂（源：`Installer` 属性，IInstallerFactory）
+    ///
+    /// ⚠️ 可见性：`InstallerFactory` 为 `pub(crate)`（p35 日志 D1：其方法签名返回
+    /// `Box<dyn Installer + Send + Sync>`，`Installer` 为 pub(crate)，trait 无法 pub；
+    /// 对外导出待 Installer 可见性一并调整）→ 访问器同步为 `pub(crate)`。
+    #[allow(dead_code)] // 过渡期：P22 builder 组装后使用
+    pub(crate) fn installer_factory(&self) -> &dyn InstallerFactory {
+        self.installer_factory.as_ref()
     }
 
     /// 版本定位器（源：`Locator` 属性）
@@ -157,3 +168,4 @@ impl GameCore {
 // B13: CreateModrinthSource 等 3 个工厂方法待扩展平台实现批次补充
 // （源实现依赖 Services/Expansion 的 ModrinthBase / CurseForgeBase / FTBBase 具体类，
 //   且依赖 HttpClient —— 网络层定案后一并引入）
+
