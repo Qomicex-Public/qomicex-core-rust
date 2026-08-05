@@ -1,0 +1,98 @@
+# MAPPING_TABLE.yaml — Qomicex.Core.AOT (.NET) → qomicex-core-rust
+# 固化所有类型/API/枚举的源→目标映射。写代码前必须查阅此文件；发现新映射先更新此文件再写代码。
+
+meta:
+  source_repo: https://github.com/Qomicex-Public/Qomicex.Core.AOT
+  source_framework: .NET 10 Native AOT
+  target_framework: Rust 2024 edition, rlib
+  created: 2026-08-06
+  status: 建立中（随移植批次扩充）
+
+# ── 基础设施映射 ───────────────────────────────
+runtime:
+  System.Text.Json (SourceGen): serde + serde_json derive
+  HttpClient: reqwest (tokio)
+  Task/async-await: async fn + tokio
+  Process: std::process::Command
+  IProgress<T>: mpsc::channel<CoreEvent>（见 src/event.rs 设计）
+  Tomlyn: toml crate
+  System.IO.Compression: zip / bzip2 crates
+  SHA1/MD5 内置: sha1 / sha2 / base64 crates
+  自定义异常: thiserror Error enum（src/error.rs）
+
+# ── 公开 API 映射（Public/ → api/ traits）────────
+api:
+  IAuthProvider -> trait AuthProvider (api/auth.rs)
+    - AuthenticateAsync(AuthRequest) -> authenticate(&self, req: AuthRequest) -> AuthResult
+    - LoginAsync (设备码流) -> login() -> DeviceCode
+    - CompleteLoginAsync -> complete_login()
+  ILaunchExecutor -> trait LaunchExecutor (api/launch.rs)
+    - ExecuteAsync(LaunchOptions) -> execute(&self, opts: LaunchOptions) -> LaunchResult
+  IVersionManagementService -> trait VersionManagement (api/version.rs)
+    - GetRemoteVersionsAsync / GetLocalVersions / InstallAsync
+  IVersionManifestService -> trait VersionManifest (api/version.rs)
+  IVersionLocator -> trait VersionLocator (api/version.rs)
+  IResourceCompleter -> trait ResourceCompleter (api/version.rs)
+  IDownloadSourceManager -> trait DownloadSourceManager (api/download.rs)
+  IJavaProvider -> trait JavaProvider (api/java.rs)
+    - SearchAsync(JavaSearchOptions) / Recommand(javaList, metadata) / GetPackages(...)
+  IInstallerProvider -> trait InstallerProvider (api/installer.rs)
+    - GetAvailableModLoaders(gameVersion, type) -> get_available_mod_loaders()
+  IInstallerFactory -> trait InstallerFactory (api/installer.rs)
+    - CreateForge/CreateNeoForge/CreateFabric/CreateQuilt/CreateLiteLoader/CreateOptiFine
+  ILocalResourcesFactory -> trait LocalResourcesFactory (api/local.rs)
+    - CreateMods/CreateSaves/CreateResourcepack/CreateShaders/CreateDataPacks/CreateScreenshots
+  IServerManager -> trait ServerManager (api/server.rs)
+    - LoadServerList/AddOrUpdateServer/RemoveServer/GetServerStateByAddress/DiscoverLanServers
+  IOptionsProvider -> trait OptionsProvider (api/options.rs)
+    - GetOptionViewItems(lang) / GetCurrentValue / SetOption
+  ICurseForgeSource / IModrinthSource / IFTBSource -> api/expansion 模块 traits
+
+# ── Builder 映射 ────────────────────────────────
+builder:
+  GameCoreBuilder (Builder/GameCoreBuilder.cs) -> GameCore::builder() (src/builder.rs)
+  CoreOptions (Builder/CoreOptions.cs) -> CoreOptions struct (src/builder.rs)
+  DefaultGameCore (Core/DefaultGameCore.cs) -> GameCore struct (src/core.rs)
+
+# ── 枚举映射 ────────────────────────────────────
+enums:
+  AuthMode.Offline -> AuthMode::Offline
+  AuthMode.Microsoft -> AuthMode::Microsoft
+  AuthMode.Yggdrasil -> AuthMode::Yggdrasil
+  DownloadMirror.Official -> DownloadMirror::Official
+  DownloadMirror.BMCLAPI -> DownloadMirror::Bmclapi
+  JavaSearchMode.Deep -> JavaSearchMode::Deep
+  JavaPlatform.Windows -> JavaPlatform::Windows (Linux/macOS 同理)
+  JavaArchitecture.X64 -> JavaArchitecture::X64
+  JavaPackageType.JDK -> JavaPackageType::Jdk
+  JavaDownloadSource.Adoptium -> JavaDownloadSource::Adoptium (Zulu/Bmclapi 同理)
+  ModLoaderType.Forge -> ModLoaderType::Forge (NeoForge/Fabric/Quilt/LiteLoader/OptiFine 同理)
+
+# ── 模型映射（Models/ → src/models/）────────────
+models:
+  Auth/AuthRequest, AuthResult, DeviceCode -> models::auth::{AuthRequest, AuthResult, DeviceCode}
+  LaunchResult -> models::launch::LaunchResult
+  JavaResult -> models::java::JavaResult
+  ModLoaderResult -> models::installer::ModLoaderResult
+  VersionManifest/* -> models::version_manifest::*
+  VersionMetadata/* -> models::version_metadata::*
+  Expansion/Local/* (ModInfo, SaveInfo, ResourcePackInfo, ShaderInfo, DataPackInfo, ScreenshotInfo) -> models::expansion::local::*
+  Expansion/CurseForge/* -> models::expansion::curseforge::*
+  Expansion/Modrinth/* -> models::expansion::modrinth::*
+  Expansion/FeedTheBeast/* -> models::expansion::ftb::*
+  ParamsMeta/* (安装器参数元数据) -> models::params_meta::*
+  Local/ServerEntry, ServerState, GameOption -> models::local::{ServerEntry, ServerState, GameOption}
+
+# ── 工具映射（Utils/ → src/util/）────────────────
+utils:
+  MurmurHash2 (CurseForge 指纹) -> util/murmurhash2.rs
+  NBT 解析/序列化 (NbtIO.cs) -> util/nbt.rs
+  launcher_profiles.json -> util/launcher_profiles.rs
+  版本 JSON 继承与合并 -> util/version_json.rs
+  下载重试 + 校验 -> services/download/retry.rs, checksum.rs
+
+# ── 事件映射（Public/Events/ → src/event.rs）──────
+events:
+  进度报告事件 -> CoreEvent::Progress { task, current, total }
+  日志/输出事件 -> CoreEvent::Log { level, message }
+  状态事件 -> CoreEvent::State { phase }

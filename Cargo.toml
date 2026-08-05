@@ -1,0 +1,12 @@
+[package]
+name = "qomicex-core-rust"
+version = "0.1.0"
+edition = "2024"
+description = "Minecraft launcher core library (Rust version of Qomicex.Core.AOT)"
+authors = ["Qomicex Team"]
+license = "MIT"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
