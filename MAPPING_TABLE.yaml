@@ -21,32 +21,40 @@ runtime:
   自定义异常: thiserror Error enum（src/error.rs）
 
 # ── 公开 API 映射（Public/ → api/ traits）────────
+# 注：B3 实际签名以源文件为准（README 与源代码存在差异，已在 B3 修正）
 api:
   IAuthProvider -> trait AuthProvider (api/auth.rs)
-    - AuthenticateAsync(AuthRequest) -> authenticate(&self, req: AuthRequest) -> AuthResult
-    - LoginAsync (设备码流) -> login() -> DeviceCode
-    - CompleteLoginAsync -> complete_login()
+    - AuthenticateAsync -> authenticate(&self, request: AuthRequest) -> Result<AuthResult>
+    - ValidateAsync -> validate(&self, access_token) -> Result<bool>
+    - InvalidateAsync -> invalidate(&self, access_token) -> Result<()>
+    - StartDeviceCodeAsync -> start_device_code()（默认 Ok(None)）
+    - PollForTokenAsync -> poll_for_token(device_code)（默认 Ok(None)）
+    - CompleteLoginAsync -> complete_login(token, refresh)（默认不支持错误）
+    - RefreshLoginAsync -> refresh_login(refresh)（默认不支持错误）
   ILaunchExecutor -> trait LaunchExecutor (api/launch.rs)
-    - ExecuteAsync(LaunchOptions) -> execute(&self, opts: LaunchOptions) -> LaunchResult
+    - LaunchAsync -> async launch(options) -> Result<LaunchResult>
+    - KillAsync -> async kill(process_id) -> Result<bool>
   IVersionManagementService -> trait VersionManagement (api/version.rs)
-    - GetRemoteVersionsAsync / GetLocalVersions / InstallAsync
+    - GetManifestAsync / GetAvailableVersionsAsync / GetLatestVersionsAsync(force_refresh)
+    - GetVersionMetadataAsync / IsVersionInstalled / InstallVersionAsync(progress)
+    - UninstallVersionAsync / GetInstalledVersions
   IVersionManifestService -> trait VersionManifest (api/version.rs)
+    - GetVersionManifestAsync -> get_version_manifest；GetVersionMetadataAsync(url) -> get_version_metadata
   IVersionLocator -> trait VersionLocator (api/version.rs)
+    - 重载 GetMissFilesAsync(meta/jsonData) -> get_miss_files / get_miss_files_from_json（4 组同名）
   IResourceCompleter -> trait ResourceCompleter (api/version.rs)
   IDownloadSourceManager -> trait DownloadSourceManager (api/download.rs)
+    - GetAvailableSources / GenerateMirrorUrls / TestSourceAsync / AddCustomSource(&mut self) / GetPreferredSource
   IJavaProvider -> trait JavaProvider (api/java.rs)
-    - SearchAsync(JavaSearchOptions) / Recommand(javaList, metadata) / GetPackages(...)
+    - Search -> search(&JavaSearchOptions)；Recommand(java_list, metadata)
+    - Check(java, metadata) -> bool；GetPackages(...)
   IInstallerProvider -> trait InstallerProvider (api/installer.rs)
-    - GetAvailableModLoaders(gameVersion, type) -> get_available_mod_loaders()
-  IInstallerFactory -> trait InstallerFactory (api/installer.rs)
-    - CreateForge/CreateNeoForge/CreateFabric/CreateQuilt/CreateLiteLoader/CreateOptiFine
+    - GetAvailableModLoaders -> get_available_mod_loaders(game_version, r#type)
   ILocalResourcesFactory -> trait LocalResourcesFactory (api/local.rs)
-    - CreateMods/CreateSaves/CreateResourcepack/CreateShaders/CreateDataPacks/CreateScreenshots
-  IServerManager -> trait ServerManager (api/server.rs)
-    - LoadServerList/AddOrUpdateServer/RemoveServer/GetServerStateByAddress/DiscoverLanServers
-  IOptionsProvider -> trait OptionsProvider (api/options.rs)
-    - GetOptionViewItems(lang) / GetCurrentValue / SetOption
-  ICurseForgeSource / IModrinthSource / IFTBSource -> api/expansion 模块 traits
+    - 6 个 Create* -> Box<dyn XxxManager + Send + Sync>（子接口 B10 翻译）
+  IServerManager -> trait ServerManager (api/server.rs)（15 方法，CancellationToken 暂用 () 占位）
+  IOptionsProvider -> trait OptionsProvider (api/options.rs)（13 方法）
+  ICurseForgeSource / IModrinthSource / IFTBSource -> api/expansion.rs（3 traits）
 
 # ── Builder 映射 ────────────────────────────────
 builder:

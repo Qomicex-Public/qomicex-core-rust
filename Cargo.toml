@@ -19,3 +19,4 @@ sha1 = "0.10"
 md-5 = "0.10"
 zip = "2"
 regex = "1"
+tokio = { version = "1", features = ["sync"] }

@@ -6,6 +6,10 @@
 //!
 //! 架构设计见 `docs/architecture.md`，类型映射见 `MAPPING_TABLE.yaml`。
 
+// async fn in trait（RPITIT 决策）：B3 阶段保持 async fn 可读性；
+// 若 B4 Facade 集成出现跨线程 spawn 需求，批量转 `-> impl Future + Send`。
+#![allow(async_fn_in_trait)]
+
 pub mod api;
 pub mod builder;
 pub mod core;
