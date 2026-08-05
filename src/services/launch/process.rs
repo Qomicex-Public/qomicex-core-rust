@@ -31,15 +31,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use futures::future::OptionFuture;
-use serde_json::Value;
 use tokio::io::AsyncBufReadExt;
 
 use crate::api::version::VersionLocator as _;
 use crate::error::Error;
 use crate::models::download::DownloadMirror;
 use crate::models::launch::{LaunchOptions, LaunchResult};
-use crate::models::params_meta::{Arguments, Config};
-use crate::models::version_metadata::{AssetIndex, Library};
+use crate::models::version_metadata::Library;
 use crate::services::launch::jvm_args::LaunchExecutor;
 use crate::services::version::locator::DefaultVersionLocator;
 use crate::util::file_helper::unzip;
@@ -523,84 +521,8 @@ impl LaunchExecutor {
         check_libs_ver(lib_list)
     }
 
-    /// 解析版本 JSON 为安装器配置（源：`ParseGameJson`，private）。
-    ///
-    /// 源语义：文件缺失/读取失败 → FileNotFoundException（→ Error::VersionNotFound）；
-    /// 畸形 JSON → JsonException → ParamsException("版本Json解析失败")（→ Error::Params，逐字）。
-    ///
-    /// ⚠️ 偏差（B1 模型约束，见日志 p34）：C# `Config` 记录属性声明非空，但 STJ 对缺失键/显式
-    /// null 置 null，调用处全部经 `?.X ?? 默认值` 容错读取（如 `config.AssetIndex?.Id ?? ""`、
-    /// `config.InheritsFrom is null`、`config.Arguments?.Jvm is null`）；Rust `params_meta::Config`
-    /// 字段必填，严格反序列化会在缺 `minecraftArguments` / `inheritsFrom` 的真实版本 JSON 上失败。
-    /// 解法：先解析为 `serde_json::Value` 校验语法，再手动以"null 等价默认值"（空串 / 0 / 空列表）
-    /// 填充——与源各调用点的容错读取观察等价；键存在但类型不符（如 arguments 为字符串）按 STJ
-    /// 抛错语义返回"版本Json解析失败"。
-    pub(crate) fn parse_game_json_config(&self, options: &LaunchOptions) -> Result<Config, Error> {
-        let game_dir = self.effective_game_dir(options);
-        let json_path = Path::new(&game_dir)
-            .join("versions")
-            .join(&options.version)
-            .join(format!("{}.json", options.version));
-        let json = fs::read_to_string(&json_path).map_err(|e| Error::VersionNotFound {
-            message: format!("启动失败,{e}"),
-            source: Some(Box::new(e)),
-        })?;
-
-        // 源：JsonSerializer.Deserialize 畸形 JSON → JsonException → ParamsException
-        let root: Value = serde_json::from_str(&json).map_err(|e| Error::Params {
-            message: "版本Json解析失败".to_string(),
-            source: Some(Box::new(e)),
-        })?;
-
-        // 源：Arguments 缺失或显式 null → null（旧版兼容分支）；其他类型 → JsonException
-        let arguments = match root.get("arguments") {
-            Some(Value::Object(obj)) => Arguments {
-                jvm: obj
-                    .get("jvm")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default(),
-                game: obj
-                    .get("game")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default(),
-            },
-            Some(Value::Null) | None => Arguments { jvm: Vec::new(), game: Vec::new() },
-            Some(_) => return Err(json_parse_error()),
-        };
-
-        // 源：assetIndex 缺失 → null（`config.AssetIndex?.Id ?? ""` 等容错读取）
-        let asset_index = match root.get("assetIndex") {
-            Some(Value::Object(obj)) => AssetIndex {
-                id: obj.get("id").and_then(Value::as_str).unwrap_or("").to_string(),
-                sha1: obj
-                    .get("sha1")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                size: obj.get("size").and_then(Value::as_i64).unwrap_or(0),
-                total_size: obj.get("totalSize").and_then(Value::as_i64).unwrap_or(0),
-                url: obj.get("url").and_then(Value::as_str).unwrap_or("").to_string(),
-            },
-            Some(Value::Null) | None => AssetIndex {
-                id: String::new(),
-                sha1: String::new(),
-                size: 0,
-                total_size: 0,
-                url: String::new(),
-            },
-            Some(_) => return Err(json_parse_error()),
-        };
-
-        Ok(Config {
-            arguments,
-            inherits_from: get_string_field(&root, "inheritsFrom")?,
-            main_class: get_string_field(&root, "mainClass")?,
-            minecraft_arguments: get_string_field(&root, "minecraftArguments")?,
-            asset_index,
-        })
-    }
+    // 注：parse_game_json_config（B8 重复版）已删除——版本 JSON 解析统一走 jvm_args.rs 的 parse_game_json
+    // 原实现语义（源 ParseGameJson）：文件缺失/畸形 JSON 的错误映射见 jvm_args.rs 对应方法
 }
 
 // ── 源 private static / 辅助函数 ────────────────────────
@@ -799,21 +721,8 @@ fn file_name(path: &str) -> &str {
 }
 
 /// 读取顶层字符串字段（源 STJ 语义：缺失/显式 null → null；类型不符 → JsonException）
-fn get_string_field(root: &Value, key: &str) -> Result<String, Error> {
-    match root.get(key) {
-        Some(Value::String(s)) => Ok(s.clone()),
-        Some(Value::Null) | None => Ok(String::new()),
-        Some(_) => Err(json_parse_error()),
-    }
-}
 
 /// 源 ParamsException("版本Json解析失败")（逐字消息）
-fn json_parse_error() -> Error {
-    Error::Params {
-        message: "版本Json解析失败".to_string(),
-        source: None,
-    }
-}
 
 /// 启动流程中的 IO 失败 → Error::Params（消息保留源失败结果模式 "启动失败,{ex.Message}"，
 /// 见日志 p34 错误映射决策）
@@ -868,3 +777,6 @@ mod tests {
         assert!(s.contains('.'));
     }
 }
+
+
+

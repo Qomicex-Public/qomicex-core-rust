@@ -63,16 +63,13 @@ use crate::services::installers::installer::{Installer, InstallerBase};
 /// 内联为本结构字段；_installerPath/_mainJarPath 仅安装流程内使用且 InstallAsync 内无并发，
 /// 不落字段、按参数传递（见日志 D1）。
 pub(crate) struct ForgeInstaller {
-    /// ����Դ��ʶ��Դ `SourceId`�������ֶΣ���1 �� BMCLAPI ����GetMissForgeLibraries ��
-    /// `SourceId != 0` ���� lib.Url �Ƿ� ResolveUrl ��д��
+    /// 下载源标识（源 `SourceId`，实例字段；为 1 → BMCLAPI，GetMissForgeLibraries 据此改写 URL）
     source_id: i32,
-    /// �����ػ���ַ��Դ `BaseUrl`�������ֶΣ��ٷ�ԴΪ '|' �ָ��Ķ�Դ��
+    /// 下载源基地址（源 `BaseUrl`，实例字段；官方源为 '|' 分隔的多源）
     base_url: String,
-    /// �ٷ����� �� ��������ӳ�䣨Դ `SourceMappings`�������ֶΣ��� sourceId == 1 时变更）
-    source_mappings: Vec<(String, String)>,
-    /// ��Ϸ��Ŀ¼��Դ `gameDir`�������ֶΣ�
+    /// 游戏目录（源 `gameDir`，实例字段）
     game_dir: String,
-    /// ԭ����Ϸ�汾�ţ�Դ `gameVersion`�������ֶΣ�
+    /// 原始游戏版本号（源 `gameVersion`，实例字段）
     game_version: String,
     /// Forge 基类（P38）：run_processor/resolve_url 等实例方法承载
     base: ForgeInstallerBase,
@@ -111,7 +108,6 @@ impl ForgeInstaller {
         Self {
             source_id,
             base_url: base_url.clone(),
-            source_mappings: source_mappings.clone(),
             game_dir,
             game_version,
             base: ForgeInstallerBase {
@@ -850,6 +846,8 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
     }
 }
+
+
 
 
 

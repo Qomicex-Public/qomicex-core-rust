@@ -39,7 +39,7 @@
 
 use std::path::Path;
 use tokio::io::AsyncBufReadExt;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
@@ -153,45 +153,6 @@ impl OptiFineInstaller {
     /// - 反序列化为 `Vec<OptiFineVersionInfo>`（源 AOT context ListOptiFineVersionInfo）；
     /// - 按 Patch 降序排序：源 `string.Compare(b.Patch, a.Patch, Ordinal)` → Rust
     ///   `Option<String>` 字节序比较（None < Some，与 C# null < 任意字符串一致）。
-    pub(crate) async fn get_available_versions(&self) -> Result<Vec<OptiFineVersionInfo>, Error> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
-            .map_err(|e| Error::Http {
-                message: format!("创建 HTTP 客户端失败: {e}"),
-                source: Some(Box::new(e)),
-            })?;
-        // 源：`string url = $"{_downloadSource}/{_gameVersion}";`
-        let url = format!("{}/{}", self.download_source, self.game_version);
-        // 源：`string json = await client.GetStringAsync(url);`（失败 → HttpRequestException）
-        let json = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| Error::Http {
-                message: format!("获取 OptiFine 版本列表失败（{url}）: {e}"),
-                source: Some(Box::new(e)),
-            })?
-            .text()
-            .await
-            .map_err(|e| Error::Http {
-                message: format!("读取 OptiFine 版本列表响应失败: {e}"),
-                source: Some(Box::new(e)),
-            })?;
-        // 源：`if (string.IsNullOrEmpty(json)) return [];`
-        if json.is_empty() {
-            return Ok(Vec::new());
-        }
-        // 源：`JsonSerializer.Deserialize(json, CombinedJsonContext.Default.ListOptiFineVersionInfo)`
-        let mut versions: Vec<OptiFineVersionInfo> =
-            serde_json::from_str(&json).map_err(|e| Error::Http {
-                message: format!("OptiFine 版本列表 JSON 解析失败: {e}"),
-                source: Some(Box::new(e)),
-            })?;
-        // 源：`versions.Sort((a, b) => string.Compare(b.Patch, a.Patch, StringComparison.Ordinal));`
-        versions.sort_by(|a, b| b.patch.cmp(&a.patch));
-        Ok(versions)
-    }
 
     /// 下载（或复用）OptiFine 安装包（源：`DownloadInstallerAsync`，private async）。
     ///
@@ -644,5 +605,6 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
     }
 }
+
 
 

@@ -56,6 +56,9 @@ pub struct GameCore {
     /// 本地内容资源工厂（源：LocalResourceProvider 属性，ILocalResourcesFactory；
     /// C# 构造参数可空但以 `!` 强制非空赋值 → Rust 侧为必填参数）
     local_resource_provider: Arc<dyn LocalResourcesFactory + Send + Sync>,
+    /// 共享 HTTP 客户端（B13 定案：reqwest::Client 内部 Arc，Clone 共享；
+    /// 源 HttpClient 属性，CreateModrinthSource 等工厂方法使用）
+    http: reqwest::Client,
     /// 游戏根目录（源：GameRoot 属性，string）
     game_root: String,
 }
@@ -82,6 +85,7 @@ impl GameCore {
         server: Option<Arc<dyn ServerManager + Send + Sync>>,
         download_manager: Arc<dyn DownloadSourceManager + Send + Sync>,
         local_resource_provider: Arc<dyn LocalResourcesFactory + Send + Sync>,
+        http: reqwest::Client,
     ) -> Self {
         Self {
             version,
@@ -95,6 +99,7 @@ impl GameCore {
             server,
             download_manager,
             local_resource_provider,
+            http,
             game_root,
         }
     }
@@ -129,8 +134,7 @@ impl GameCore {
     /// ⚠️ 可见性：`InstallerFactory` 为 `pub(crate)`（p35 日志 D1：其方法签名返回
     /// `Box<dyn Installer + Send + Sync>`，`Installer` 为 pub(crate)，trait 无法 pub；
     /// 对外导出待 Installer 可见性一并调整）→ 访问器同步为 `pub(crate)`。
-    #[allow(dead_code)] // 过渡期：P22 builder 组装后使用
-    pub(crate) fn installer_factory(&self) -> &dyn InstallerFactory {
+    pub fn installer_factory(&self) -> &dyn InstallerFactory {
         self.installer_factory.as_ref()
     }
 
@@ -163,9 +167,36 @@ impl GameCore {
     pub fn game_root(&self) -> &str {
         &self.game_root
     }
+
+    /// 创建 Modrinth 扩展平台客户端（源：CreateModrinthSource）
+    pub fn create_modrinth_source(&self) -> Box<dyn crate::api::expansion::ModrinthSource + Send + Sync> {
+        Box::new(crate::services::expansion::modrinth::query::ModrinthBase::new(
+            self.http.clone(),
+            None,
+        ))
+    }
+
+    /// 创建 CurseForge 扩展平台客户端（源：CreateCurseForgeSource(apiKey)）
+    pub fn create_curseforge_source(
+        &self,
+        api_key: &str,
+    ) -> Box<dyn crate::api::expansion::CurseForgeSource + Send + Sync> {
+        Box::new(crate::services::expansion::curseforge::query::CurseForgeBase::new(
+            self.http.clone(),
+            api_key.to_string(),
+            None,
+        ))
+    }
+
+    /// 创建 Feed The Beast 扩展平台客户端（源：CreateFTBSource）
+    pub fn create_ftb_source(&self) -> Box<dyn crate::api::expansion::FtbSource + Send + Sync> {
+        Box::new(crate::services::expansion::ftb::query::FtbBase::new(
+            self.http.clone(),
+            None,
+            None,
+        ))
+    }
 }
 
-// B13: CreateModrinthSource 等 3 个工厂方法待扩展平台实现批次补充
-// （源实现依赖 Services/Expansion 的 ModrinthBase / CurseForgeBase / FTBBase 具体类，
-//   且依赖 HttpClient —— 网络层定案后一并引入）
+
 

@@ -1,6 +1,4 @@
 //! ModLoader 安装器实现 + 工厂
-// 过渡期：P43 工厂完成后移除
-#![allow(dead_code)]
 pub mod installer;
 pub mod factory;
 pub mod forge;
@@ -13,5 +11,9 @@ pub mod optifine;
 pub mod cleanroom;
 pub mod legacy_fabric;
 pub mod babric;
+pub mod modpacks;
+pub mod provider_forge;
+pub mod provider;
+
 
 

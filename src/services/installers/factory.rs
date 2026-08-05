@@ -18,15 +18,13 @@
 //! LiteLoader/OptiFine 为 (i32, String, String)，Cleanroom 为 (i32, String)），
 //! 本文件按约定签名引用，以实际落地为准。
 
-use async_trait::async_trait;
 
 use crate::api::installer::InstallerFactory;
-use crate::error::Error;
 use crate::models::download::DownloadMirror;
 use crate::services::installers::babric::BabricInstaller;
 use crate::services::installers::fabric::install::FabricInstaller;
 use crate::services::installers::forge::install::ForgeInstaller;
-use crate::services::installers::installer::{Installer, MissFileData};
+use crate::services::installers::installer::Installer;
 use crate::services::installers::legacy_fabric::LegacyFabricInstaller;
 use crate::services::installers::neoforge::install::NeoForgeInstaller;
 use crate::services::installers::quilt::install::QuiltInstaller;
@@ -143,12 +141,15 @@ impl InstallerFactory for DefaultInstallerFactory {
     /// （B13 批次）→ 返回占位实现，见 `ModpackInstallerPlaceholder`。
     fn create_curseforge_modpack(
         &self,
-        _game_dir: &str,
-        _version_isolation: bool,
-        _modpack_file_path: &str,
+        game_dir: &str,
+        version_isolation: bool,
+        modpack_file_path: &str,
     ) -> Box<dyn Installer + Send + Sync> {
-        eprintln!("[DefaultInstallerFactory] CurseForge 整合包安装器未移植（B13），返回占位实现");
-        Box::new(ModpackInstallerPlaceholder)
+        Box::new(crate::services::installers::modpacks::curseforge::CurseForgeModpackInstaller::new(
+            game_dir,
+            version_isolation,
+            modpack_file_path,
+        ))
     }
 
     /// 创建 Modrinth 整合包安装器（源：`CreateModrinthModpack(string gameDir, bool
@@ -158,12 +159,15 @@ impl InstallerFactory for DefaultInstallerFactory {
     /// （B13 批次）→ 返回占位实现，见 `ModpackInstallerPlaceholder`。
     fn create_modrinth_modpack(
         &self,
-        _game_dir: &str,
-        _version_isolation: bool,
-        _modpack_file_path: &str,
+        game_dir: &str,
+        version_isolation: bool,
+        modpack_file_path: &str,
     ) -> Box<dyn Installer + Send + Sync> {
-        eprintln!("[DefaultInstallerFactory] Modrinth 整合包安装器未移植（B13），返回占位实现");
-        Box::new(ModpackInstallerPlaceholder)
+        Box::new(crate::services::installers::modpacks::modrinth::ModrinthModpackInstaller::new(
+            game_dir,
+            version_isolation,
+            modpack_file_path,
+        ))
     }
 
     /// 创建 FTB 整合包安装器（源：`CreateFtbModpack(string gameDir, bool versionIsolation,
@@ -173,57 +177,21 @@ impl InstallerFactory for DefaultInstallerFactory {
     /// （B13 批次）→ 返回占位实现，见 `ModpackInstallerPlaceholder`。
     fn create_ftb_modpack(
         &self,
-        _game_dir: &str,
-        _version_isolation: bool,
-        _http_client: reqwest::Client,
-        _cf_api_key: &str,
+        game_dir: &str,
+        version_isolation: bool,
+        http_client: reqwest::Client,
+        cf_api_key: &str,
     ) -> Box<dyn Installer + Send + Sync> {
-        eprintln!("[DefaultInstallerFactory] FTB 整合包安装器未移植（B13），返回占位实现");
-        Box::new(ModpackInstallerPlaceholder)
+        Box::new(crate::services::installers::modpacks::ftb::FtbModpackInstaller::new(
+            game_dir,
+            version_isolation,
+            http_client,
+            cf_api_key,
+        ))
     }
 }
 
 /// 整合包安装器占位实现（B13 批次移植 Modpacks/ 三安装器后移除）。
-///
-/// 所有方法返回「整合包安装器将在后续版本提供」（`Error::Params`，规则 2 占位决策）。
-/// 语义对齐：源安装器类尚不存在即无法安装，调用方在安装阶段收到明确错误
-/// （而非静默成功/空库列表）。
-struct ModpackInstallerPlaceholder;
-
-#[async_trait]
-impl Installer for ModpackInstallerPlaceholder {
-    async fn install(
-        &self,
-        _version_id: &str,
-        _inherits_from_json: &str,
-        _para1: Option<&str>,
-        _para2: Option<&str>,
-        _para3: Option<&str>,
-        _para4: Option<&str>,
-    ) -> Result<(), Error> {
-        Err(Error::Params {
-            message: "整合包安装器将在后续版本提供".to_string(),
-            source: None,
-        })
-    }
-
-    async fn get_miss_libraries(
-        &self,
-        _para1: Option<&str>,
-        _para2: Option<&str>,
-        _para3: Option<&str>,
-    ) -> Result<Vec<MissFileData>, Error> {
-        Err(Error::Params {
-            message: "整合包安装器将在后续版本提供".to_string(),
-            source: None,
-        })
-    }
-}
-
-/// downloadSource int → DownloadMirror 映射（MAPPING_TABLE enums 段定案）。
-///
-/// 与 Fabric/Quilt/Forge 构造内联映射一致：1 → Bmclapi，其余 → Official。
-/// LegacyFabric/Babric 的 `new` 按此映射收参（源构造参数本身被忽略，
 /// 见各安装器文件头注释）。
 fn mirror_from_download_source(download_source: i32) -> DownloadMirror {
     if download_source == 1 {
@@ -232,4 +200,7 @@ fn mirror_from_download_source(download_source: i32) -> DownloadMirror {
         DownloadMirror::Official
     }
 }
+
+
+
 

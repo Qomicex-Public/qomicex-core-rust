@@ -69,14 +69,12 @@ pub(crate) struct LiteloaderInstaller {
     source_id: i32,
     /// 游戏根目录（源 `_gameDir`，readonly）
     game_dir: String,
-    /// 游戏版本（源 `_gameVersion`，readonly；⚠️ 源仅构造赋值、从未被读取，字段逐字保留）
-    game_version: String,
 }
 
 impl LiteloaderInstaller {
     /// 创建 LiteLoader 安装器（源：`LiteloaderInstaller(int sourceId, string gameDir,
     /// string gameVersion)`）
-    pub(crate) fn new(source_id: i32, game_dir: String, game_version: String) -> Self {
+    pub(crate) fn new(source_id: i32, game_dir: String, _game_version: String) -> Self {
         // 源：`_baseRepoUrl = sourceId == 1 ? "https://bmclapi2.bangbang93.com/maven/" :
         //   "https://dl.liteloader.com/versions";`（其余值一律按官方处理）
         let mirror = if source_id == 1 {
@@ -95,7 +93,6 @@ impl LiteloaderInstaller {
             base_repo_url,
             source_id,
             game_dir,
-            game_version,
         }
     }
 
@@ -725,3 +722,4 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
     }
 }
+

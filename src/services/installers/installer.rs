@@ -71,32 +71,6 @@ pub struct MissFileData {
     pub sha1: String,
 }
 
-/// 安装器类型（源：`InstallerBase.InstallType` 枚举，9 变体，默认 int 值 0-8）。
-///
-/// ⚠️ 源项目当前仅声明、无任何引用处；按 C# 默认 int 序列化语义保留
-/// `#[repr(i32)]` 与显式数值，未加 serde 派生（源从不序列化此枚举）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub(crate) enum InstallType {
-    /// Forge
-    Forge = 0,
-    /// Fabric
-    Fabric = 1,
-    /// NeoForge
-    NeoForge = 2,
-    /// Quilt
-    Quilt = 3,
-    /// LiteLoader
-    LiteLoader = 4,
-    /// OptiFine
-    OptiFine = 5,
-    /// Cleanroom
-    Cleanroom = 6,
-    /// LegacyFabric
-    LegacyFabric = 7,
-    /// Babric
-    Babric = 8,
-}
 
 /// 全局默认 User-Agent（源：`InstallerBase.DefaultUserAgent` 静态属性）。
 ///
@@ -165,28 +139,6 @@ impl InstallerBase {
     /// 语义：源目录不存在 → 直接成功返回；自动创建目标目录；文件覆盖复制
     /// （对应 `File.Copy(file, dest, true)`，`std::fs::copy` 截断覆盖）；
     /// 子目录递归合并。任何 IO 失败向上返回（源无 try/catch，异常上抛，
-    /// 由调用方 `MergeVersion` 的 catch 承接 → 返回 false）。
-    pub(crate) fn merge_directories(
-        source_dir: impl AsRef<Path>,
-        target_dir: impl AsRef<Path>,
-    ) -> Result<(), std::io::Error> {
-        let source_dir = source_dir.as_ref();
-        let target_dir = target_dir.as_ref();
-        if !source_dir.is_dir() {
-            return Ok(());
-        }
-        std::fs::create_dir_all(target_dir)?;
-        for entry in std::fs::read_dir(source_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                Self::merge_directories(&path, target_dir.join(entry.file_name()))?;
-            } else {
-                std::fs::copy(&path, target_dir.join(entry.file_name()))?;
-            }
-        }
-        Ok(())
-    }
 
     /// 合并版本 JSON 并重写 id/inheritsFrom（源：`MergeVersionJson`）。
     ///
@@ -216,58 +168,6 @@ impl InstallerBase {
     /// 语义：main 版本 JSON 不存在 → 记日志并返回 false；merged JSON 不存在 →
     /// false；合并 JSON 后重写 `id = mainVersion`、移除 `inheritsFrom`；
     /// 再将 merged 版本目录整体合并进 main 目录；最后写回 main 版本 JSON。
-    /// 任何异常 → `合并版本失败：{原因}` 记日志并返回 false（源 catch 包裹全方法）。
-    pub(crate) fn merge_version(main_version: &str, merged_version: &str, game_dir: &str) -> bool {
-        let main_version_dir = Path::new(game_dir).join("versions").join(main_version);
-        let merged_version_dir = Path::new(game_dir).join("versions").join(merged_version);
-        let main_version_json_path = main_version_dir.join(format!("{main_version}.json"));
-        let merged_version_json_path = merged_version_dir.join(format!("{merged_version}.json"));
-
-        if !main_version_json_path.is_file() {
-            eprintln!("主版本JSON文件不存在：{}", main_version_json_path.display());
-            return false;
-        }
-        if !merged_version_json_path.is_file() {
-            eprintln!("待合并版本JSON文件不存在：{}", merged_version_json_path.display());
-            return false;
-        }
-
-        let main_json_content = match std::fs::read_to_string(&main_version_json_path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("合并版本失败：{e}");
-                return false;
-            }
-        };
-        let merged_json_content = match std::fs::read_to_string(&merged_version_json_path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("合并版本失败：{e}");
-                return false;
-            }
-        };
-
-        let merged_json_result = Self::merge_json(&main_json_content, &merged_json_content);
-        let Ok(mut json_obj) = serde_json::from_str::<Value>(&merged_json_result) else {
-            eprintln!("合并版本失败：合并结果解析失败");
-            return false;
-        };
-        if let Some(obj) = json_obj.as_object_mut() {
-            obj.insert("id".to_string(), Value::String(main_version.to_string()));
-            obj.remove("inheritsFrom");
-        }
-
-        if let Err(e) = Self::merge_directories(&merged_version_dir, &main_version_dir) {
-            eprintln!("合并版本失败：{e}");
-            return false;
-        }
-        let content = serde_json::to_string(&json_obj).unwrap_or_default();
-        if let Err(e) = std::fs::write(&main_version_json_path, content) {
-            eprintln!("合并版本失败：{e}");
-            return false;
-        }
-        true
-    }
 
     /// 下载文件到本地（源：`DownloadFileAsync(client, url, destinationPath,
     /// maxRedirects = 5)`）。
@@ -542,4 +442,6 @@ fn is_redirect_status(status: reqwest::StatusCode) -> bool {
             | reqwest::StatusCode::TEMPORARY_REDIRECT
     )
 }
+
+
 

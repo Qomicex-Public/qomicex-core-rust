@@ -23,7 +23,7 @@
 //!   CompleteVersionMetadata。
 //! - 参数顺序 / 内容 / 替换令牌 / 分隔符逐字保留（特殊兼容点）。
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::Value;
 
@@ -639,32 +639,6 @@ impl LaunchExecutor {
     /// 优先 QOMICEX_HOME 环境变量；其次 LocalApplicationData/qomicex-launcher；
     /// 若该目录存在 .qomicex-bootstrap 文件则读取其内容（Trim）作为自定义目录。
     /// pub(crate)：process.rs 启动失败日志路径使用
-    pub(crate) fn get_data_dir() -> String {
-        if let Ok(env) = std::env::var("QOMICEX_HOME") {
-            if !env.is_empty() {
-                return env;
-            }
-        }
-
-        let default_dir = local_app_data_dir()
-            .join("qomicex-launcher")
-            .to_string_lossy()
-            .into_owned();
-
-        let bootstrap_file = Path::new(&default_dir).join(".qomicex-bootstrap");
-        if bootstrap_file.is_file() {
-            // 源：ReadAllText 失败抛 IOException（被调用方 try/catch 吞掉）；
-            // Rust 侧 .ok() 静默回退，语义等价
-            if let Ok(custom_dir) = std::fs::read_to_string(&bootstrap_file) {
-                let custom_dir = custom_dir.trim();
-                if !custom_dir.is_empty() {
-                    return custom_dir.to_string();
-                }
-            }
-        }
-
-        default_dir
-    }
 
     /// 解析版本 JSON（对应源 ParseGameJson + JsonSerializer.Deserialize<Config>，556-574 行）
     /// ⚠️ B1 的 params_meta::Config 为全必填 serde 模型，无法表达 C# "缺键 → null" 语义
@@ -809,23 +783,6 @@ fn parse_json_failed() -> Error {
 /// 本地应用数据目录（对应 .NET Environment.SpecialFolder.LocalApplicationData）：
 /// Windows → %LOCALAPPDATA%；macOS → ~/.local/share；Linux → $XDG_DATA_HOME 或 ~/.local/share
 /// ⚠️ UNMAPPED：std 无 SpecialFolder API；按 .NET 官方映射近似
-/// （与 util/platform.rs get_minecraft_path 的 ApplicationData 处理同一策略，见日志 p33）
-fn local_app_data_dir() -> PathBuf {
-    if cfg!(windows) {
-        std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default()
-    } else if cfg!(target_os = "macos") {
-        std::env::var_os("HOME")
-            .map(|h| PathBuf::from(h).join(".local/share"))
-            .unwrap_or_default()
-    } else {
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))
-            })
-            .unwrap_or_default()
-    }
-}
 
 /// Windows 主版本号（对应 .NET Environment.OSVersion.Version.Major）。
 ///
@@ -859,4 +816,6 @@ fn windows_major_version() -> Option<u32> {
         None
     }
 }
+
+
 
