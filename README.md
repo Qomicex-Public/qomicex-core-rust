@@ -71,9 +71,9 @@ cargo build   # 构建 rlib
 
 | 文档 | 说明 |
 |------|------|
-| [架构设计](docs/architecture.md) | 模块树 / 依赖 / 设计决策 / 批次 |
-| [使用指南](docs/usage.md) | 各域 API 示例 / 事件进度 / Android 集成 |
-| [开发指南](docs/development.md) | 构建测试 / 编码规范 / 技术债 |
+| [架构设计](docs/junsi-dev-docs/2-架构设计/架构设计.md) | 模块树 / 依赖 / 设计决策 / 批次 |
+| [使用指南](docs/junsi-dev-docs/3-API规范/使用指南.md) | 各域 API 示例 / 事件进度 / Android 集成 |
+| [开发指南](docs/junsi-dev-docs/4-编码规范/开发指南.md) | 构建测试 / 编码规范 / 技术债 |
 | [决策记录](docs/junsi-dev-docs/1-决策记录/) | ADR-001（架构）/ ADR-002（移植总结）/ ADR-003（技术债清理） |
 | [映射表](MAPPING_TABLE.yaml) | 源（.NET）→ 目标（Rust）全量映射 |
 | [批次检查点](docs/checkpoints/) | 13 批交付明细 |
@@ -81,3 +81,4 @@ cargo build   # 构建 rlib
 ## 许可证
 
 [GPL-3.0](LICENSE)。本仓库为 Qomicex.Core.AOT（GPL-3.0）的移植衍生作品。
+
