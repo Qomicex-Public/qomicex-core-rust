@@ -636,7 +636,7 @@ fn search_high_priority_paths(
 ) {
     let paths: &[String] = if cfg!(windows) {
         &HIGH_PRIORITY_PATHS
-    } else if cfg!(target_os = "linux") {
+    } else if cfg!(any(target_os = "linux", target_os = "android")) {
         &LINUX_PATHS
     } else if cfg!(target_os = "macos") {
         &MACOS_PATHS
@@ -1061,7 +1061,7 @@ fn get_java_executable_path(java_home: &str) -> Option<String> {
 /// - 其余平台：空。
 fn get_valid_drives(include_network_drives: bool) -> Vec<String> {
     let mut drives = get_windows_drives(include_network_drives);
-    if cfg!(target_os = "linux") || cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "linux", target_os = "android")) || cfg!(target_os = "macos") {
         drives.push("/".to_string());
         drives.push("/home".to_string());
         drives.push("/opt".to_string());
@@ -1170,3 +1170,4 @@ where
         }
     });
 }
+

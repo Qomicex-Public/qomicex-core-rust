@@ -41,7 +41,7 @@ pub fn is_os_match(os: &OsRequirement) -> bool {
 pub fn get_current_os_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "windows"
-    } else if cfg!(target_os = "linux") {
+    } else if cfg!(any(target_os = "linux", target_os = "android")) {
         "linux"
     } else if cfg!(target_os = "macos") {
         "osx"
@@ -192,3 +192,4 @@ pub fn generate_uuid(name: &str) -> String {
     }
     out
 }
+

@@ -428,9 +428,10 @@ impl LaunchExecutor {
             }
 
             // Windows 适配（源 619-628 行：IsWindows 且 OS 主版本 >= 10）
-            // ⚠️ UNMAPPED：std 无法获取 OS 版本（.NET Environment.OSVersion.Version.Major）；
-            // Windows 目标一律按 >= 10 处理（Windows 7/8/8.1 源不加这两个参数，见日志 p33）
-            if cfg!(windows) {
+            // 精确实现：读注册表 CurrentMajorVersionNumber（Win10/11 = 10），
+            // 与源 Environment.OSVersion.Version.Major 语义一致；读取失败按 0 处理
+            // （Windows 7/8/8.1 源不加这两个参数）
+            if cfg!(windows) && windows_major_version().unwrap_or(0) >= 10 {
                 jvm_list.push("-Dos.name=\"Windows 10\"".to_string());
                 jvm_list.push("-Dos.version=\"10.0\"".to_string());
             }
@@ -823,6 +824,39 @@ fn local_app_data_dir() -> PathBuf {
                 std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))
             })
             .unwrap_or_default()
+    }
+}
+
+/// Windows 主版本号（对应 .NET Environment.OSVersion.Version.Major）。
+///
+/// 读注册表 `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion` 的
+/// `CurrentMajorVersionNumber`（REG_DWORD，Win10/11 = 10，Win7 = 6）。
+/// 与 scanner.rs 的 reg query 方案一致（零依赖）；非 Windows 或读取失败返回 None。
+fn windows_major_version() -> Option<u32> {
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+                "/v",
+                "CurrentMajorVersionNumber",
+            ])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let line = text
+            .lines()
+            .find(|l| l.contains("CurrentMajorVersionNumber"))?;
+        let value = line.split_whitespace().last()?;
+        u32::from_str_radix(value.trim_start_matches("0x"), 16).ok()
+    }
+    #[cfg(not(windows))]
+    {
+        None
     }
 }
 

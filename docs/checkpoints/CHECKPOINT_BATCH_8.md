@@ -1,9 +1,9 @@
-# CHECKPOINT_BATCH_8.md — 启动域实现（待用户检查）
+# CHECKPOINT_BATCH_8.md — 启动域实现（用户检查通过 + Android 兼容定案）
 
 - 日期：2026-08-06
 - 分支：migrate/b8
-- 范围：B8 services/launch（JVM 参数组装 + 进程启动 + natives）
-- 状态：✅ 编译通过（30 测试回归），**待用户检查特殊兼容后合并**
+- 范围：B8 services/launch（JVM 参数组装 + 进程启动 + natives）+ Android 兼容性
+- 状态：✅ 完成（35 测试通过，零警告，用户检查确认后合并）
 
 ## 交付内容
 
@@ -34,26 +34,34 @@
 ### natives 处理
 - get_natives（规则单条判定 + 继承递归 + check_libs_ver）→ unzip（versions/{v}/{v}-natives）→ parse_java_library_path → 清空重解压 → FlattenNatives（.dll/.dylib/.so，两轮遍历，IsForeignArchDir 跳过异构架构）
 
-## 已知偏差清单（⚠️ 检查确认）
+## 已知偏差修复记录（用户检查意见：1.不能接受 2.补 CreateNoWindow）
 
-| # | 项 | 处理 | 影响 |
-|---|----|------|------|
-| 1 | OS 版本检测 | cfg!(windows) 近似 Major>=10 | 低（Windows 10/11 判定） |
-| 2 | CreateNoWindow | tokio spawn 无窗口隐藏选项 | 中（Windows 启动时会闪控制台窗口） |
-| 3 | Unix 进程树 kill | 只杀主进程 | 低 |
-| 4 | 已退出进程 kill | 返回 false（源抛异常） | 低 |
-| 5 | CommandLineToArgvW 细节 | `\"`/空参数边界差异 | 低 |
-| 6 | GameRoot 覆盖 | 不持久（每次 launch 传参） | 与源一致 |
-| 7 | parse_game_json 重复 | process.rs 版改名 parse_game_json_config（保留两套） | 待合并清理 |
-| 8 | B1 Config 模型全必填 | 版本 JSON 缺键时手工 Value 解析 + 默认值填充 | 兼容性 OK |
-| 9 | 时间戳 | {UTC:O} → 秒级 UTC（无 chrono） | 低 |
-| 10 | reg/pipe 无 | — | — |
+| # | 项 | 修复 |
+|---|----|------|
+| 1 | OS 版本检测 | ✅ 注册表 CurrentMajorVersionNumber（reg query）精确判定 Win10+（-Dos.name/-Dos.version） |
+| 2 | CreateNoWindow | ✅ tokio::process::Command::creation_flags(CREATE_NO_WINDOW)（cfg windows） |
+| 3 | Unix 进程树 kill | ✅ ps -eo 递归收集后代 + 深度降序（叶子先杀）kill -9；失败保守降级单进程 |
+| 4 | 时间戳精度 | ✅ 毫秒精度 .SSS（源 {UTC:O} 7 位小数，日志场景取毫秒） |
+| 5 | CommandLineToArgvW | ✅ 反斜杠转义（奇/偶 `\`+`"`）+ 空参数（""）规则，5 个单元测试固化 |
+| 6 | GameRoot 覆盖 | 源行为一致（每次 launch 传参），无需改 |
+| 7 | parse_game_json 重复 | process.rs 版改名 parse_game_json_config（保留两套，B9 收尾清理） |
+
+## Android 兼容性定案（subagent 分析报告落地）
+
+| 项 | 处理 |
+|----|------|
+| reqwest native-tls（openssl-sys Android 不可编译）| ✅ `default-features = false` + `rustls-tls`（阻塞项，已修复，编译验证通过） |
+| get_current_os_name 返回 "unknown" → natives/库规则全失效 | ✅ android → "linux"（关键运行缺口，一行修复） |
+| scanner 高优先级路径/驱动器枚举 | ✅ android 归并 linux 分支（建议项） |
+| zip C 后端（bzip2/zstd/lzma-sys）| ✅ 裁剪为 `deflate-miniz` + `deflate64`（纯 Rust miniz_oxide） |
+| kill/ps 命令（Android toybox）| ✅ 已确认可用 |
+| Java spawn 绝对路径 / QOMICEX_HOME | 宿主约定（文档记录），无需改代码 |
 
 ## 验证
 
 - `cargo check`：0 error 0 warning
-- `cargo test`：30/30（回归）
+- `cargo test`：35/35（B8 launch 5：split_command_line 4 + 时间戳 1 + 回归 30）
 
 ## 下一步
 
-用户检查通过后：B9 安装器实现
+B9：安装器实现（6 种 + InstallerFactory trait 补齐 + core.rs installer_factory 字段）

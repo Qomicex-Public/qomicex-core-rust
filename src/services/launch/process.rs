@@ -90,8 +90,9 @@ impl crate::api::launch::LaunchExecutor for LaunchExecutor {
     /// 源语义：进程不存在（ArgumentException）或其他异常 → false，从不抛异常 → Rust 恒 Ok。
     /// Windows：`taskkill /PID {pid} /T /F`（对应 `Kill(true)` 杀整个进程树），找不到进程时
     /// taskkill 返回非零退出码 → false（对应 ArgumentException 分支）。
-    /// Unix：`kill -0` 探测进程存在（对应 GetProcessById 抛异常）→ `kill -9`（.NET Kill 在
-    /// Unix 发送 SIGKILL）。⚠️ 源 `Kill(true)` 的进程树语义在 Unix 侧未移植（仅杀单进程）。
+    /// Unix：`kill -0` 探测进程存在（对应 GetProcessById 抛异常）→ 递归收集子进程树
+    /// （`ps -eo pid=,ppid=` 解析，从叶子到根 `kill -9`）→ 最后杀主进程。
+    /// 进程树 kill 用子进程递归实现（Android toybox 的 ps 支持 -eo 输出格式）。
     async fn kill(&self, process_id: i32) -> Result<bool, Error> {
         let pid = process_id.to_string();
         let succeeded = if cfg!(windows) {
@@ -114,15 +115,79 @@ impl crate::api::launch::LaunchExecutor for LaunchExecutor {
             if !probe {
                 return Ok(false);
             }
-            tokio::process::Command::new("kill")
+            // 收集进程树（pid -> ppid），从叶子到根依次 kill -9
+            let descendants = collect_descendants(process_id).await;
+            let mut all_killed = true;
+            for child in &descendants {
+                let ok = tokio::process::Command::new("kill")
+                    .args(["-9", &child.to_string()])
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                all_killed &= ok;
+            }
+            let main_killed = tokio::process::Command::new("kill")
                 .args(["-9", pid.as_str()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status()
                 .await
                 .map(|s| s.success())
-                .unwrap_or(false)
+                .unwrap_or(false);
+            all_killed && main_killed
         };
         Ok(succeeded)
     }
+}
+
+/// Unix 进程树收集：`ps -eo pid=,ppid=` 解析全部进程，BFS 收集目标进程的
+/// 全部后代（含孙进程），返回从最深叶子到直接子进程的逆序列表。
+/// 解析失败（ps 不可用/输出异常）返回空列表（仅杀主进程，保守降级）。
+async fn collect_descendants(root_pid: i32) -> Vec<i32> {
+    let out = tokio::process::Command::new("ps")
+        .args(["-eo", "pid=,ppid="])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+
+    // pid -> Vec<child pid>
+    let mut children: std::collections::HashMap<i32, Vec<i32>> = std::collections::HashMap::new();
+    for line in out.lines() {
+        let mut it = line.split_whitespace();
+        if let (Some(pid), Some(ppid)) = (it.next().and_then(|v| v.parse::<i32>().ok()), it.next().and_then(|v| v.parse::<i32>().ok())) {
+            children.entry(ppid).or_default().push(pid);
+        }
+    }
+
+    // BFS 收集全部后代
+    let mut descendants = Vec::new();
+    let mut queue: Vec<i32> = children.get(&root_pid).cloned().unwrap_or_default();
+    // 收集后用拓扑（叶子优先）排序：按深度降序
+    let mut with_depth: Vec<(i32, usize)> = Vec::new();
+    let mut depth = 0usize;
+    while !queue.is_empty() {
+        let mut next = Vec::new();
+        for pid in &queue {
+            with_depth.push((*pid, depth));
+            if let Some(grand) = children.get(pid) {
+                next.extend(grand.iter().copied());
+            }
+        }
+        queue = next;
+        depth += 1;
+    }
+    // 按深度降序（叶子先杀）
+    with_depth.sort_by_key(|(_, d)| std::cmp::Reverse(*d));
+    descendants.extend(with_depth.into_iter().map(|(pid, _)| pid));
+    descendants
 }
 
 impl LaunchExecutor {
@@ -168,6 +233,13 @@ impl LaunchExecutor {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .current_dir(&working_dir);
+        // 源 CreateNoWindow=true：Windows 下不创建控制台窗口（CREATE_NO_WINDOW）
+        // tokio::process::Command::creation_flags 为固有方法，无需导入 trait
+        #[cfg(windows)]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
         let mut child = cmd
             .spawn()
             .map_err(|e| Error::Params {
@@ -566,22 +638,57 @@ where
 /// "空白分隔 + 双引号分组（引号不保留）"规则解析；Rust Command 接收参数数组。
 /// 该字符串由 NormalizeArg 产出（含空格值加双引号），本切分覆盖其合法形态。
 /// ⚠️ 偏差：CommandLineToArgvW 的 `\"` 转义、`""` 空参数（被丢弃）未复刻（见日志 p34）。
+/// 命令行切分（对应 Windows CommandLineToArgvW 规则；源为
+/// `ProcessStartInfo.Arguments` 整串 + CommandLineToArgvW）：
+/// - 双引号切换引号状态；引号内空白不切分
+/// - 反斜杠转义：`\` + `"` 时偶数个 `\` → 半数 `\` + 引号开关；奇数个 `\` → 半数 `\` + 字面 `"`
+/// - `""` 空参数保留为空字符串项（any_content 标记）
 fn split_command_line(line: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
-    for c in line.chars() {
+    let mut any_content = false;
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
         match c {
-            '"' => in_quotes = !in_quotes,
-            c if c.is_whitespace() && !in_quotes => {
-                if !current.is_empty() {
-                    args.push(std::mem::take(&mut current));
+            '\\' => {
+                let mut count = 1;
+                while chars.peek() == Some(&'\\') {
+                    chars.next();
+                    count += 1;
+                }
+                if chars.peek() == Some(&'"') {
+                    current.push_str(&"\\".repeat(count / 2));
+                    if count % 2 == 1 {
+                        current.push('"');
+                    } else {
+                        chars.next();
+                        in_quotes = !in_quotes;
+                    }
+                    any_content = true;
+                } else {
+                    current.push_str(&"\\".repeat(count));
+                    any_content = true;
                 }
             }
-            c => current.push(c),
+            '"' => {
+                in_quotes = !in_quotes;
+                any_content = true;
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if any_content {
+                    args.push(std::mem::take(&mut current));
+                    any_content = false;
+                }
+            }
+            c => {
+                current.push(c);
+                any_content = true;
+            }
         }
     }
-    if !current.is_empty() {
+    if any_content {
         args.push(current);
     }
     args
@@ -649,10 +756,10 @@ fn default_local_app_data() -> PathBuf {
 /// （B2 定案），秒级精度、无小数秒/时区偏移，格式 `YYYY-MM-DDTHH:MM:SSZ`，见日志 p34）。
 /// 民用日期换算采用 Howard Hinnant civil_from_days 算法。
 fn unix_to_utc_string(t: SystemTime) -> String {
-    let secs = t
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let dur = t.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let secs = dur.as_secs() as i64;
+    // 毫秒精度（源 {UTC:O} 为 7 位小数，日志场景毫秒足够；偏差记录见 p34）
+    let millis = (dur.subsec_nanos() / 1_000_000) as u32;
     let days = secs.div_euclid(86_400);
     let rem = secs.rem_euclid(86_400);
     let (hour, minute, sec) = (rem / 3600, (rem % 3600) / 60, rem % 60);
@@ -668,7 +775,7 @@ fn unix_to_utc_string(t: SystemTime) -> String {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if month <= 2 { y + 1 } else { y };
 
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{sec:02}Z")
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{sec:02}.{millis:03}Z")
 }
 
 /// 列出目录下的子目录（完整路径，源 `Directory.GetDirectories`；IO 失败 → Err）
@@ -714,5 +821,50 @@ fn io_err(e: std::io::Error) -> Error {
     Error::Params {
         message: format!("启动失败,{e}"),
         source: Some(Box::new(e)),
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_command_line_basic() {
+        assert_eq!(
+            split_command_line("-Xmx2G -jar game.jar"),
+            vec!["-Xmx2G", "-jar", "game.jar"]
+        );
+    }
+
+    #[test]
+    fn split_command_line_quoted_spaces() {
+        assert_eq!(
+            split_command_line(r#""C:\Program Files\Java\jdk-17\bin\java.exe" -jar x.jar"#),
+            vec![r#"C:\Program Files\Java\jdk-17\bin\java.exe"#, "-jar", "x.jar"]
+        );
+    }
+
+    #[test]
+    fn split_command_line_backslash_quote_escape() {
+        // 奇数个反斜杠 + 引号 → 字面引号（不切换状态）
+        assert_eq!(split_command_line(r#"a\""#), vec![r#"a""#]);
+        // 偶数个反斜杠 + 引号 → 半数反斜杠 + 引号开关
+        assert_eq!(split_command_line(r#"a\\"b c""#), vec!["a\\b c"]);
+    }
+
+    #[test]
+    fn split_command_line_empty_args() {
+        assert_eq!(split_command_line(r#""""#), vec![""]);
+        assert_eq!(split_command_line(r#"a "" b"#), vec!["a", "", "b"]);
+    }
+
+    #[test]
+    fn utc_timestamp_has_millis() {
+        let s = unix_to_utc_string(std::time::SystemTime::now());
+        // yyyy-MM-ddTHH:mm:ss.SSSZ 形态
+        assert!(s.len() >= 24);
+        assert!(s.ends_with('Z'));
+        assert!(s.contains('.'));
     }
 }
