@@ -1,0 +1,64 @@
+# 开发指南（Development）
+
+## 1. 构建与测试
+
+```bash
+cargo check        # 类型检查（0 error 0 warning 为交付标准）
+cargo test         # 35 个测试（含模块内测试 + tests/ 集成测试）
+cargo build        # 构建 rlib
+cargo build --target aarch64-linux-android   # Android 交叉编译（需 NDK toolchain）
+```
+
+依赖要求：Rust 2024 edition（stable toolchain 即可），无 C 编译依赖（纯 Rust 链）。
+
+## 2. 文档地图
+
+```
+README.md                       项目主页（快速开始/特性/状态）
+docs/
+├── architecture.md             架构设计（最终版：模块树/依赖/决策/批次）
+├── usage.md                    使用指南（各域 API 示例/Android 集成）
+├── development.md              本文件
+├── checkpoints/                CHECKPOINT_BATCH_1~13.md（每批交付明细）
+└── junsi-dev-docs/
+    └── 1-决策记录/              ADR-001（架构定案）/ ADR-002（移植总结）/ ADR-003（技术债）
+MAPPING_TABLE.yaml              源（.NET）→ 目标（Rust）类型/API/枚举映射表（写码前必查）
+.memory/                        会话进度/决策记忆（不入库）
+```
+
+## 3. 编码规范（迁移约定）
+
+- **可见性纪律**：公开 API 放 `api/`（pub trait），实现放 `services/`（pub(crate)）；新增公开面必须先在 MAPPING_TABLE.yaml 登记
+- **异步 trait**：一律 `#[async_trait]`（勿用 async fn in trait / RPITIT——非 dyn-compatible）
+- **错误**：统一 `crate::error::Error`；HTTP 错误带 `status: Option<u16>`
+- **模型**：全 serde derive；`#[serde(rename_all = "camelCase")]`；枚举序列化查 MAPPING_TABLE（expansion 用字符串、其余 serde_repr 数字）
+- **移植行为**：bug-for-bug 保留源行为（如镜像 URL 边界、BMCLAPI 恒空），差异必须注释 + 日志记录
+- **Android 兼容**：禁止引入 native-tls/openssl 类依赖；平台分支用 `cfg!(target_os = "android")` 归并 linux
+
+## 4. 依赖清单
+
+见 [architecture.md](architecture.md) 第 3 节。新增依赖约束：
+- 纯 Rust（无 C 构建）
+- Android 可编译（回避 openssl-sys 等）
+- 优先轻量（如 zip 用 deflate-miniz 而非 bzip2/zstd C 后端）
+
+## 5. 技术债（ADR-003 后剩余）
+
+| 项 | 说明 | 建议 |
+|----|------|------|
+| parse_minecraft_datetime | 仅 ISO-8601 子集 | 如需全格式矩阵引入 chrono 全量解析 |
+| get_data_dir | 宿主需设 QOMICEX_HOME | 文档约定（README 已记录） |
+| 同步方法需 tokio runtime | block_on 依赖 runtime 上下文 | 调用方保证在 runtime 内 |
+
+## 6. 测试策略
+
+- `tests/b1_models.rs`：模型 serde 行为（VersionArguments 新旧格式兼容等）
+- `tests/b2_util.rs`：**C# 参考向量**（dotnet 参考实现生成的 MurmurHash2/NBT 交叉验证）
+- 模块内 `#[cfg(test)]`：认证/推荐/镜像 URL/启动参数切分/时间戳等纯逻辑
+- QA 快照比对：7 项关键行为（murmurhash2/NBT/MC Ping/DNS/镜像/jvm_args/java_recommend）全部 PASS（ADR-002）
+
+## 7. 版本与发布
+
+- 版本号：`Cargo.toml` `version = "0.1.0"`（移植完成基线）
+- 许可证：GPL-3.0（继承上游 Qomicex.Core.AOT）
+- 发布形态：rlib 库（crate-type = ["lib"]），供 Qomicex.Tauri 后端依赖

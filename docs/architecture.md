@@ -1,142 +1,116 @@
-# Qomicex Core (Rust) 架构设计
+# Qomicex Core (Rust) 架构
 
-> 移植自 [Qomicex.Core.AOT](https://github.com/Qomicex-Public/Qomicex.Core.AOT)（.NET 10 Native AOT，164 文件 / ~15,890 行）
-> 目标：rlib 标准架构的 Rust 启动核心库，供 Qomicex.Tauri 后端消费。
-> 状态：**已确认**（2026-08-06），进入逐模块移植阶段。
+> 移植自 [Qomicex.Core.AOT](https://github.com/Qomicex-Public/Qomicex.Core.AOT)（.NET 10 Native AOT，15,890 行 C#）
+> 状态：**✅ 移植完成**（2026-08，13 批次 / 47 原子包，35 测试 + QA 快照 PASS）
+> 决策记录：[ADR-001](junsi-dev-docs/1-决策记录/ADR-001-Rust启动核心架构设计.md)、[ADR-002](junsi-dev-docs/1-决策记录/ADR-002-移植完成总结.md)、[ADR-003](junsi-dev-docs/1-决策记录/ADR-003-技术债清理.md)
 
 ## 1. 顶层形态
 
 ```
-qomicex-core：纯库 crate
-├── crate-type = ["rlib", "cdylib"]   # rlib 供 Rust 宿主复用；cdylib 预留 FFI
-├── 无 bin；不提供 CLI
-├── 公开面 = api/ traits + models + builder，其余 pub(crate)
-├── feature flags：default = minimal（认证/版本/下载/启动/安装器）
-│                     + "expansion"（Modrinth/CurseForge/FTB）
-│                     + "java-download"（Java 在线下载）
-│                     + "lan"（局域网发现）
-└── 异步模型：tokio + async fn（对应 C# async/await），本地 IO 走 spawn_blocking
+qomicex-core：纯库 crate（crate-type = ["lib"]，rlib）
+├── 无 bin；公开面 = api/ traits + models + builder + core，实现层全部 pub(crate)
+├── 异步模型：tokio（full）+ #[async_trait]（B4 定案：async fn in trait 与 RPITIT
+│   均非 dyn-compatible，无法支撑 Arc<dyn Trait> Facade 架构）
+└── 跨平台：Windows / macOS / Linux / Android（B8 兼容定案）
 ```
 
-## 2. 模块树
+## 2. 模块树（最终实现）
 
 ```
 src/
-├── lib.rs                      # pub use 重导出，收敛公开 API
-├── builder.rs                  # GameCoreBuilder：唯一入口（Builder 模式）
-├── core.rs                     # GameCore Facade：持有 Arc<dyn ...> 服务引用
-├── api/                        # 全部公开 trait（对应源 Public/）
-│   ├── auth.rs                 # AuthProvider
+├── lib.rs                      # crate 根（mod 声明）
+├── builder.rs                  # GameCoreBuilder + CoreOptions（唯一入口，Builder 模式）
+├── core.rs                     # GameCore Facade：Arc<dyn Trait> 注入 + CreateXxxSource 工厂
+├── api/                        # 公开 trait 层（全部 pub trait，#[async_trait]）
+│   ├── auth.rs                 # AuthProvider（3 必需 + 4 默认方法）
 │   ├── launch.rs               # LaunchExecutor
-│   ├── version.rs              # VersionManagementService + VersionManifestService + VersionLocator + ResourceCompleter
+│   ├── version.rs              # VersionManagement / VersionManifest / VersionLocator / ResourceCompleter
 │   ├── java.rs                 # JavaProvider
-│   ├── installer.rs            # InstallerProvider + InstallerFactory
+│   ├── installer.rs            # InstallerProvider / InstallerFactory
 │   ├── download.rs             # DownloadSourceManager
-│   ├── local.rs                # LocalResourcesFactory
-│   ├── server.rs               # ServerManager
-│   └── options.rs              # OptionsProvider
-├── services/                   # pub(crate) 实现层（对应源 Services/，禁止外部可见）
-│   ├── auth/                   # microsoft.rs(设备码流) / yggdrasil.rs / offline.rs
-│   ├── version/                # manifest.rs(远端清单+缓存) / locator.rs(本地扫描) / completer.rs(资源补全)
-│   ├── download/               # mirror.rs(镜像 URL 转换) / retry.rs / checksum.rs
-│   ├── java/                   # scanner.rs(注册表/环境变量/PATH/多源) / recommend.rs / download.rs
-│   ├── launch/                 # jvm_args.rs(参数组装) / process.rs(进程启动+输出事件)
-│   ├── installers/             # forge/ neoforge/ fabric/ quilt/ liteloader/ optifine/  + factory.rs
-│   ├── local/                  # mods.rs / saves.rs / resourcepacks.rs / shaders.rs / datapacks.rs / screenshots.rs
-│   ├── server/                 # servers_dat.rs / mc_ping.rs / lan_discovery.rs
-│   ├── options/                # options_txt.rs
-│   └── expansion/              # modrinth/ curseforge/ ftb/
-├── models/                     # 全部数据模型（serde derive；对应 Models/ + JsonContext/）
-├── error.rs                    # Error enum（thiserror；对应 Exceptions/）
-├── event.rs                    # CoreEvent 枚举 + mpsc 通道（对应 IProgress<T> + Events/）
-└── util/                       # murmurhash2.rs / nbt.rs / launcher_profiles.rs / version_json.rs / platform.rs
+│   ├── local.rs                # LocalResourcesFactory + 6 个 Manager trait
+│   ├── server.rs               # ServerManager（15 方法）
+│   ├── options.rs              # OptionsProvider
+│   └── expansion.rs            # ModrinthSource / CurseForgeSource / FtbSource
+├── services/                   # 实现层（pub(crate)）
+│   ├── auth/                   # offline / microsoft（设备码流 6 端点）/ yggdrasil
+│   ├── version/                # manifest / locator（扫描+缺失检查）/ completer / version_management
+│   ├── download/               # mirror（镜像 URL 转换）/ checksum
+│   ├── java/                   # scanner（BFS/注册表/PATH）/ recommend / download（三源）/ provider 聚合
+│   ├── launch/                 # jvm_args（参数组装）/ process（启动+natives）/ legacy_ping / mc_ping
+│   ├── installers/             # 9 种安装器 + installer 基类 + factory + provider（版本查询）×2
+│   ├── local/                  # factory / mods / saves / resourcepacks / shaders / datapacks / screenshots
+│   ├── server/                 # servers_dat / mc_ping / legacy_ping / lan_discovery / server 聚合
+│   ├── options/                # options_txt
+│   └── expansion/              # modrinth / curseforge / ftb（各 query.rs）
+├── models/                     # 数据模型（serde derive，零反射）
+│   ├── auth / download / installer / java / launch / local
+│   ├── params_meta / version_manifest / version_metadata
+│   └── expansion/（curseforge / ftb / local / modrinth）
+├── error.rs                    # Error 枚举（thiserror；Http 变体含 status: Option<u16>，TD-1）
+├── event.rs                    # CoreEvent + ProgressReporter（mpsc 通道契约）
+└── util/                       # file_helper / json_helper / lib_helper / murmurhash2
+                               # nbt（IndexMap 保序，TD-6）/ platform（android→linux）/ version_json
 ```
 
-## 3. 依赖清单（待锁定版本）
+## 3. 依赖清单（已锁定）
 
-| 用途 | crate | 对应 .NET |
-|------|-------|-----------|
-| 序列化 | serde + serde_json | System.Text.Json SourceGen |
-| 异步 | tokio (rt-multi-thread, fs, process, sync) | Task / HttpClient |
-| HTTP | reqwest (json, stream, gzip) | HttpClient |
-| 错误 | thiserror | 自定义异常 |
-| TOML | toml | Tomlyn |
-| 哈希 | sha1, sha2, base64 | 内置 SHA1/MD5 |
-| 压缩 | zip, bzip2 | System.IO.Compression |
-| 测试 | tokio-test（可选） | xUnit |
-
-不引入：任何反射/运行时动态机制（rlib 天然无反射）。
+| 用途 | crate | 备注 |
+|------|-------|------|
+| 序列化 | serde / serde_json / serde_repr | 全模型 derive，零反射 |
+| 异步 | tokio（full）/ async-trait / futures / tokio-util | CancellationToken 用于取消 |
+| HTTP | reqwest（rustls-tls） | **无 native-tls/openssl**，Android 可编译 |
+| 错误 | thiserror | Error 枚举 |
+| 哈希 | sha1 / md-5 / base64 | |
+| 压缩 | zip（deflate-miniz, deflate64）/ flate2 | 纯 Rust 后端 |
+| 解析 | toml / regex | mods.toml / 正则 |
+| 其他 | uuid / chrono(clock) / socket2 / indexmap / winreg(仅 Windows) | |
 
 ## 4. 关键设计决策
 
-| # | 决策 | 理由 |
+| # | 决策 | 说明 |
 |---|------|------|
-| D1 | 接口在 api/（pub trait），实现全 pub(crate) | 对齐 .NET "接口 public + 实现 internal"，公开面极简 |
-| D2 | Facade 持有 `Arc<dyn Trait>` | 对应 C# DI 注入，解耦实现替换 |
-| D3 | 进度/事件用 `mpsc::channel<CoreEvent>` | 避免回调闭包生命周期问题；跨线程安全 |
-| D4 | 网络全 async，本地 IO 用 spawn_blocking | 阻塞调用不污染运行时 |
-| D5 | serde derive 全部模型，零自定义反射 | 对齐 AOT 无反射约束 |
-| D6 | 下载层统一走 DownloadSourceManager（镜像切换）| 单点改造镜像 URL |
-| D7 | 安装器统一 InstallerFactory 创建，返回 dyn Installer | 对齐源工厂模式 |
-| D8 | feature flags 裁剪扩展平台 | 核心体积最小化，扩展可选 |
-| D9 | 错误统一 Error enum + 上下文 | 替代 .NET 异常层级 |
-| D10 | builder.rs 唯一入口，参数集中 CoreOptions | 调用方只学一个入口 |
+| D1 | 接口公开、实现隐蔽 | api/ traits 全 pub；services/ 全 pub(crate)（对齐 .NET internal） |
+| D2 | Facade Arc<dyn Trait> | GameCore 持有 13 个服务引用 + 共享 reqwest::Client |
+| D3 | 事件用 mpsc channel | CoreEvent 枚举 + ProgressReporter trait |
+| D4 | 网络全 async | 本地 IO 同步 + spawn_blocking 场景按需 |
+| D5 | 全模型 serde derive | 零反射（对齐 AOT 约束） |
+| D6 | 下载统一走 DownloadSourceManager | 镜像单点改造 |
+| D7 | 安装器统一 InstallerFactory | 9 种安装器 + 3 种整合包 |
+| D8 | 异步 trait 用 #[async_trait] | B4 排障定案（dyn-compatible 唯一方案） |
+| D9 | 错误统一 Error 枚举 | 含 HTTP status 结构化承载（TD-1） |
+| D10 | builder 唯一入口 | CoreOptions 13 字段 + 11 个 With 注入 |
 
 ## 5. 核心流程（启动链路）
 
 ```
 GameCore::builder()
-  .game_root(...) .auth_mode(...) .download_mirror(...)
-  .build() -> Arc<GameCore>
+  .game_root(...) .auth_mode(...) .download_mirror(...) .build() -> Arc<GameCore>
 
-auth   : offline | microsoft(设备码流) | yggdrasil
-          -> 统一产出 AccessToken + UUID
-version: manifest(远端+缓存) -> locator(本地扫描) -> install(自动补全资源)
-java   : scanner(注册表/PATH/多源) -> recommend(打分) -> 缺失则 download
-launch : jvm_args(隔离/GC/内存/分辨率/服务器) -> spawn -> 输出转 CoreEvent
+auth   : offline | microsoft(设备码流 6 端点) | yggdrasil → AccessToken + UUID
+version: manifest(远端+5 分钟磁盘缓存) → locator(本地扫描/缺失检查) → install(资源补全)
+java   : scanner(BFS/注册表/PATH 多源) → recommend(版本匹配) → 缺失则 download(3 源)
+install: InstallerFactory → 9 种 ModLoader（Forge 双流程/processors/回滚）
+launch : jvm_args(20 令牌替换) → natives(解压/展平) → spawn(CREATE_NO_WINDOW) → 事件流
+server : servers.dat(NBT) → MC Ping(modern→legacy 回退) → LAN(多播 224.0.2.60) / SRV(自定义 DNS)
 ```
 
-## 6. 移植批次规划（依赖 DAG）
+## 6. 移植批次（已完成）
 
-| 批 | 内容 | 依赖 |
+| 批 | 内容 | 测试 |
 |----|------|------|
-| B1 | error.rs, models/（纯数据模型） | 无 |
-| B2 | util/（murmurhash2, nbt, version_json, launcher_profiles） | B1 |
-| B3 | api/ traits + event.rs | B1 |
-| B4 | builder.rs + core.rs（Facade 骨架） | B1-B3 |
-| B5 | services/auth | B3 |
-| B6 | services/download + services/version | B5 |
-| B7 | services/java | B6 |
-| B8 | services/launch | B6 |
-| B9 | services/installers | B7 |
-| B10 | services/local | B6 |
-| B11 | services/server | B6 |
-| B12 | services/options | B6 |
-| B13 | services/expansion | B6 |
-| B14 | 快照比对 + 边界测试 | 全部 |
+| B1 | 模型层（error.rs + 51 模型） | 9 |
+| B2 | 工具层（MurmurHash2/NBT/class 常量池/库坐标） | 8 |
+| B3 | API 层（10 traits）+ event.rs | — |
+| B4 | GameCore Facade + async-trait 定案 | — |
+| B5 | 认证实现（offline/设备码流/yggdrasil） | 3 |
+| B6 | 下载/版本域（镜像/缓存/资源补全） | 5 |
+| B7 | Java 域（扫描/推荐/三源下载） | 5 |
+| B8 | 启动域（JVM 参数/进程/natives）——用户检查 + Android 兼容 | 5 |
+| B9 | 9 种安装器 + 工厂 | — |
+| B10 | 本地内容 6 管理器 | — |
+| B11 | 服务器域（servers.dat/Ping/LAN/DNS） | — |
+| B12 | 游戏设置（options.txt） | — |
+| B13 | 扩展平台 + 整合包 + InstallerProvider + builder 组装 | — |
 
-每批 ≤200 行变更；每批结束 cargo build + 检查点 commit；QA 快照比对验证行为一致性。
-
-## 7. 已知风险
-
-- Forge 安装器（Legacy+New）逻辑复杂：拆分 forge_legacy / forge_new 子模块
-- NBT/servers.dat 二进制格式：纯移植 util/nbt.rs，无现成 crate
-- CurseForge 指纹（MurmurHash2 变体）：纯移植 util/murmurhash2.rs
-- MC 协议 Ping + LAN UDP 多播：std UdpSocket + 手写协议解析
-- Windows 注册表扫描（Java 检测）：cfg(windows) + winreg crate（待定）或 Registry 命令回退
-- 大文件流式下载：reqwest 流 + tokio fs，校验 SHA1
-
-## 8. 与上游的接口对齐
-
-| C# 公开 API | Rust 公开 API |
-|-------------|---------------|
-| `new GameCoreBuilder()` | `GameCore::builder()` |
-| `core.Auth.AuthenticateAsync(...)` | `core.auth().authenticate(...)` |
-| `core.Version.GetRemoteVersionsAsync()` | `core.version().get_remote_versions()` |
-| `core.JavaProvider.SearchAsync(...)` | `core.java().search(...)` |
-| `core.Installer.CreateForge(...)` | `core.installer().create_forge(...)` |
-| `core.Launch.ExecuteAsync(...)` | `core.launch().execute(...)` |
-| `core.LocalResourceProvider.CreateMods(...)` | `core.local().mods(...)` |
-| `new ServerManager(...)` | `core.server()` |
-| `new OptionsProvider(...)` | `core.options()` |
-| `core.CreateModrinthSource()` | `core.modrinth()` |
+累计：**35 个测试**，`cargo check` 零警告。详见 [checkpoints/](checkpoints/)。
