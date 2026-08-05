@@ -91,6 +91,47 @@ utils:
   版本 JSON 继承与合并 -> util/version_json.rs
   下载重试 + 校验 -> services/download/retry.rs, checksum.rs
 
+# ── B1 序列化规则（2026-08-06 批次定案）───────────
+# C# record/class + 属性 -> Rust struct + derive(Serialize, Deserialize, Debug, Clone, PartialEq)
+# JsonPropertyName(camelCase) / CamelCase Policy -> #[serde(rename_all = "camelCase")]
+# nullable T? -> Option<T>
+# List<T> -> Vec<T>，Dictionary<K,V> -> HashMap<K,V>
+# DefaultIgnoreCondition.WhenWritingNull -> #[serde(skip_serializing_if = "Option::is_none")]
+# 枚举序列化：
+#   UseStringEnumConverter=true 的 context（Modrinth/CurseForge/FTB/Options）-> serde 字符串枚举
+#   其余 context（数字默认）-> #[derive(Serialize_repr, Deserialize_repr)] + #[repr(i32)]
+# 自定义 converter（JsonConverters/VersionArgumentsConverter.cs）-> 手写 serde 自定义反序列化
+#   （new 形态 {"game":[...],"jvm":[...]}；兼容旧形态裸数组——特殊兼容点）
+
+# ── B1 模型映射明细 ──────────────────────────────
+models_b1:
+  Exceptions/*.cs (5 个异常) -> error.rs 的 Error enum 变体（B1）
+  Models/Auth/YggdrasilModels.cs + Models/UserAuth.cs -> models/auth.rs（Yggdrasil 认证 DTO）
+  Public/IAuthProvider.cs 内 AuthRequest/AuthResult/DeviceCodeResult/PollTokenResult -> models/auth.rs
+  Builder/CoreOptions.cs 内 AuthMode/AuthOptions/DownloadMirror -> models/auth.rs / models/download.rs
+  Models/Download/DownloadProgress.cs + DownloadSource.cs -> models/download.rs
+  Models/ResourceType.cs -> models/download.rs
+  Models/OptiFineVersionInfo.cs -> models/installer.rs
+  Public/Models/LaunchResult.cs + Builder/CoreOptions.cs 内 LaunchOptions/JavaOptions -> models/launch.rs
+  Public/Models/JavaResult.cs -> models/java.rs
+  Public/Models/ModLoaderResult.cs + MissFileInfo.cs -> models/installer.rs
+  Models/VersionManifest/*.cs (3) -> models/version_manifest.rs
+  Models/Local/LocalVersionInfo.cs + VersionManifestCacheInfo.cs -> models/local.rs
+  Models/ParamsMeta/ParamEntry.cs + JsonContext/ParamsJsonContent.cs 内 Config/Arguments -> models/params_meta.rs
+  Models/VersionMetadata/*.cs (7) -> models/version_metadata.rs（含 VersionArguments 自定义反序列化）
+  Models/Expansion/Local/*.cs (6) -> models/expansion/local.rs
+  Models/Expansion/Modrinth/*.cs (9) -> models/expansion/modrinth.rs（字符串枚举）
+  Models/Expansion/CurseForge/*.cs (14) -> models/expansion/curseforge.rs（字符串枚举）
+  Models/Expansion/FeedTheBeast/*.cs (3) -> models/expansion/ftb.rs（字符串枚举）
+
+# ── B1 定案（2026-08-06，CHECKPOINT_BATCH_1）────────
+b1_decisions:
+  DateTimeOffset/DateTime 字段（~18 处）: String 原始文本保真（chrono 决策推迟到 B6）
+  LaunchResult 委托回调/异常: 省略，由 B3 event.rs CoreEvent 承接
+  ModInfo.Active 计算属性: is_active() 方法
+  关键字冲突: type -> r#type（JSON 键不变）
+  Modrinth ModLoaderType: 逐变体 #[serde(rename)]（neoForge/liteLoader 等）
+
 # ── 事件映射（Public/Events/ → src/event.rs）──────
 events:
   进度报告事件 -> CoreEvent::Progress { task, current, total }

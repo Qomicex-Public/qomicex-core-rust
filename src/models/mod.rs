@@ -1,5 +1,6 @@
 //! 数据模型层：全 serde derive（对应源项目 Models/ + JsonContext/）
 pub mod auth;
+pub mod download;
 pub mod launch;
 pub mod java;
 pub mod installer;
