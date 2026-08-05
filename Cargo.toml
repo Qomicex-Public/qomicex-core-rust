@@ -28,3 +28,5 @@ toml = "0.8"
 base64 = "0.22"
 flate2 = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+socket2 = "0.5"
