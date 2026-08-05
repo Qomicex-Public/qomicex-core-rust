@@ -42,6 +42,7 @@
 //! - `LanServerEntry`：模型映射表未登记，按命名约定建议 `crate::models::local::LanServerEntry`
 //!   （建议路径，未定案，模型批次登记时确认）。
 
+use async_trait::async_trait;
 use crate::error::Error;
 use crate::models::local::{LanServerEntry, ServerEntry, ServerState};
 use std::time::Duration;
@@ -50,6 +51,7 @@ use tokio::sync::mpsc;
 /// 服务器管理器（源：IServerManager）。
 /// 负责 servers.dat 的增删改查/读写、服务器状态查询（Ping）、
 /// LAN 局域网服务器发现与 SRV 记录解析。
+#[async_trait]
 pub trait ServerManager: Send + Sync {
     /// 加载服务器列表（源：LoadServerList，同步方法）
     fn load_server_list(&self) -> Vec<ServerEntry>;
@@ -103,3 +105,4 @@ pub trait ServerManager: Send + Sync {
     /// `Task<string?>` → `Result<Option<String>, Error>`）
     async fn resolve_srv(&self, host: &str, ct: ()) -> Result<Option<String>, Error>;
 }
+

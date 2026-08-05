@@ -34,6 +34,7 @@
 //! 注：`modrinth::VersionInfo` 与 `ftb::VersionInfo` 同名冲突，分别别名导入
 //! 为 `ModrinthVersionInfo` / `FtbVersionInfo`（对应源 C# 类型名均仍为 VersionInfo）。
 
+use async_trait::async_trait;
 use crate::error::Error;
 use crate::models::expansion::curseforge::{
     CurseForgeFileInfo, CurseForgeInfo, CurseForgeSearchResponse, FingerprintsFilesMeta,
@@ -49,6 +50,7 @@ use std::collections::HashMap;
 /// Modrinth 数据源（源：IModrinthSource 接口）。
 ///
 /// 提供 Modrinth 平台的项目搜索、项目/版本详情、哈希反查与标签列表查询。
+#[async_trait]
 pub trait ModrinthSource: Send + Sync {
     /// 搜索项目（源：`SearchAsync`）。
     ///
@@ -99,6 +101,7 @@ pub trait ModrinthSource: Send + Sync {
 /// CurseForge 数据源（源：ICurseForgeSource 接口）。
 ///
 /// 提供 CurseForge 平台的模组搜索、模组/文件详情、下载地址与指纹反查。
+#[async_trait]
 pub trait CurseForgeSource: Send + Sync {
     /// 搜索模组（源：`SearchAsync`）。
     ///
@@ -141,6 +144,7 @@ pub trait CurseForgeSource: Send + Sync {
 /// FTB 数据源（源：IFTBSource 接口）。
 ///
 /// 提供 FTB App 的整合包搜索、整合包/版本/更新日志查询。
+#[async_trait]
 pub trait FtbSource: Send + Sync {
     /// 搜索整合包（源：`SearchAsync`）。
     ///
@@ -184,3 +188,4 @@ pub fn get_latest_version(pack: &ModpackInfo) -> Option<FtbVersionInfo> {
         })
         .cloned()
 }
+

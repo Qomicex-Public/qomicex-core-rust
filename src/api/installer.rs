@@ -7,12 +7,14 @@
 //!
 //! 注：InstallerFactory（IInstallerFactory，6 种安装器创建）属另一源文件，后续批次补充。
 
+use async_trait::async_trait;
 use crate::error::Error;
 use crate::models::installer::{ModLoaderResult, ModLoaderType};
 
 /// 安装器提供商（源：IInstallerProvider 接口）。
 ///
 /// 负责查询指定游戏版本可用的模组加载器列表。
+#[async_trait]
 pub trait InstallerProvider: Send + Sync {
     /// 获取指定游戏版本可用的模组加载器列表（源：`GetAvailableModLoaders`）。
     ///
@@ -25,3 +27,4 @@ pub trait InstallerProvider: Send + Sync {
         r#type: ModLoaderType,
     ) -> Result<Vec<ModLoaderResult>, Error>;
 }
+

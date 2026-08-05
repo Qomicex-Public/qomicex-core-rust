@@ -6,9 +6,8 @@
 //!
 //! 架构设计见 `docs/architecture.md`，类型映射见 `MAPPING_TABLE.yaml`。
 
-// async fn in trait（RPITIT 决策）：B3 阶段保持 async fn 可读性；
-// 若 B4 Facade 集成出现跨线程 spawn 需求，批量转 `-> impl Future + Send`。
-#![allow(async_fn_in_trait)]
+// 异步 trait 决策（B4 定案）：api/ 层全部 trait 使用 #[async_trait] 宏
+// （async fn in trait / RPITIT 均非 dyn-compatible，无法用于 Arc<dyn Trait> Facade 架构）。
 
 pub mod api;
 pub mod builder;

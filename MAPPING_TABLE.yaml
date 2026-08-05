@@ -149,6 +149,16 @@ b2_decisions:
   MinecraftDateTime: 轻量结构（year i32 + 时分秒 u8 + offset_minutes），无 chrono
   launcher_profiles.json: 源 AOT 无实现 → 暂缓（B11 评估）
 
+# ── B4 定案（2026-08-06，Facade 集成）──────────────
+b4_decisions:
+  异步 trait 方案: #[async_trait] 宏（async fn in trait 与 RPITIT 均非 dyn-compatible，
+    无法支撑 Arc<dyn Trait> Facade 架构；async-trait = "0.1" 引入，B3 的 8 个含异步方法
+    trait 全部加 #[async_trait]，本地/local.rs、options.rs 纯同步无需）
+  GameCore: Arc<dyn Trait + Send + Sync> 注入（11 字段 + new() 全参数 + 访问器方法）
+  InstallerFactory: api/installer.rs 未定义该 trait（B3 时源 IInstallerFactory 未翻译）
+    → core.rs 未引入 installer_factory 字段，B9 批次补
+  HttpClient: 不持有（B13 定 reqwest 共享 client）
+
 # ── 事件映射（Public/Events/ → src/event.rs）──────
 events:
   进度报告事件 -> CoreEvent::Progress { task, current, total }

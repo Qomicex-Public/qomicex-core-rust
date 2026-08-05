@@ -16,6 +16,7 @@
 //! - `IProgress<DownloadProgress>?` → `Option<&dyn ProgressReporter>`（见 src/event.rs）
 //! - C# 重载方法（meta 与 jsonData 两个变体）→ `_from_json` 后缀区分（见日志重命名决策）
 
+use async_trait::async_trait;
 use crate::error::Error;
 use crate::event::ProgressReporter;
 use crate::models::installer::MissFileInfo;
@@ -24,6 +25,7 @@ use crate::models::version_manifest::{LatestVersionInfo, ManifestVersionInfo, Ve
 use crate::models::version_metadata::CompleteVersionMetadata;
 
 /// 版本管理服务（源：IVersionManagementService，版本安装/卸载/查询总入口）
+#[async_trait]
 pub trait VersionManagement: Send + Sync {
     /// 获取版本清单（对应 GetManifestAsync；C# 参数 forceRefresh 默认 false，
     /// Rust 无默认参数，调用方需显式传入）
@@ -61,6 +63,7 @@ pub trait VersionManagement: Send + Sync {
 }
 
 /// 版本清单服务（源：IVersionManifestService，清单下载/元数据获取）
+#[async_trait]
 pub trait VersionManifest: Send + Sync {
     /// 获取版本清单（对应 GetVersionManifestAsync）
     async fn get_version_manifest(&self) -> Result<VersionManifestRoot, Error>;
@@ -72,6 +75,7 @@ pub trait VersionManifest: Send + Sync {
 }
 
 /// 版本定位器（源：IVersionLocator，本地版本目录/缺失文件扫描）
+#[async_trait]
 pub trait VersionLocator: Send + Sync {
     /// 获取全部本地版本（对应 GetAllVersions，同步方法）
     fn get_all_versions(&self) -> Vec<LocalVersionInfo>;
@@ -133,6 +137,7 @@ pub trait VersionLocator: Send + Sync {
 }
 
 /// 资源补全器（源：IResourceCompleter，补齐缺失资源并校验完整性）
+#[async_trait]
 pub trait ResourceCompleter: Send + Sync {
     /// 补全缺失资源（对应 CompleteResourcesAsync；
     /// `IProgress<DownloadProgress>? progress = null` → `Option<&dyn ProgressReporter>`）
@@ -146,3 +151,4 @@ pub trait ResourceCompleter: Send + Sync {
     async fn check_resources_complete(&self, metadata: &CompleteVersionMetadata)
         -> Result<bool, Error>;
 }
+

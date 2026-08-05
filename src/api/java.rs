@@ -8,6 +8,7 @@
 //! - `bool Check(JavaResult java, CompleteVersionMetadata metadata)`（同步）→ `check(&self, java: &JavaResult, metadata: &CompleteVersionMetadata) -> bool`
 //! - `Task<List<JavaPackageInfo>> GetPackages(int majorVersion, JavaPlatform platform, JavaArchitecture architecture, JavaPackageType packageType, JavaDownloadSource source = JavaDownloadSource.Adoptium)` → `get_packages(&self, major_version: i32, platform: JavaPlatform, architecture: JavaArchitecture, package_type: JavaPackageType, source: JavaDownloadSource) -> Result<Vec<JavaPackageInfo>, Error>`
 
+use async_trait::async_trait;
 use crate::error::Error;
 use crate::models::java::{
     JavaArchitecture, JavaDownloadSource, JavaPackageInfo, JavaPackageType, JavaPlatform,
@@ -20,6 +21,7 @@ use crate::models::version_metadata::CompleteVersionMetadata;
 /// 负责扫描本机 Java 环境（Search）、在候选列表中推荐适配当前版本的
 /// Java（Recommand）、校验 Java 与版本元数据是否匹配（Check），以及
 /// 按平台/架构/类型从指定源获取可下载的 Java 包列表（GetPackages）。
+#[async_trait]
 pub trait JavaProvider: Send + Sync {
     /// 按搜索选项扫描本机 Java 环境（源：`Search`）。
     ///
@@ -52,3 +54,4 @@ pub trait JavaProvider: Send + Sync {
         source: JavaDownloadSource,
     ) -> Result<Vec<JavaPackageInfo>, Error>;
 }
+

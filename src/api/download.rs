@@ -9,6 +9,7 @@
 //! - `AddCustomSource(DownloadSource)`（同步 void）→ `add_custom_source(&mut self, source)`
 //! - `GetPreferredSource(ResourceType) -> DownloadSource?` → `get_preferred_source(&self, resource_type) -> Result<Option<DownloadSource>, Error>`
 
+use async_trait::async_trait;
 use crate::error::Error;
 use crate::models::download::{DownloadSource, ResourceType};
 
@@ -16,6 +17,7 @@ use crate::models::download::{DownloadSource, ResourceType};
 ///
 /// 负责按资源类型提供可用下载源、生成镜像 URL、测试源可用性、
 /// 注册自定义源并挑选首选源。
+#[async_trait]
 pub trait DownloadSourceManager: Send + Sync {
     /// 获取指定资源类型的全部可用下载源（源：`GetAvailableSources`）。
     ///
@@ -46,3 +48,4 @@ pub trait DownloadSourceManager: Send + Sync {
     /// `Result<Option<DownloadSource>, Error>` 以统一错误通道。
     fn get_preferred_source(&self, resource_type: ResourceType) -> Result<Option<DownloadSource>, Error>;
 }
+
