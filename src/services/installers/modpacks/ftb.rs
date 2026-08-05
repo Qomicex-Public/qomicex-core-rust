@@ -126,6 +126,7 @@ impl Installer for FtbModpackInstaller {
             // ⚠️ UNMAPPED：源 new Exception 无对应 Error 变体，借 Error::Http
             return Err(Error::Http {
                 message: "无法获取整合包信息（源 new Exception）".to_string(),
+                status: None,
                 source: None,
             });
         };
@@ -185,6 +186,7 @@ impl Installer for FtbModpackInstaller {
             // ⚠️ UNMAPPED：源 new Exception 无对应 Error 变体，借 Error::Http
             return Err(Error::Http {
                 message: "无法获取整合包 Mod 信息（源 new Exception）".to_string(),
+                status: None,
                 source: None,
             });
         };
@@ -266,3 +268,6 @@ impl Installer for FtbModpackInstaller {
         Ok(miss_files)
     }
 }
+
+
+

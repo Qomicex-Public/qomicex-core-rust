@@ -11,7 +11,7 @@
 //!   遇无效字节替换为 U+FFFD，对应 Rust from_utf8_lossy）
 //! - 源 Read 不支持压缩流（无 GZipStream/zlib），故本模块不依赖 flate2
 
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use std::io::{Read, Write};
 
 /// NBT 标签类型常量（标准 NBT 规格 0..=11 全覆盖；
@@ -49,7 +49,7 @@ pub enum NbtValue {
 /// 键使用 Ordinal 比较——Rust String 相等即字节序相同，语义一致）
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct NbtCompound {
-    entries: HashMap<String, NbtValue>,
+    entries: IndexMap<String, NbtValue>,
 }
 
 impl NbtCompound {
@@ -332,3 +332,4 @@ fn read_u8<R: Read>(reader: &mut R, value_name: &str) -> Result<u8, NbtError> {
         .map_err(|_| NbtError::UnexpectedEndOfStream(value_name.to_string()))?;
     Ok(byte[0])
 }
+

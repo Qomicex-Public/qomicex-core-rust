@@ -318,6 +318,7 @@ impl DefaultResourceCompleter {
     ) -> Result<(), Error> {
         let response = self.http_client.get(url).send().await.map_err(|e| Error::Http {
             message: format!("HTTP 请求失败: {url}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         // 源：response.EnsureSuccessStatusCode()（非 2xx 抛 HttpRequestException）
@@ -325,6 +326,7 @@ impl DefaultResourceCompleter {
         if !status.is_success() {
             return Err(Error::Http {
                 message: format!("HTTP 状态码 {}: {url}", status.as_u16()),
+                status: None,
                 source: None,
             });
         }
@@ -352,6 +354,7 @@ impl DefaultResourceCompleter {
             .await
             .map_err(|e| Error::Http {
                 message: format!("读取响应流失败: {url}"),
+                status: None,
                 source: Some(Box::new(e)),
             })?
         {
@@ -606,3 +609,6 @@ fn file_name_of(path: &str) -> String {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string())
 }
+
+
+

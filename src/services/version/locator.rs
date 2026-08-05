@@ -103,7 +103,10 @@ impl DefaultVersionLocator {
             .into_owned();
         // 源 Directory.CreateDirectory(_versionsRootPath) 失败抛 IOException；
         // ⚠️ 构造签名返回 Self 无法传播错误 → 静默忽略（见翻译日志 p28a）
-        let _ = std::fs::create_dir_all(&versions_root_path);
+        // TD-4：创建失败记录日志（源 Directory.CreateDirectory 抛 IOException；Rust 构造无法传播）
+        if let Err(e) = std::fs::create_dir_all(&versions_root_path) {
+            eprintln!("创建版本目录失败（{}）：{e}", versions_root_path);
+        }
         let download_source = if mirror == DownloadMirror::Bmclapi {
             bmclapi_download_source()
         } else {
@@ -902,6 +905,7 @@ fn calculate_version_size(version_path: &Path) -> i64 {
     }
     total
 }
+
 
 
 

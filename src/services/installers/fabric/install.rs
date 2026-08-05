@@ -147,25 +147,30 @@ impl FabricInstaller {
         );
         let response = client.get(&url).send().await.map_err(|e| Error::Http {
             message: format!("获取Launcher Meta失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         if !response.status().is_success() {
             return Err(Error::Http {
                 message: "获取Launcher Meta失败".to_string(),
+                status: None,
                 source: None,
             });
         }
         let meta_str = response.text().await.map_err(|e| Error::Http {
             message: format!("读取Launcher Meta响应失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         // 源：`JsonNode.Parse(metaStr)!.AsObject()`（Parse 失败 → JsonException；非对象 → InvalidOperationException）
         let meta_value: Value = serde_json::from_str(&meta_str).map_err(|e| Error::Http {
             message: format!("Launcher Meta JSON 解析失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         let mut meta = meta_value.as_object().ok_or_else(|| Error::Http {
             message: "Launcher Meta 顶层非 JSON 对象".to_string(),
+            status: None,
             source: None,
         })?.clone();
 
@@ -200,6 +205,7 @@ impl FabricInstaller {
         meta.insert("id".to_string(), Value::String(version_id.to_string()));
         serde_json::to_string(&Value::Object(meta)).map_err(|e| Error::Http {
             message: format!("序列化版本 JSON 失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })
     }
@@ -218,24 +224,29 @@ impl FabricInstaller {
         );
         let response = client.get(&url).send().await.map_err(|e| Error::Http {
             message: format!("获取Launcher Meta失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         if !response.status().is_success() {
             return Err(Error::Http {
                 message: "获取Launcher Meta失败".to_string(),
+                status: None,
                 source: None,
             });
         }
         let meta_str = response.text().await.map_err(|e| Error::Http {
             message: format!("读取Launcher Meta响应失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         let meta_value: Value = serde_json::from_str(&meta_str).map_err(|e| Error::Http {
             message: format!("Launcher Meta JSON 解析失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         let meta = meta_value.as_object().ok_or_else(|| Error::Http {
             message: "Launcher Meta 顶层非 JSON 对象".to_string(),
+            status: None,
             source: None,
         })?;
 
@@ -375,6 +386,9 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
     }
 }
+
+
+
 
 
 

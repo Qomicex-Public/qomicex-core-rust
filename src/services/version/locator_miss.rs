@@ -118,6 +118,7 @@ impl DefaultVersionLocator {
                         Err(e) => {
                             last_error = Some(Error::Http {
                                 message: format!("下载资源索引失败 ({url}): {e}"),
+                                status: None,
                                 source: Some(Box::new(e)),
                             });
                             continue;
@@ -149,12 +150,14 @@ impl DefaultVersionLocator {
                     // 源：!IsSuccessStatusCode → 记录 ReasonPhrase（reqwest 无等价物，用状态码文本）
                     last_error = Some(Error::Http {
                         message: format!("下载资源索引失败 ({url}): {}", response.status()),
+                        status: None,
                         source: None,
                     });
                 }
                 Err(e) => {
                     last_error = Some(Error::Http {
                         message: format!("下载资源索引失败 ({url}): {e}"),
+                        status: None,
                         source: Some(Box::new(e)),
                     });
                 }
@@ -280,6 +283,9 @@ impl DefaultVersionLocator {
         )
     }
 }
+
+
+
 
 
 

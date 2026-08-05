@@ -9,6 +9,8 @@ pub enum Error {
     #[error("http error: {message}")]
     Http {
         message: String,
+        /// HTTP 状态码（TD-1：源 HttpRequestException.StatusCode 结构化承载；None = 传输/解析层错误）
+        status: Option<u16>,
         #[source]
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
@@ -48,3 +50,5 @@ pub enum Error {
         source: Option<Box<dyn std::error::Error + Send + Sync>>,
     },
 }
+
+

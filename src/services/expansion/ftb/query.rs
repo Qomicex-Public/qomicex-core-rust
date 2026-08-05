@@ -138,16 +138,19 @@ impl FtbBase {
             .await
             .map_err(|e| Error::Http {
                 message: format!("GET {url} 失败"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
         if !response.status().is_success() {
             return Err(Error::Http {
                 message: format!("请求失败，状态码: {}: {url}", response.status()),
+                status: None,
                 source: None,
             });
         }
         response.text().await.map_err(|e| Error::Http {
             message: format!("读取响应体失败: {url}"),
+            status: None,
             source: Some(Box::new(e)),
         })
     }
@@ -207,6 +210,7 @@ impl FtbBase {
         let ids_json = self.get_data_async("/modpack/all").await?;
         let ids_doc: Value = serde_json::from_str(&ids_json).map_err(|e| Error::Http {
             message: "解析 /modpack/all 响应 JSON 失败".to_string(),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         // 源：idsDoc["packs"] is JsonArray arr ? arr.Select(n => (int)(n ?? 0)).ToList() : []
@@ -428,5 +432,8 @@ fn unix_timestamp_secs() -> i64 {
         .unwrap_or_default()
         .as_secs() as i64
 }
+
+
+
 
 

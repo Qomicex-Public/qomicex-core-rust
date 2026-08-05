@@ -243,10 +243,12 @@ impl LiteloaderInstaller {
         // Parse 失败 → JsonException / 非对象 → InvalidOperationException 向上传播）
         let root = serde_json::from_str::<Value>(&json_content).map_err(|e| Error::Http {
             message: format!("LiteLoader meta JSON 解析失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         let root_obj = root.as_object().ok_or_else(|| Error::Http {
             message: "LiteLoader meta 顶层非 JSON 对象".to_string(),
+            status: None,
             source: None,
         })?;
 
@@ -722,4 +724,7 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
     }
 }
+
+
+
 

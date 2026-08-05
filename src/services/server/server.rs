@@ -119,7 +119,7 @@ pub(crate) fn parse_server_address(address: &str) -> (String, u16) {
 /// lan_discovery.rs 的 `resolve_srv` 契约只返回目标（端口被丢弃）→ 本实现 ConnectPort
 /// 取 25565（该分支仅在 port == 25565 时进入；SRV 记录指定其他端口的服务器连接端口错误，
 /// 见日志）。
-async fn resolve_status_endpoint(server_manager: &ServerManager, address: &str) -> StatusEndpoint {
+async fn resolve_status_endpoint(_server_manager: &ServerManager, address: &str) -> StatusEndpoint {
     let (host, port) = parse_server_address(address);
     // 源：if (port != 25565 || IPAddress.TryParse(host, out _)) → 原值（不查 SRV）
     // str::parse::<IpAddr> 覆盖 IPv4/IPv6，等价 IPAddress.TryParse
@@ -132,18 +132,18 @@ async fn resolve_status_endpoint(server_manager: &ServerManager, address: &str) 
     }
 
     // 源：try { ResolveSrvInternalAsync(host, CancellationToken.None).GetAwaiter().GetResult() }
-    // CancellationToken::new() = 源 CancellationToken.None（未取消）
-    let result = server_manager
-        .resolve_srv(&host, &CancellationToken::new())
-        .await
-        .ok()
-        .flatten();
+    // TD-3：直接走 resolve_srv_internal（保留 SRV 端口，源 (Target, Port) 语义）
+    let result = crate::services::server::lan_discovery::resolve_srv_internal(
+        &host,
+        &CancellationToken::new(),
+    )
+    .await;
     match result {
         // 源：string.IsNullOrWhiteSpace(target) → 原值
-        Some(target) if !target.trim().is_empty() => StatusEndpoint {
+        Some((target, srv_port)) if !target.trim().is_empty() => StatusEndpoint {
             connect_host: target,
-            // ⚠️ 源：result.Value.Port（SRV 端口）——trait resolve_srv 不返回端口 → 取默认
-            connect_port: DEFAULT_PORT,
+            // TD-3：SRV 端口（源 result.Value.Port）替代默认 25565
+            connect_port: srv_port,
             handshake_host: host,
         },
         // 源：result null / target 空白 / catch{} → 原值
@@ -386,4 +386,5 @@ impl ServerManagerApi for ServerManager {
         self.resolve_srv(host, ct).await
     }
 }
+
 

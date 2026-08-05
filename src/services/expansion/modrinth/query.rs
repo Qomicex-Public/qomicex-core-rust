@@ -103,6 +103,7 @@ impl ModrinthBase {
                     status.as_u16(),
                     status.canonical_reason().unwrap_or("")
                 ),
+                status: None,
                 source: None,
             });
         }
@@ -139,6 +140,7 @@ impl ModrinthBase {
                     status.as_u16(),
                     status.canonical_reason().unwrap_or("")
                 ),
+                status: None,
                 source: None,
             });
         }
@@ -242,6 +244,7 @@ impl ModrinthSource for ModrinthBase {
         let body = self.get_data(&url).await?;
         serde_json::from_str(&body).map_err(|e| Error::Http {
             message: "搜索结果反序列化失败".to_string(),
+            status: None,
             source: Some(Box::new(e)),
         })
     }
@@ -267,6 +270,7 @@ impl ModrinthSource for ModrinthBase {
             .await?;
         serde_json::from_str(&body).map_err(|e| Error::Http {
             message: "项目信息反序列化失败".to_string(),
+            status: None,
             source: Some(Box::new(e)),
         })
     }
@@ -326,6 +330,7 @@ impl ModrinthSource for ModrinthBase {
             .await?;
         serde_json::from_str(&body).map_err(|e| Error::Http {
             message: "版本信息反序列化失败".to_string(),
+            status: None,
             source: Some(Box::new(e)),
         })
     }
@@ -366,6 +371,7 @@ impl ModrinthSource for ModrinthBase {
         };
         let json_data = serde_json::to_string(&request).map_err(|e| Error::Http {
             message: "版本文件反查请求序列化失败".to_string(),
+            status: None,
             source: Some(Box::new(e)),
         })?;
 
@@ -506,6 +512,7 @@ fn escape_data_string(s: &str) -> String {
 fn http_err(e: reqwest::Error) -> Error {
     Error::Http {
         message: format!("HTTP 请求失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     }
 }
@@ -514,6 +521,11 @@ fn http_err(e: reqwest::Error) -> Error {
 fn json_err(e: serde_json::Error) -> Error {
     Error::Http {
         message: format!("JSON 解析失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     }
 }
+
+
+
+

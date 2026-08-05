@@ -339,6 +339,8 @@ impl GameCoreBuilder {
                 self.options.game_root.clone(),
                 Some(http.clone()),
                 Some(download_source.clone()),
+                self.options.cache_expiry,
+                self.options.max_concurrent_downloads.max(1) as usize,
             )),
         };
 

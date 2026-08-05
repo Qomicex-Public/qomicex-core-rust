@@ -112,10 +112,12 @@ impl JavaDownloader {
         let body = self.get_string(&Self::build_adoptium_url(major_version)).await?;
         let root: Value = serde_json::from_str(&body).map_err(|e| Error::Http {
             message: "解析 Adoptium 响应失败".to_string(),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         let assets = root.as_array().ok_or_else(|| Error::Http {
             message: "Adoptium 响应不是 JSON 数组".to_string(),
+            status: None,
             source: None,
         })?;
 
@@ -216,6 +218,7 @@ impl JavaDownloader {
         let url = "https://bmclapi2.bangbang93.com/java/list";
         let response = self.http.get(url).send().await.map_err(|e| Error::Http {
             message: format!("请求失败: {url}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         if response.status() == reqwest::StatusCode::FORBIDDEN {
@@ -226,10 +229,12 @@ impl JavaDownloader {
         }
         let body = response.text().await.map_err(|e| Error::Http {
             message: format!("读取响应失败: {url}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         let token: Value = serde_json::from_str(&body).map_err(|e| Error::Http {
             message: "解析 BMCLAPI 响应失败".to_string(),
+            status: None,
             source: Some(Box::new(e)),
         })?;
 
@@ -266,17 +271,20 @@ impl JavaDownloader {
     async fn get_string(&self, url: &str) -> Result<String, Error> {
         let response = self.http.get(url).send().await.map_err(|e| Error::Http {
             message: format!("请求失败: {url}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         let status = response.status();
         if !status.is_success() {
             return Err(Error::Http {
                 message: format!("请求失败 (HTTP {status}): {url}"),
+                status: None,
                 source: None,
             });
         }
         response.text().await.map_err(|e| Error::Http {
             message: format!("读取响应失败: {url}"),
+            status: None,
             source: Some(Box::new(e)),
         })
     }
@@ -518,4 +526,7 @@ fn to_comparable_version(value: Option<&Value>) -> Result<String, ()> {
     }
     Ok(out)
 }
+
+
+
 

@@ -267,7 +267,7 @@ fn extract_lan_tag(payload: &str, tag_name: &str) -> Option<String> {
 /// 向**全部**系统 DNS 服务器顺序发送（源 foreach）→ 3 秒内接收首个响应（源 ReceiveTimeout
 /// 3000ms + ReceiveAsync(ct)）→ ParseDnsSrvResponse。任一环节失败 → None（源全部错误
 /// 路径 null）。
-async fn resolve_srv_internal(host: &str, ct: &CancellationToken) -> Option<(String, u16)> {
+pub(crate) async fn resolve_srv_internal(host: &str, ct: &CancellationToken) -> Option<(String, u16)> {
     let query_name = encode_dns_name(&format!("_minecraft._tcp.{host}"));
     let query = build_dns_query(&query_name);
 
@@ -337,38 +337,32 @@ fn get_dns_servers() -> Vec<SocketAddr> {
 /// 系统 DNS 地址枚举（平台分支）
 #[cfg(target_os = "windows")]
 fn system_dns_addresses() -> Vec<IpAddr> {
-    // ⚠️ UNMAPPED：源 NetworkInterface.GetIPProperties().DnsAddresses（GetAdaptersAddresses
-    // P/Invoke）；Rust std 无等价 → ipconfig /all 输出近似。
-    // 解析规则（对英文/中文等区域设置均适用，见日志）：
-    // 1) 含 "DNS" 的标签行（如 "DNS Servers . . : 192.168.1.1" / "DNS 服务器 . . : 8.8.8.8"）
-    //    → 取标签分隔符 ": "（冒号后跟空格）之后的部分解析 IP；
-    //    （IPv6 地址内的 ':' 后跟十六进制字符而非空格 → 不会误切）
-    // 2) 无标签的裸 IP 行（DNS 列表续行）→ 直接解析；
-    // 其余含标签的 IP 行（IPv4 Address/Default Gateway 等）不含 "DNS" 且带标签 → 天然排除。
+    // TD-2：优先读注册表（对应 .NET NetworkInterface.DnsAddresses 的底层数据源），
+    // 失败回退 ipconfig /all 解析（locale 脆弱，仅作兜底）。
+    let reg = windows_dns_from_registry();
+    if !reg.is_empty() {
+        return reg;
+    }
     let output = match std::process::Command::new("ipconfig").arg("/all").output() {
         Ok(o) => o.stdout,
         Err(_) => return Vec::new(),
     };
     let text = String::from_utf8_lossy(&output);
-
     let mut addresses: Vec<IpAddr> = Vec::new();
     for line in text.lines() {
         let mut candidates: Vec<String> = Vec::new();
         if line.contains("DNS") {
-            // 标签行：取最后一个 ": "（冒号后跟空格）之后的 IP 列表（逗号分隔容错）
             if let Some(sep) = line.rfind(": ") {
                 let rest = line[sep + 2..].replace(',', " ");
                 candidates.extend(rest.split_whitespace().map(|s| s.to_string()));
             }
         } else {
-            // 续行：整行去掉逗号后可能直接是 IP（无标签）
             let rest = line.replace(',', " ");
             let tokens: Vec<&str> = rest.split_whitespace().collect();
             if tokens.len() == 1 {
                 candidates.push(tokens[0].to_string());
             }
         }
-
         for token in &candidates {
             if let Ok(ip) = token.parse::<IpAddr>() {
                 if !addresses.contains(&ip) {
@@ -377,8 +371,49 @@ fn system_dns_addresses() -> Vec<IpAddr> {
             }
         }
     }
-
     addresses
+}
+
+/// Windows 注册表 DNS 读取（TD-2：HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\
+/// Interfaces 下各网卡的 NameServer / DhcpNameServer，对应 .NET DnsAddresses 数据源；
+/// 与系统语言无关，无 locale 脆弱性）
+#[cfg(target_os = "windows")]
+fn windows_dns_from_registry() -> Vec<IpAddr> {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+
+    let mut addresses: Vec<IpAddr> = Vec::new();
+    let hklm = match RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces")
+    {
+        Ok(key) => key,
+        Err(_) => return addresses,
+    };
+    for subkey_name in key_names(&hklm) {
+        if let Ok(iface) = hklm.open_subkey(&subkey_name) {
+            for value_name in ["NameServer", "DhcpNameServer"] {
+                if let Ok(text) = iface.get_value::<String, _>(value_name) {
+                    for token in text.split(|c: char| c == ',' || c.is_whitespace()) {
+                        if let Ok(ip) = token.trim().parse::<IpAddr>() {
+                            if !addresses.contains(&ip) {
+                                addresses.push(ip);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    addresses
+}
+
+/// 枚举注册表子键名（winreg 的 enum_keys 迭代器辅助）
+#[cfg(target_os = "windows")]
+fn key_names(key: &winreg::RegKey) -> Vec<String> {
+    key.enum_keys()
+        .map(|r| r.map(|s| s.to_string()))
+        .filter_map(Result::ok)
+        .collect()
 }
 
 /// 系统 DNS 地址枚举（Linux/Android/macOS：/etc/resolv.conf）
@@ -568,6 +603,7 @@ fn decode_dns_name(message: &[u8], offset: usize) -> String {
 
     labels.join(".")
 }
+
 
 
 

@@ -95,16 +95,19 @@ impl InstallerProviderService {
             let loader_url = format!("{base_url}/loader/{encoded_mc_version}");
             let loader_response = self.http.get(&loader_url).send().await.map_err(|e| Error::Http {
                 message: format!("GET {loader_url} 失败"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
             if !loader_response.status().is_success() {
                 return Err(Error::Http {
                     message: format!("请求失败，状态码 {}", loader_response.status()),
+                    status: None,
                     source: None,
                 });
             }
             let loader_json = loader_response.text().await.map_err(|e| Error::Http {
                 message: format!("读取响应体失败: {loader_url}"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
 
@@ -183,6 +186,7 @@ impl InstallerProviderService {
                 let url = format!("{base_url}/loader/{encoded_mc_version}");
                 let loader_response = self.http.get(&url).send().await.map_err(|e| Error::Http {
                     message: format!("GET {url} 失败"),
+                    status: None,
                     source: Some(Box::new(e)),
                 })?;
                 // 源：if (!loaderResponse.IsSuccessStatusCode) continue;
@@ -191,6 +195,7 @@ impl InstallerProviderService {
                 }
                 let loader_json = loader_response.text().await.map_err(|e| Error::Http {
                     message: format!("读取响应体失败: {url}"),
+                    status: None,
                     source: Some(Box::new(e)),
                 })?;
                 loader_array = parse_json_array(&loader_json, "Quilt loader 响应")?;
@@ -210,17 +215,20 @@ impl InstallerProviderService {
                     .await
                     .map_err(|e| Error::Http {
                         message: format!("GET {url} 失败"),
+                        status: None,
                         source: Some(Box::new(e)),
                     })?;
                 // 源：globalLoaderResponse.EnsureSuccessStatusCode();
                 if !global_loader_response.status().is_success() {
                     return Err(Error::Http {
                         message: format!("请求失败，状态码 {}", global_loader_response.status()),
+                        status: None,
                         source: None,
                     });
                 }
                 let global_loader_json = global_loader_response.text().await.map_err(|e| Error::Http {
                     message: format!("读取响应体失败: {url}"),
+                    status: None,
                     source: Some(Box::new(e)),
                 })?;
                 let global_loader_items = parse_json_array(&global_loader_json, "Quilt 全局 loader 响应")?;
@@ -301,16 +309,19 @@ impl InstallerProviderService {
                     );
                     let response = self.http.get(&url).send().await.map_err(|e| Error::Http {
                         message: format!("GET {url} 失败"),
+                        status: None,
                         source: Some(Box::new(e)),
                     })?;
                     if !response.status().is_success() {
                         return Err(Error::Http {
                             message: format!("请求失败，状态码 {}", response.status()),
+                            status: None,
                             source: None,
                         });
                     }
                     let json = response.text().await.map_err(|e| Error::Http {
                         message: format!("读取响应体失败: {url}"),
+                        status: None,
                         source: Some(Box::new(e)),
                     })?;
                     // 源：optifineList = JsonNode.Parse(json)!.AsArray().OfType<JsonObject>().ToList();
@@ -392,16 +403,19 @@ impl InstallerProviderService {
             );
             let response = self.http.get(&url).send().await.map_err(|e| Error::Http {
                 message: format!("GET {url} 失败"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
             if !response.status().is_success() {
                 return Err(Error::Http {
                     message: format!("请求失败，状态码 {}", response.status()),
+                    status: None,
                     source: None,
                 });
             }
             let json = response.text().await.map_err(|e| Error::Http {
                 message: format!("读取响应体失败: {url}"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
 
@@ -413,6 +427,7 @@ impl InstallerProviderService {
                     // 源：var single = JsonNode.Parse(json) as JsonObject; if (single != null) liteloaderList.Add(single);
                     let single: Value = serde_json::from_str(&json).map_err(|e| Error::Http {
                         message: "解析 LiteLoader 单对象 JSON 失败".to_string(),
+                        status: None,
                         source: Some(Box::new(e)),
                     })?;
                     if single.is_object() {
@@ -493,16 +508,19 @@ impl InstallerProviderService {
             let loader_url = format!("{BASE_URL}/loader/{encoded_mc_version}");
             let loader_response = self.http.get(&loader_url).send().await.map_err(|e| Error::Http {
                 message: format!("GET {loader_url} 失败"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
             if !loader_response.status().is_success() {
                 return Err(Error::Http {
                     message: format!("请求失败，状态码 {}", loader_response.status()),
+                    status: None,
                     source: None,
                 });
             }
             let loader_json = loader_response.text().await.map_err(|e| Error::Http {
                 message: format!("读取响应体失败: {loader_url}"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
             let loader_array = parse_json_array(&loader_json, "Legacy Fabric loader 响应")?;
@@ -567,16 +585,19 @@ impl InstallerProviderService {
             let loader_url = format!("{BASE_URL}/loader/{encoded_mc_version}");
             let loader_response = self.http.get(&loader_url).send().await.map_err(|e| Error::Http {
                 message: format!("GET {loader_url} 失败"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
             if !loader_response.status().is_success() {
                 return Err(Error::Http {
                     message: format!("请求失败，状态码 {}", loader_response.status()),
+                    status: None,
                     source: None,
                 });
             }
             let loader_json = loader_response.text().await.map_err(|e| Error::Http {
                 message: format!("读取响应体失败: {loader_url}"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
             let loader_array = parse_json_array(&loader_json, "Babric loader 响应")?;
@@ -679,20 +700,24 @@ impl InstallerProviderService {
     ) -> Result<HashSet<String>, Error> {
         let response = self.http.get(game_versions_url).send().await.map_err(|e| Error::Http {
             message: format!("GET {game_versions_url} 失败"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         if !response.status().is_success() {
             return Err(Error::Http {
                 message: format!("请求失败，状态码 {}", response.status()),
+                status: None,
                 source: None,
             });
         }
         let json = response.text().await.map_err(|e| Error::Http {
             message: format!("读取响应体失败: {game_versions_url}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         let parsed: Value = serde_json::from_str(&json).map_err(|e| Error::Http {
             message: format!("解析 {game_versions_url} JSON 失败"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
 
@@ -987,10 +1012,12 @@ fn escape_data_string(s: &str) -> String {
 fn parse_json_array(json: &str, what: &str) -> Result<Vec<Value>, Error> {
     let value: Value = serde_json::from_str(json).map_err(|e| Error::Http {
         message: format!("解析 {what} JSON 失败"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     value.as_array().cloned().ok_or_else(|| Error::Http {
         message: format!("{what} JSON 非数组"),
+        status: None,
         source: None,
     })
 }
@@ -1096,6 +1123,10 @@ impl InstallerProvider for InstallerProviderService {
         Ok(loaders)
     }
 }
+
+
+
+
 
 
 

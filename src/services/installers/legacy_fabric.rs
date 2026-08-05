@@ -120,11 +120,13 @@ impl LegacyFabricInstaller {
         // 源：if (!result.IsSuccessStatusCode) throw new Exception("获取Launcher Meta失败");
         let response = client.get(&url).send().await.map_err(|e| Error::Http {
             message: format!("GET {url} 失败"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         if !response.status().is_success() {
             return Err(Error::Http {
                 message: "获取Launcher Meta失败".to_string(),
+                status: None,
                 source: None,
             });
         }
@@ -134,11 +136,13 @@ impl LegacyFabricInstaller {
             .await
             .map_err(|e| Error::Http {
                 message: format!("读取响应体失败: {url}"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
         let mut meta: Value =
             serde_json::from_str(&meta_str).map_err(|e| Error::Http {
                 message: "解析 Launcher Meta JSON 失败".to_string(),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
 
@@ -192,11 +196,13 @@ impl LegacyFabricInstaller {
 
         let response = client.get(&url).send().await.map_err(|e| Error::Http {
             message: format!("GET {url} 失败"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         if !response.status().is_success() {
             return Err(Error::Http {
                 message: "获取Launcher Meta失败".to_string(),
+                status: None,
                 source: None,
             });
         }
@@ -206,10 +212,12 @@ impl LegacyFabricInstaller {
             .await
             .map_err(|e| Error::Http {
                 message: format!("读取响应体失败: {url}"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
         let meta: Value = serde_json::from_str(&meta_str).map_err(|e| Error::Http {
             message: "解析 Launcher Meta JSON 失败".to_string(),
+            status: None,
             source: Some(Box::new(e)),
         })?;
 
@@ -343,6 +351,9 @@ impl Installer for LegacyFabricInstaller {
         }
     }
 }
+
+
+
 
 
 

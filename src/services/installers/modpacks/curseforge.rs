@@ -86,6 +86,7 @@ std::fs::create_dir_all(&version_dir).map_err(|e| file_io_err(&self.modpack_file
         if json.get("manifestType").and_then(|v| v.as_str()) != Some("minecraftModpack") {
             return Err(Error::Http {
                 message: "Only Minecraft modpacks are supported.（源 InvalidOperationException）".to_string(),
+                status: None,
                 source: None,
             });
         }
@@ -185,11 +186,13 @@ fn parse_manifest(json_data: Vec<u8>, what: &str) -> Result<Value, Error> {
     let text = String::from_utf8_lossy(&json_data);
     let value: Value = serde_json::from_str(&text).map_err(|e| Error::Http {
         message: format!("解析 {what} 失败（源 JsonException）"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     if !value.is_object() {
         return Err(Error::Http {
             message: format!("{what} 顶层非对象（源 AsObject() → InvalidOperationException）"),
+            status: None,
             source: None,
         });
     }
@@ -219,6 +222,9 @@ fn file_io_err(path: &str, e: std::io::Error) -> Error {
         source: Some(Box::new(e)),
     }
 }
+
+
+
 
 
 

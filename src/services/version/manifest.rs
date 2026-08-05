@@ -50,10 +50,12 @@ impl VersionManifest for VersionManifestService {
         let mut root = deserialize_version_manifest(&body)
             .map_err(|e| Error::Http {
                 message: "解析版本清单失败".to_string(),
+                status: None,
                 source: Some(Box::new(e)),
             })?
             .ok_or_else(|| Error::Http {
                 message: "解析版本清单失败".to_string(),
+                status: None,
                 source: None,
             })?;
 
@@ -65,6 +67,7 @@ impl VersionManifest for VersionManifestService {
             // Rust 侧模型为字符串保真（B1 决策），解析推迟到此：失败按同源语义报错
             let time = parse_minecraft_datetime(&version.release_time).map_err(|msg| Error::Http {
                 message: msg,
+                status: None,
                 source: None,
             })?;
             if version.r#type == "snapshot" && time.month == 4 && time.day == 1 {
@@ -92,10 +95,12 @@ impl VersionManifest for VersionManifestService {
         deserialize_version_metadata(&body)
             .map_err(|e| Error::Http {
                 message: format!("解析版本元数据失败: {url}"),
+                status: None,
                 source: Some(Box::new(e)),
             })?
             .ok_or_else(|| Error::Http {
                 message: format!("解析版本元数据失败: {url}"),
+                status: None,
                 source: None,
             })
     }
@@ -116,6 +121,7 @@ async fn get_json(http: &reqwest::Client, url: &str) -> Result<String, Error> {
                 status.as_u16(),
                 status.canonical_reason().unwrap_or("")
             ),
+                status: None,
             source: None,
         });
     }
@@ -126,6 +132,11 @@ async fn get_json(http: &reqwest::Client, url: &str) -> Result<String, Error> {
 fn http_err(e: reqwest::Error) -> Error {
     Error::Http {
         message: format!("HTTP 请求失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     }
 }
+
+
+
+

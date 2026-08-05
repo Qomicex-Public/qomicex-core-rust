@@ -181,6 +181,7 @@ impl NeoForgeInstaller {
         let mut profile_value: Value =
             serde_json::from_str(&install_profile_data).map_err(|e| Error::Http {
                 message: format!("install_profile.json 解析失败: {e}"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
 
@@ -205,12 +206,14 @@ impl NeoForgeInstaller {
         //      jsonData = versionData.ToJsonString();`
         let mut version_value: Value = serde_json::from_str(&json_data).map_err(|e| Error::Http {
             message: format!("version.json 解析失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         let version_obj = version_value
             .as_object_mut()
             .ok_or_else(|| Error::Http {
                 message: "version.json 顶层非 JSON 对象（源 InvalidOperationException）".to_string(),
+                status: None,
                 source: None,
             })?;
         version_obj.insert("id".to_string(), Value::String(version_id.to_string()));
@@ -432,11 +435,13 @@ impl NeoForgeInstaller {
         let profile_value: Value =
             serde_json::from_str(&install_profile_data).map_err(|e| Error::Http {
                 message: format!("install_profile.json 解析失败: {e}"),
+                status: None,
                 source: Some(Box::new(e)),
             })?;
         // 源 `AsObject()`（顶层非对象 → InvalidOperationException）；P38 关联函数接收 &Map
         let profile_obj = profile_value.as_object().ok_or_else(|| Error::Http {
             message: "install_profile.json 顶层非 JSON 对象（源 InvalidOperationException）".to_string(),
+            status: None,
             source: None,
         })?;
         for coordinate in ForgeInstallerBase::extract_maven_coordinates_from_processors(profile_obj) {
@@ -659,6 +664,7 @@ pub(crate) fn check_libs_ver_static(libs: Vec<LibInfo>) -> Vec<LibInfo> {
 pub(crate) fn get_libraries_from_json(json_data: &str) -> Result<Vec<LibInfo>, Error> {
     let data: Value = serde_json::from_str(json_data).map_err(|e| Error::Http {
         message: format!("JSON 解析失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     let Some(libraries) = data.get("libraries").and_then(|l| l.as_array()) else {
@@ -717,6 +723,10 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
     }
 }
+
+
+
+
 
 
 

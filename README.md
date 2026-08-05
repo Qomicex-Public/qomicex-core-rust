@@ -63,9 +63,15 @@ cargo build   # 构建 rlib
 
 ## 移植进度
 
-见 [docs/architecture.md](docs/architecture.md) 第 6 节（依赖 DAG 分 14 批），当前进度记录在 `.memory/`。
+✅ **移植完成**（2026-08）：13 批次 / 47 原子包，源 15,890 行 C# → Rust。
+35 个单元测试 + QA 快照比对（7 项关键行为 PASS）。决策记录见 [ADR-002](docs/junsi-dev-docs/1-决策记录/ADR-002-移植完成总结.md)。
+
+### Android（移动平台）说明
+
+- 依赖链纯 Rust（reqwest rustls-tls、zip deflate-miniz），无 C 编译依赖
+- 系统 DNS 读取：Android 走 `/etc/resolv.conf`；Windows 走注册表（winreg）
+- **宿主约定**：Android 下需设置 `QOMICEX_HOME` 环境变量指定数据目录（沙盒内默认无 HOME/XDG 变量）；Java 启动需传绝对路径（`JavaOptions.java_path`）
 
 ## 许可证
 
 [GPL-3.0](LICENSE)。本仓库为 Qomicex.Core.AOT（GPL-3.0）的移植衍生作品。
->>>>>>> 51bfbe0 (chore: rlib 架构目录骨架 + README + GPL-3.0 许可证修正)

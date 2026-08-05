@@ -46,23 +46,24 @@ use crate::util::json_helper::{
 struct VersionManifestCache {
     /// 缓存文件路径（源：`_cacheFilePath`）
     cache_file_path: String,
+    /// 缓存有效期（TD-8：构造参数传入，源默认 TimeSpan.FromMinutes(5)）
+    cache_duration: Duration,
 }
 
 impl VersionManifestCache {
-    /// 缓存有效期（源：`TimeSpan.FromMinutes(5)`）
-    const CACHE_DURATION: Duration = Duration::from_secs(300);
+    /// 缓存有效期由构造参数传入（TD-8：源 TimeSpan.FromMinutes(5) 默认）
 
     /// 构造缓存（源：构造函数）。
     /// ⚠️ UNMAPPED：源同步 `Directory.CreateDirectory` 失败抛 IOException；
     /// Rust 侧 new() 返回 Self（无错误通道），创建失败静默忽略，
     /// 错误推迟到 save_to_cache 上报（见翻译日志 p29）。
-    fn new(cache_file_path: String) -> Self {
+    fn new(cache_file_path: String, cache_duration: Duration) -> Self {
         if let Some(directory) = Path::new(&cache_file_path).parent() {
             if !directory.as_os_str().is_empty() {
                 let _ = std::fs::create_dir_all(directory);
             }
         }
-        Self { cache_file_path }
+        Self { cache_file_path, cache_duration }
     }
 
     /// 缓存是否有效（源：HasValidCache）。
@@ -77,7 +78,7 @@ impl VersionManifestCache {
             return false;
         };
         match SystemTime::now().duration_since(last_write_time) {
-            Ok(age) => age < Self::CACHE_DURATION,
+            Ok(age) => age < self.cache_duration,
             Err(_) => true,
         }
     }
@@ -98,6 +99,7 @@ impl VersionManifestCache {
     async fn save_to_cache(&self, manifest: &VersionManifestRoot) -> Result<(), Error> {
         let json = serialize_version_manifest(manifest).map_err(|e| Error::Http {
             message: "序列化版本清单失败".to_string(),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         tokio::fs::write(&self.cache_file_path, json)
@@ -144,6 +146,8 @@ impl VersionManagementService {
         game_root_path: String,
         http_client: Option<reqwest::Client>,
         download_source_manager: Option<Arc<dyn DownloadSourceManager + Send + Sync>>,
+        cache_expiry: Duration,
+        max_concurrent_downloads: usize,
     ) -> Self {
         // 源：httpClient ?? new HttpClient()
         let http = http_client.unwrap_or_else(reqwest::Client::new);
@@ -166,7 +170,7 @@ impl VersionManagementService {
             Box::new(DefaultResourceCompleter::new(
                 game_root_path.clone(),
                 download_source_manager.clone(),
-                8,
+                max_concurrent_downloads,
             ));
 
         // 源：new VersionManifestCache(Path.Combine(gameRootPath, "cache", "version_manifest.json"))
@@ -175,7 +179,7 @@ impl VersionManagementService {
             .join("version_manifest.json")
             .to_string_lossy()
             .into_owned();
-        let cache = VersionManifestCache::new(cache_path);
+        let cache = VersionManifestCache::new(cache_path, cache_expiry);
 
         Self {
             game_root_path,
@@ -207,6 +211,7 @@ impl VersionManagementService {
         let json_path = version_path.join(format!("{version_id}.json"));
         let json_content = serialize_version_metadata(metadata).map_err(|e| Error::Http {
             message: format!("序列化版本元数据失败: {version_id}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         tokio::fs::write(&json_path, json_content)
@@ -348,3 +353,9 @@ impl VersionManagement for VersionManagementService {
         self.version_locator.get_all_versions()
     }
 }
+
+
+
+
+
+

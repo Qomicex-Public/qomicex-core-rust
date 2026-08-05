@@ -521,25 +521,30 @@ async fn cleanroom_releases_inner(http: &reqwest::Client) -> Result<Vec<ModLoade
         .await
         .map_err(|e| Error::Http {
             message: format!("Cleanroom GitHub API 请求失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
     // 源 `EnsureSuccessStatusCode()`
     let response = response.error_for_status()
         .map_err(|e| Error::Http {
             message: format!("Cleanroom GitHub API 请求失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
     let json = response.text().await.map_err(|e| Error::Http {
         message: format!("Cleanroom GitHub API 响应读取失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     let value: Value = serde_json::from_str(&json).map_err(|e| Error::Http {
         message: format!("Cleanroom 版本列表 JSON 解析失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     // 源 `JsonNode.Parse(json)!.AsArray()`：非数组 → InvalidOperationException
     let releases = value.as_array().ok_or_else(|| Error::Http {
         message: "Cleanroom 版本列表非数组".to_string(),
+        status: None,
         source: None,
     })?;
 
@@ -591,46 +596,56 @@ async fn neoforge_official_api_inner(
     let (old_task, meta_task) = tokio::join!(http.get(OLD_URL).send(), http.get(META_URL).send());
     let old_response = old_task.map_err(|e| Error::Http {
         message: format!("NeoForge 官方 API 请求失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     let meta_response = meta_task.map_err(|e| Error::Http {
         message: format!("NeoForge 官方 API 请求失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     // 源两处 `EnsureSuccessStatusCode()`
     let old_response = old_response.error_for_status()
         .map_err(|e| Error::Http {
             message: format!("NeoForge 官方 API 请求失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
     let meta_response = meta_response.error_for_status()
         .map_err(|e| Error::Http {
             message: format!("NeoForge 官方 API 请求失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
     let old_json = old_response.text().await.map_err(|e| Error::Http {
         message: format!("NeoForge 官方 API 响应读取失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     let meta_json = meta_response.text().await.map_err(|e| Error::Http {
         message: format!("NeoForge 官方 API 响应读取失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     let old_obj: Value = serde_json::from_str(&old_json).map_err(|e| Error::Http {
         message: format!("NeoForge 官方 API JSON 解析失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     let meta_obj: Value = serde_json::from_str(&meta_json).map_err(|e| Error::Http {
         message: format!("NeoForge 官方 API JSON 解析失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     // 源 `JsonNode.Parse(json)!.AsObject()`：非对象 → InvalidOperationException
     let old_obj = old_obj.as_object().ok_or_else(|| Error::Http {
         message: "NeoForge 官方 API 响应非对象".to_string(),
+        status: None,
         source: None,
     })?;
     let meta_obj = meta_obj.as_object().ok_or_else(|| Error::Http {
         message: "NeoForge 官方 API 响应非对象".to_string(),
+        status: None,
         source: None,
     })?;
 
@@ -642,6 +657,7 @@ async fn neoforge_official_api_inner(
             // 源 `oldObj["versions"]?.AsArray()`：存在但非数组 → AsArray 抛异常 → catch
             let old_versions = versions_node.as_array().ok_or_else(|| Error::Http {
                 message: "NeoForge 官方 API versions 非数组".to_string(),
+                status: None,
                 source: None,
             })?;
             for v in old_versions {
@@ -668,6 +684,7 @@ async fn neoforge_official_api_inner(
     if let Some(versions_node) = meta_obj.get("versions") {
         let meta_versions = versions_node.as_array().ok_or_else(|| Error::Http {
             message: "NeoForge 官方 API versions 非数组".to_string(),
+            status: None,
             source: None,
         })?;
         for v in meta_versions {
@@ -716,25 +733,30 @@ async fn neoforge_bmcl_api_inner(
     );
     let response = http.get(&url).send().await.map_err(|e| Error::Http {
         message: format!("NeoForge BMCLAPI 请求失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     // 源 `EnsureSuccessStatusCode()`
     let response = response.error_for_status()
         .map_err(|e| Error::Http {
             message: format!("NeoForge BMCLAPI 请求失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
     let json = response.text().await.map_err(|e| Error::Http {
         message: format!("NeoForge BMCLAPI 响应读取失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     let value: Value = serde_json::from_str(&json).map_err(|e| Error::Http {
         message: format!("NeoForge BMCLAPI 版本列表 JSON 解析失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     // 源 `JsonNode.Parse(json)!.AsArray()`
     let array = value.as_array().ok_or_else(|| Error::Http {
         message: "NeoForge BMCLAPI 版本列表非数组".to_string(),
+        status: None,
         source: None,
     })?;
 
@@ -777,21 +799,25 @@ async fn forge_versions_from_bmcl_api_inner(
     let mut forge_loaders: Vec<ModLoaderResult> = Vec::new();
     let response = http.get(&url).send().await.map_err(|e| Error::Http {
         message: format!("BMCLAPI Forge 请求失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     })?;
     // 源：`if (response.IsSuccessStatusCode)`（非 2xx 静默跳过，不记日志）
     if response.status().is_success() {
         let json = response.text().await.map_err(|e| Error::Http {
             message: format!("BMCLAPI Forge 响应读取失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         let value: Value = serde_json::from_str(&json).map_err(|e| Error::Http {
             message: format!("BMCLAPI Forge 版本列表 JSON 解析失败: {e}"),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         // 源 `JsonNode.Parse(json)!.AsArray()`
         let versions_array = value.as_array().ok_or_else(|| Error::Http {
             message: "BMCLAPI Forge 版本列表非数组".to_string(),
+            status: None,
             source: None,
         })?;
 
@@ -1165,6 +1191,10 @@ fn maven_jar_regex() -> &'static Regex {
         Regex::new(r"https://maven\.minecraftforge\.net/.*?\.jar").expect("静态正则编译失败")
     })
 }
+
+
+
+
 
 
 

@@ -91,6 +91,7 @@ impl CurseForgeBase {
         if !status.is_success() {
             return Err(Error::Http {
                 message: ensure_success_message(status),
+                status: Some(status.as_u16()),
                 source: None,
             });
         }
@@ -130,6 +131,7 @@ impl CurseForgeBase {
                 );
                 return Err(Error::Http {
                     message: format!("[CurseForge] POST {full_url} 请求超时（30s）"),
+                    status: None,
                     source: None,
                 });
             }
@@ -150,6 +152,7 @@ impl CurseForgeBase {
             );
             return Err(Error::Http {
                 message,
+                status: Some(status.as_u16()),
                 source: None,
             });
         }
@@ -281,6 +284,7 @@ impl CurseForgeBase {
         })
         .map_err(|e| Error::Http {
             message: "序列化 FingerprintsRequest 失败（源 JsonException）".to_string(),
+            status: None,
             source: Some(Box::new(e)),
         })?;
         let data = self.post_data("/v1/fingerprints", &json_data).await?;
@@ -306,6 +310,7 @@ impl CurseForgeBase {
             let meta: FingerprintsFilesMeta =
                 serde_json::from_value(file_data.clone()).map_err(|e| Error::Http {
                     message: "解析 FingerprintsFilesMeta 失败（源 ToObject → JsonException）".to_string(),
+                    status: None,
                     source: Some(Box::new(e)),
                 })?;
             // 源：fileData["fileFingerprint"]?.GetValue<long>() ?? fileData["id"]?.GetValue<long>() ?? 0
@@ -412,6 +417,7 @@ impl CurseForgeSource for CurseForgeBase {
             let Some(mod_obj) = mod_data.as_object() else {
                 return Err(Error::Http {
                     message: "搜索结果为非对象（源 AsObject() → InvalidOperationException）".to_string(),
+                    status: None,
                     source: None,
                 });
             };
@@ -519,11 +525,13 @@ impl CurseForgeSource for CurseForgeBase {
         let Some(result) = root.get("data").filter(|v| !v.is_null()) else {
             return Err(Error::Http {
                 message: "CurseForge 响应为空（源 InvalidOperationException）".to_string(),
+                status: None,
                 source: None,
             });
         };
         serde_json::from_value(result.clone()).map_err(|e| Error::Http {
             message: "解析 CurseForgeInfo 失败（源 ToObject → JsonException）".to_string(),
+            status: None,
             source: Some(Box::new(e)),
         })
     }
@@ -552,11 +560,13 @@ impl CurseForgeSource for CurseForgeBase {
         let Some(result) = root.get("data").filter(|v| !v.is_null()) else {
             return Err(Error::Http {
                 message: "CurseForge 文件信息响应为空（源 InvalidOperationException）".to_string(),
+                status: None,
                 source: None,
             });
         };
         serde_json::from_value(result.clone()).map_err(|e| Error::Http {
             message: "解析 CurseForgeFileInfo 失败（源 ToObject → JsonException）".to_string(),
+            status: None,
             source: Some(Box::new(e)),
         })
     }
@@ -591,6 +601,7 @@ impl CurseForgeSource for CurseForgeBase {
             .map(node_to_string)
             .ok_or_else(|| Error::Http {
                 message: "提取下载链接失败（源 InvalidOperationException）".to_string(),
+                status: None,
                 source: None,
             })
     }
@@ -635,6 +646,7 @@ fn full_url(base: &str, url: &str) -> String {
 fn http_err(e: reqwest::Error) -> Error {
     Error::Http {
         message: format!("HTTP 请求失败: {e}"),
+        status: None,
         source: Some(Box::new(e)),
     }
 }
@@ -654,16 +666,15 @@ fn ensure_success_message(status: reqwest::StatusCode) -> String {
 /// ⚠️ 源依赖异常上的 StatusCode；Rust 侧 Error::Http（B6 增补）无状态码字段，
 /// 通过本模块 ensure_success_message 生成的固定消息文本匹配（见 p56 翻译日志）。
 fn is_bad_request(e: &Error) -> bool {
-    match e {
-        Error::Http { message, .. } => message.contains("400 (Bad Request)"),
-        _ => false,
-    }
+    // TD-1：Error::Http 已结构化承载状态码（源 HttpRequestException.StatusCode 语义）
+    matches!(e, Error::Http { status: Some(400), .. })
 }
 
 /// 解析 JSON 文本（源：`JsonNode.Parse` —— 非法 JSON → JsonException → Error::Http，B6 语义）
 fn parse_json(data: &str, what: &str) -> Result<Value, Error> {
     serde_json::from_str(data).map_err(|e| Error::Http {
         message: format!("解析 {what} 失败（源 JsonException）"),
+        status: None,
         source: Some(Box::new(e)),
     })
 }
@@ -713,3 +724,9 @@ fn find_sha1_from_hashes(hashes: Option<&Vec<Value>>) -> Option<String> {
     }
     None
 }
+
+
+
+
+
+
