@@ -14,6 +14,7 @@ pub mod builder;
 pub mod core;
 pub mod error;
 pub mod event;
+pub mod jni;
 pub mod models;
 pub mod services;
 pub mod util;

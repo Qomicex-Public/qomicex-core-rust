@@ -163,7 +163,8 @@ impl MicrosoftAuthProvider {
 
     /// 获取 Minecraft 角色档案（源：GetMinecraftProfileAsync）。
     /// 非 2xx / 解析失败 / id 或 name 为空 → 返回 None；网络异常按源语义向上传播。
-    async fn get_minecraft_profile(
+    /// `pub(crate)`：供 JNI 桥暴露给移动端 /auth/microsoft/info 端点使用。
+    pub(crate) async fn get_minecraft_profile(
         &self,
         mc_token: &str,
     ) -> Result<Option<(String, String)>, String> {

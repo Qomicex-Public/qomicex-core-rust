@@ -11,9 +11,9 @@
 //!   util/murmurhash2.rs，见 P44）；
 //! - 进度：onProgress(0, total) → 每文件递增（源 Parallel.ForEach → 顺序循环，
 //!   ConcurrentBag 结果集本就无序，语义等价）；
-//! - 启禁：DisableMod 追加 `.disabled`；EnableMod 去掉 `.disabled` 后缀（大小写不敏感）。
-//!
-//! ⚠️ UNMAPPED：CF/MR 哈希反查与图标下载（网络层，待 B13 services/expansion/query.rs 接线）。
+//! - 启禁：DisableMod 追加 `.disabled`；EnableMod 去掉 `.disabled` 后缀（大小写不敏感）；
+//! - 反查：B13 接线完成——Modrinth SHA1 反查（`v2/version_files`）+ CurseForge 指纹反查
+//!   （`v2/fingerprints`），回填 `modrinth_id` / `curse_forge_id`（网络失败静默，同源 catch）。
 
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
@@ -22,17 +22,19 @@ use async_trait::async_trait;
 use serde_json::Value;
 use zip::ZipArchive;
 
+use crate::api::expansion::{CurseForgeSource, ModrinthSource};
 use crate::api::local::ModsManager;
 use crate::error::Error;
 use crate::models::expansion::local::ModInfo;
 use crate::services::download::checksum::sha1_hex;
+use crate::services::expansion::curseforge::query::CurseForgeBase;
+use crate::services::expansion::modrinth::query::ModrinthBase;
 
 use super::factory::LocalResourceBase;
 
 /// Mod 管理器（源：concrete class `Mods`，Services/Expansion/Local/Mods.cs）
 pub(crate) struct Mods {
-    /// HTTP 客户端（源字段 `_http`；B13 CF/MR 反查与图标下载接线后使用）
-    #[allow(dead_code)] // 待 B13 网络接线
+    /// HTTP 客户端（源字段 `_http`；B13 CF/MR 反查接线已完成）
     http: reqwest::Client,
     /// 游戏根目录（源字段 `_gameDirectory`）
     game_directory: String,
@@ -40,8 +42,7 @@ pub(crate) struct Mods {
     version: String,
     /// 是否使用版本分段目录（源字段 `_versionSegmented`）
     version_segmented: bool,
-    /// API Key（源字段 `_apiKey`：用于 CurseForge 反查；反查接线见 B13 ⚠️ UNMAPPED，字段先保留）
-    #[allow(dead_code)] // 待 B13 网络接线
+    /// API Key（源字段 `_apiKey`：用于 CurseForge 反查）
     api_key: String,
 }
 
@@ -124,7 +125,72 @@ impl Mods {
     /// 4. 网络失败均静默（源 Trace.WriteLine 日志，不抛错）。
     /// 接线目标：api/expansion.rs 的 CurseForgeSource / ModrinthSource traits，
     /// 实现位于 services/expansion/{curseforge,modrinth}/query.rs（B13）。
-    fn enrich_from_remote(&self, _mod_infos: &mut [ModInfo]) {}
+    /// 反查补全（源：GetModList 尾部，B13 接线）。
+    /// Modrinth：`v2/version_files` 按 SHA1 批量反查 → 回填 modrinth_id；
+    /// CurseForge：`v2/fingerprints` 按 CF 指纹批量反查 → 回填 curse_forge_id（无 apiKey 跳过）。
+    /// 网络/解析失败静默（源 try/catch 吞错），不影响扫描结果。
+    fn enrich_from_remote(&self, mod_infos: &mut [ModInfo]) {
+        if mod_infos.is_empty() {
+            return;
+        }
+
+        let modrinth = ModrinthBase::new(self.http.clone(), None);
+        let sha1s: Vec<String> = mod_infos
+            .iter()
+            .filter(|m| m.modrinth_id.is_empty() && !m.sha1_hash.is_empty())
+            .map(|m| m.sha1_hash.clone())
+            .collect();
+        if !sha1s.is_empty() {
+            match block_on(modrinth.get_project_versions_from_hashes_dict(&sha1s)) {
+                Ok(map) => {
+                    for info in mod_infos.iter_mut() {
+                        if info.modrinth_id.is_empty() {
+                            if let Some(pv) = map.get(&info.sha1_hash) {
+                                info.modrinth_id = pv.project_id.clone();
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Modrinth hash lookup failed: {e}");
+                }
+            }
+        }
+
+        if !self.api_key.is_empty() {
+            let cf = CurseForgeBase::new(self.http.clone(), self.api_key.clone(), None);
+            let hashes: Vec<i64> = mod_infos
+                .iter()
+                .filter(|m| m.curse_forge_id == 0 && m.cf_hash != 0)
+                .map(|m| m.cf_hash)
+                .collect();
+            if !hashes.is_empty() {
+                match block_on(cf.get_info_from_hashes_dict(&hashes)) {
+                    Ok(map) => {
+                        for info in mod_infos.iter_mut() {
+                            if info.curse_forge_id == 0 {
+                                if let Some(meta) = map.get(&info.cf_hash) {
+                                    info.curse_forge_id = meta.mod_id;
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("CurseForge fingerprint lookup failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 阻塞执行 async 逻辑（每个 JNI/反查调用创建独立 current-thread runtime）。
+fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime build")
+        .block_on(future)
 }
 
 /// 进度回调调用（对应源 `onProgress?.Invoke(cur, total)`）。

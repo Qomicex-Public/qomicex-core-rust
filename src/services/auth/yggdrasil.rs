@@ -31,6 +31,17 @@ pub(crate) struct YggdrasilAuthProvider {
     server_url: String,
 }
 
+/// 认证并返回全部可用角色（源 Yggdrasil 端点 profiles 列表语义；移动端选档流程需要）。
+/// 非移动端移植部分（B5）未覆盖此结构，作为扩展输出。
+pub(crate) struct YggdrasilProfilesOutcome {
+    pub success: bool,
+    pub access_token: Option<String>,
+    pub client_token: Option<String>,
+    /// (id, name) 列表，仅来自 availableProfiles
+    pub profiles: Vec<(String, String)>,
+    pub error_message: Option<String>,
+}
+
 impl YggdrasilAuthProvider {
     /// 创建 Yggdrasil 提供方（源：构造函数）。
     /// `server_url` 尾部的 `/` 会被剥除后统一补一个 `/` 作为请求基址。
@@ -40,12 +51,15 @@ impl YggdrasilAuthProvider {
             server_url: server_url.trim_end_matches('/').to_string() + "/",
         }
     }
-}
 
-#[async_trait]
-impl AuthProvider for YggdrasilAuthProvider {
-    /// 使用用户名密码认证（源：AuthenticateAsync）。
-    async fn authenticate(&self, request: AuthRequest) -> Result<AuthResult, Error> {
+    /// 发送 authenticate 请求并解析完整响应（authenticate / authenticate_with_profiles 共用）。
+    /// - `Ok(Ok(resp))`：认证成功且含 accessToken。
+    /// - `Ok(Err(msg))`：认证失败（HTTP 非 2xx，或成功响应缺少 accessToken），msg 为错误消息。
+    /// - `Err`：传输/解析错误（对应源 HttpRequestException / JsonException 向上传播）。
+    async fn authenticate_raw(
+        &self,
+        request: &AuthRequest,
+    ) -> Result<Result<YggdrasilAuthenticateResponse, String>, Error> {
         // C#: new YggdrasilAuthenticateRequest(
         //      Agent: new("Minecraft", 1), Username: request.Username ?? "",
         //      Password: request.Password ?? "",
@@ -56,8 +70,8 @@ impl AuthProvider for YggdrasilAuthProvider {
                 name: "Minecraft".to_string(),
                 version: 1,
             },
-            username: request.username.unwrap_or_default(),
-            password: request.password.unwrap_or_default(),
+            username: request.username.clone().unwrap_or_default(),
+            password: request.password.clone().unwrap_or_default(),
             client_token: Uuid::new_v4().simple().to_string(),
             request_user: true,
         };
@@ -75,20 +89,10 @@ impl AuthProvider for YggdrasilAuthProvider {
             let status = response.status().as_u16();
             let body = response.text().await.map_err(transport_error)?;
             let err: Option<YggdrasilError> = serde_json::from_str(&body).ok();
-            return Ok(AuthResult {
-                success: false,
-                username: None,
-                access_token: None,
-                client_token: None,
-                refresh_token: None,
-                uuid: None,
-                user_type: None,
-                expires_at: None,
-                error_message: Some(
-                    err.and_then(|e| e.error_message)
-                        .unwrap_or_else(|| format!("认证失败: {status}")),
-                ),
-            });
+            return Ok(Err(
+                err.and_then(|e| e.error_message)
+                    .unwrap_or_else(|| format!("认证失败: {status}")),
+            ));
         }
 
         let body = response.text().await.map_err(transport_error)?;
@@ -97,44 +101,21 @@ impl AuthProvider for YggdrasilAuthProvider {
 
         // C#: authResp?.AccessToken == null
         if auth_resp.access_token.is_none() {
-            return Ok(AuthResult {
-                success: false,
-                username: None,
-                access_token: None,
-                client_token: None,
-                refresh_token: None,
-                uuid: None,
-                user_type: None,
-                expires_at: None,
-                error_message: Some("无法解析认证响应".to_string()),
-            });
+            return Ok(Err("无法解析认证响应".to_string()));
         }
 
-        // C#: authResp.SelectedProfile ?? authResp.AvailableProfiles?.FirstOrDefault()
-        let profile = auth_resp
-            .selected_profile
-            .clone()
-            .or_else(|| auth_resp.available_profiles.as_ref()?.first().cloned());
-        // C#: authResp.User?.Properties?.FirstOrDefault(p => p.Name == "userType")?.Value
-        let user_type = auth_resp
-            .user
-            .as_ref()
-            .and_then(|u| u.properties.as_ref())
-            .and_then(|props| props.iter().find(|p| p.name.as_deref() == Some("userType")))
-            .and_then(|p| p.value.clone());
+        Ok(Ok(auth_resp))
+    }
+}
 
-        Ok(AuthResult {
-            success: true,
-            username: profile.as_ref().and_then(|p| p.name.clone()),
-            access_token: auth_resp.access_token,
-            client_token: auth_resp.client_token,
-            refresh_token: None,
-            uuid: profile.as_ref().and_then(|p| p.id.clone()),
-            user_type,
-            // C#: ExpiresAt = DateTimeOffset.UtcNow.AddHours(6)
-            expires_at: Some(utc_now_plus_hours(6)),
-            error_message: None,
-        })
+#[async_trait]
+impl AuthProvider for YggdrasilAuthProvider {
+    /// 使用用户名密码认证（源：AuthenticateAsync）。
+    async fn authenticate(&self, request: AuthRequest) -> Result<AuthResult, Error> {
+        match self.authenticate_raw(&request).await? {
+            Ok(auth_resp) => Ok(self.compose_result(auth_resp)),
+            Err(message) => Ok(failed_auth_result(&message)),
+        }
     }
 
     /// 校验访问令牌是否有效（源：ValidateAsync）：仅 204 NoContent 视为有效。
@@ -170,6 +151,88 @@ impl AuthProvider for YggdrasilAuthProvider {
             .map_err(transport_error)?;
 
         Ok(())
+    }
+}
+
+impl YggdrasilAuthProvider {
+    /// 组装成功 AuthResult（authenticate 用）。
+    /// C#: authResp.SelectedProfile ?? authResp.AvailableProfiles?.FirstOrDefault()
+    fn compose_result(&self, auth_resp: YggdrasilAuthenticateResponse) -> AuthResult {
+        let profile = auth_resp
+            .selected_profile
+            .clone()
+            .or_else(|| auth_resp.available_profiles.as_ref()?.first().cloned());
+        // C#: authResp.User?.Properties?.FirstOrDefault(p => p.Name == "userType")?.Value
+        let user_type = auth_resp
+            .user
+            .as_ref()
+            .and_then(|u| u.properties.as_ref())
+            .and_then(|props| props.iter().find(|p| p.name.as_deref() == Some("userType")))
+            .and_then(|p| p.value.clone());
+
+        AuthResult {
+            success: true,
+            username: profile.as_ref().and_then(|p| p.name.clone()),
+            access_token: auth_resp.access_token,
+            client_token: auth_resp.client_token,
+            refresh_token: None,
+            uuid: profile.as_ref().and_then(|p| p.id.clone()),
+            user_type,
+            // C#: ExpiresAt = DateTimeOffset.UtcNow.AddHours(6)
+            expires_at: Some(utc_now_plus_hours(6)),
+            error_message: None,
+        }
+    }
+
+    /// 认证并返回全部可用角色（移动端选档流程，非 B5 移植部分）。
+    /// 失败语义与 [authenticate] 一致：认证失败返回 `success=false` + error_message，
+    /// 传输/解析错误向上传播为 `Err`。
+    pub(crate) async fn authenticate_with_profiles(
+        &self,
+        request: AuthRequest,
+    ) -> Result<YggdrasilProfilesOutcome, Error> {
+        match self.authenticate_raw(&request).await? {
+            Ok(auth_resp) => {
+                let profiles = auth_resp
+                    .available_profiles
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|p| match (p.id, p.name) {
+                        (Some(id), Some(name)) => Some((id, name)),
+                        _ => None,
+                    })
+                    .collect();
+                Ok(YggdrasilProfilesOutcome {
+                    success: true,
+                    access_token: auth_resp.access_token,
+                    client_token: auth_resp.client_token,
+                    profiles,
+                    error_message: None,
+                })
+            }
+            Err(message) => Ok(YggdrasilProfilesOutcome {
+                success: false,
+                access_token: None,
+                client_token: None,
+                profiles: Vec::new(),
+                error_message: Some(message),
+            }),
+        }
+    }
+}
+
+/// 失败认证结果（源：`new AuthResult { Success = false, ErrorMessage = ... }`，其余字段 null）
+fn failed_auth_result(error_message: &str) -> AuthResult {
+    AuthResult {
+        success: false,
+        username: None,
+        access_token: None,
+        client_token: None,
+        refresh_token: None,
+        uuid: None,
+        user_type: None,
+        expires_at: None,
+        error_message: Some(error_message.to_string()),
     }
 }
 

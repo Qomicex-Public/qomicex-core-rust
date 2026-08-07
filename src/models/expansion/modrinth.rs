@@ -411,8 +411,8 @@ pub struct VersionInfo {
     /// 所属项目 ID
     #[serde(rename = "project_id")]
     pub project_id: String,
-    /// 版本标题
-    #[serde(rename = "title")]
+    /// 版本标题（API 实际字段为 name → 反序列化 alias 兼容）
+    #[serde(rename = "title", alias = "name")]
     pub name: String,
     /// 版本号
     #[serde(rename = "version_number")]
@@ -429,11 +429,12 @@ pub struct VersionInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub changelog: Option<String>,
     /// 发布时间（源为 DateTime，暂用原始字符串保真 ⚠️ UNMAPPED）
-    #[serde(rename = "published")]
+    #[serde(rename = "date_published")]
     pub published_at: String,
-    /// 更新时间（源为 DateTime，暂用原始字符串保真 ⚠️ UNMAPPED）
-    #[serde(rename = "updated")]
-    pub updated_at: String,
+    /// 更新时间（v2/version 响应无 date_modified/updated 字段 → 可空）
+    #[serde(rename = "date_modified")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
     /// 审核时间（源为 DateTime?，暂用原始字符串保真 ⚠️ UNMAPPED）
     #[serde(rename = "approved")]
     #[serde(skip_serializing_if = "Option::is_none")]
