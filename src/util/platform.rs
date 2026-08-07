@@ -9,8 +9,12 @@ use crate::models::version_metadata::OsRequirement;
 
 /// 判断当前系统是否满足指定的操作系统要求（对应 SystemHelper.IsOsMatch）
 pub fn is_os_match(os: &OsRequirement) -> bool {
-    if os.name != get_current_os_name() {
-        return false;
+    // `name` may be absent (e.g. an arch-only rule `{"arch":"x86"}`) in newer
+    // versions; when missing, the OS name requirement is treated as satisfied.
+    if let Some(name) = &os.name {
+        if name != get_current_os_name() {
+            return false;
+        }
     }
 
     // C#: !string.IsNullOrEmpty(os.Version) && !Environment.OSVersion.VersionString.Contains(os.Version)

@@ -120,14 +120,30 @@ impl ResourceCompleter for DefaultResourceCompleter {
             let mut handles: Vec<futures::future::BoxFuture<'_, Result<(), Error>>> = Vec::new();
 
             // 客户端 jar（源：if (metadata.Downloads?.Client is { } client)）
+            // Client 下载目标固定为 versions/{id}/{id}.jar（DownloadFile 无 path）；
+            // 不经过 download_artifact（它写入 libraries/{artifact.path}）。
             if let Some(downloads) = &metadata.downloads {
+                let client_sha1 = downloads.client.sha1.clone();
+                let client_url = downloads.client.url.clone();
+                let client_dest = Path::new(&self.game_root_path)
+                    .join("versions")
+                    .join(&metadata.id)
+                    .join(format!("{}.jar", metadata.id))
+                    .to_string_lossy()
+                    .into_owned();
+                let dest_dir = Path::new(&client_dest).parent().unwrap_or(Path::new("")).to_path_buf();
                 let permit = semaphore.clone();
                 handles.push(Box::pin(async move {
                     let _permit = permit.acquire_owned().await.map_err(|_| Error::DownloadFailed {
                         message: "并发信号量不可用".to_string(),
                         source: None,
                     })?;
-                    self.download_artifact(&downloads.client, progress).await
+                    tokio::fs::create_dir_all(dest_dir).await.map_err(|e| Error::DownloadFailed {
+                        message: "创建客户端 jar 目录失败".to_string(),
+                        source: Some(Box::new(e)),
+                    })?;
+                    self.download_file_with_retry(&client_url, &client_dest, &client_sha1, progress)
+                        .await
                 }));
             }
 

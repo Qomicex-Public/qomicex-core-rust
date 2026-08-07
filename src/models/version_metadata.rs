@@ -256,7 +256,10 @@ pub struct Rule {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct OsRequirement {
-    pub name: String,
+    /// Newer versions allow an OS rule with only `arch` (e.g. `{"arch":"x86"}`)
+    /// with no `name`; keep it optional.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -305,11 +308,25 @@ pub struct LibraryExtract {
     pub exclude: Option<Vec<String>>,
 }
 
+/// A raw download descriptor. Mojang's `downloads.client` / `downloads.server`
+/// only carry `{sha1,size,url}` (no `path`); libraries embed `path`. So the
+/// game jar download target is derived by the launcher as
+/// `versions/{id}/{id}.jar`, never read from this struct (path stays optional).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadFile {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    pub url: String,
+    pub sha1: String,
+    pub size: i64,
+}
+
 /// 表示版本核心Jar文件的下载信息
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionDownloads {
-    pub client: Artifact,
+    pub client: DownloadFile,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub server: Option<Artifact>,
+    pub server: Option<DownloadFile>,
 }
