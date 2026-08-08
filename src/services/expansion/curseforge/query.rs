@@ -33,7 +33,8 @@ use async_trait::async_trait;
 use crate::api::expansion::CurseForgeSource;
 use crate::error::Error;
 use crate::models::expansion::curseforge::{
-    AuthorMeta, CategoryMeta, CurseForgeBatchFileInfo, CurseForgeFileInfo, CurseForgeInfo,
+    AuthorMeta, CategoryMeta, CurseForgeBatchFileInfo, CurseForgeFileInfo,
+    CurseForgeFilePageItem, CurseForgeFilePageResponse, CurseForgeInfo,
     CurseForgeSearchResponse, CurseForgeSearchResult, FingerprintsFilesMeta,
     FingerprintsRequest, ScreenshotsMeta,
 };
@@ -263,6 +264,41 @@ impl CurseForgeBase {
             batch_num += 1;
         }
         Ok(result)
+    }
+
+    /// 分页获取模组文件列表（对齐桌面 `ResourceCenterEndpoints.cs` 的
+    /// `GET /v1/mods/{id}/files?pageSize=&index=[&gameVersion=]`）。
+    ///
+    /// `index` 为偏移（源 FetchPage 按 pageSize 递进）；`game_version` 非空时附加
+    /// `&gameVersion=` 查询参数（源 `Uri.EscapeDataString` 编码，此处版本号无特殊字符，直拼）。
+    /// 返回 `CurseForgeFilePageResponse`（files + totalCount）。
+    pub(crate) async fn get_file_page(
+        &self,
+        mod_id: &str,
+        index: i32,
+        page_size: i32,
+        game_version: Option<&str>,
+    ) -> Result<CurseForgeFilePageResponse, Error> {
+        let mut url = format!(
+            "{}/v1/mods/{}/files?pageSize={}&index={}",
+            self.base_url, mod_id, page_size, index
+        );
+        if let Some(gv) = game_version.filter(|g| !g.is_empty()) {
+            url.push_str(&format!("&gameVersion={gv}"));
+        }
+        let data = self.get_data(&url).await?;
+        let root = parse_json(&data, "CurseForge 文件列表响应")?;
+        let total_count = to_i64(root.get("pagination").and_then(|p| p.get("totalCount"))) as i32;
+        let files = root
+            .get("data")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|n| serde_json::from_value(n.clone()).ok())
+                    .collect::<Vec<CurseForgeFilePageItem>>()
+            })
+            .unwrap_or_default();
+        Ok(CurseForgeFilePageResponse { files, total_count })
     }
 
     /// 指纹反查内部实现：返回 (指纹, 文件信息) 有序列表。
