@@ -129,7 +129,7 @@ impl Mods {
     /// Modrinth：`v2/version_files` 按 SHA1 批量反查 → 回填 modrinth_id；
     /// CurseForge：`v2/fingerprints` 按 CF 指纹批量反查 → 回填 curse_forge_id（无 apiKey 跳过）。
     /// 网络/解析失败静默（源 try/catch 吞错），不影响扫描结果。
-    fn enrich_from_remote(&self, mod_infos: &mut [ModInfo]) {
+    async fn enrich_from_remote(&self, mod_infos: &mut [ModInfo]) {
         if mod_infos.is_empty() {
             return;
         }
@@ -141,7 +141,7 @@ impl Mods {
             .map(|m| m.sha1_hash.clone())
             .collect();
         if !sha1s.is_empty() {
-            match block_on(modrinth.get_project_versions_from_hashes_dict(&sha1s)) {
+            match modrinth.get_project_versions_from_hashes_dict(&sha1s).await {
                 Ok(map) => {
                     for info in mod_infos.iter_mut() {
                         if info.modrinth_id.is_empty() {
@@ -165,7 +165,7 @@ impl Mods {
                 .map(|m| m.cf_hash)
                 .collect();
             if !hashes.is_empty() {
-                match block_on(cf.get_info_from_hashes_dict(&hashes)) {
+                match cf.get_info_from_hashes_dict(&hashes).await {
                     Ok(map) => {
                         for info in mod_infos.iter_mut() {
                             if info.curse_forge_id == 0 {
@@ -182,15 +182,6 @@ impl Mods {
             }
         }
     }
-}
-
-/// 阻塞执行 async 逻辑（每个 JNI/反查调用创建独立 current-thread runtime）。
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime build")
-        .block_on(future)
 }
 
 /// 进度回调调用（对应源 `onProgress?.Invoke(cur, total)`）。
@@ -540,7 +531,7 @@ impl ModsManager for Mods {
         }
 
         // 源 GetModList 尾部：CF/MR 哈希反查 + 图标兜底（B13 ⚠️ UNMAPPED，见方法文档）
-        self.enrich_from_remote(&mut mod_infos);
+        self.enrich_from_remote(&mut mod_infos).await;
 
         Ok(mod_infos)
     }

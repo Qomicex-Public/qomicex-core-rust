@@ -32,7 +32,7 @@ use crate::services::installers::quilt::install::QuiltInstaller;
 /// 默认安装器工厂（源：`internal sealed class DefaultInstallerFactory : IInstallerFactory`）。
 ///
 /// 无状态 → 空结构体；按类型创建具体安装器实例。
-pub(crate) struct DefaultInstallerFactory;
+pub struct DefaultInstallerFactory;
 
 impl InstallerFactory for DefaultInstallerFactory {
     /// 创建 Fabric 安装器（源：`CreateFabric(int downloadSource, string gameDir)`）

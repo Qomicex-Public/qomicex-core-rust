@@ -11,6 +11,29 @@
 
 use serde::{Deserialize, Serialize};
 
+/// 反序列化 CurseForge 的 id 类字段：接受 JSON 字符串或整数，统一产出 String。
+///
+/// 真实响应里 `id` / `modId` 是整数，而模型按源 C# record 声明为 String。用 untagged
+/// 枚举而非 `serde_json::Value` 以保持与具体数据格式无关。
+fn de_id_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrInt {
+        String(String),
+        I64(i64),
+        U64(u64),
+    }
+
+    Ok(match StringOrInt::deserialize(deserializer)? {
+        StringOrInt::String(s) => s,
+        StringOrInt::I64(n) => n.to_string(),
+        StringOrInt::U64(n) => n.to_string(),
+    })
+}
+
 /// 作者元信息（源：AuthorMeta.cs 记录）。
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -78,17 +101,24 @@ pub enum CurseForgeDependenciesType {
 }
 
 /// 文件信息（源：CurseForgeFileInfo.cs 记录；FileId/ModId 为字符串，JSON 键为 id / modId）。
+///
+/// 注意：CurseForge API v1 实际把 `id` / `modId` 返回为 JSON **整数**，而源 record 声明为
+/// string（System.Text.Json 同样不会做数字→字符串强转，即该缺陷源自 C# 侧）。这里保留
+/// String 形态以维持与源一致的对外类型，但用 [`de_id_as_string`] 同时接受整数与字符串，
+/// 否则整个 `get_file_info` 调用链对真实响应恒定失败。
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CurseForgeFileInfo {
-    #[serde(rename = "id")]
+    #[serde(rename = "id", deserialize_with = "de_id_as_string")]
     pub file_id: String,
-    #[serde(rename = "modId")]
+    #[serde(rename = "modId", deserialize_with = "de_id_as_string")]
     pub mod_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_name: Option<String>,
+    #[serde(rename = "fileLength", default)]
+    pub file_length: i64,
     pub release_type: i32,
     pub file_status: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -139,27 +169,36 @@ pub struct CurseForgeSortableGameVersion {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CurseForgeFilesMeta {
+    #[serde(rename = "fileId")]
     pub file_id: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "filename", skip_serializing_if = "Option::is_none")]
     pub file_name: Option<String>,
+    #[serde(rename = "releaseType")]
     pub release_type: i32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "gameVersion", skip_serializing_if = "Option::is_none")]
     pub game_version: Option<String>,
+    #[serde(rename = "modLoader", default)]
     pub mod_loader: i32,
+    #[serde(rename = "gameVersionTypeId", default)]
+    pub game_version_type_id: i32,
 }
 
 /// 模组详情（源：CurseForgeInfo.cs 记录；Files 字段 JSON 键为 latestFilesIndexes）。
+/// ⚠️ serde 配置：deny_unknown_fields 移除以容错 API 响应中的额外字段。
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CurseForgeInfo {
-    pub id: i32,
+    pub id: i64,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    #[serde(default)]
     pub status: i32,
-    pub download_count: i32,
+    #[serde(default)]
+    pub download_count: i64,
+    #[serde(default)]
     pub is_featured: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub categories: Option<Vec<CategoryMeta>>,
@@ -167,7 +206,7 @@ pub struct CurseForgeInfo {
     pub authors: Option<Vec<AuthorMeta>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub screenshots: Option<Vec<ScreenshotsMeta>>,
-    #[serde(rename = "latestFilesIndexes")]
+    #[serde(rename = "latestFilesIndexes", skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<CurseForgeFilesMeta>>,
 }
 

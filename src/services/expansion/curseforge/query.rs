@@ -84,6 +84,7 @@ impl CurseForgeBase {
             .get(&full_url)
             .header("x-api-key", self.api_key.as_str())
             .header("Accept", "application/json")
+            .header("User-Agent", "QomicexCore/1.0")
             .send()
             .await
             .map_err(http_err)?;
@@ -111,6 +112,7 @@ impl CurseForgeBase {
             .http
             .post(&full_url)
             .header("x-api-key", self.api_key.as_str())
+            .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .header("User-Agent", "QomicexCore/1.0")
             .body(json_data.to_string())

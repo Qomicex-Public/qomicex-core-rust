@@ -2,6 +2,7 @@
 //! 覆盖：VersionArguments 新旧格式兼容、字符串枚举（Modrinth）、数字枚举（serde_repr）、常规往返
 
 use qomicex_core_rust::models::download::{DownloadMirror, DownloadStatus, ResourceType};
+use qomicex_core_rust::models::expansion::curseforge::CurseForgeFileInfo;
 use qomicex_core_rust::models::expansion::modrinth::ModLoaderType;
 use qomicex_core_rust::models::version_manifest::{LatestVersionInfo, ManifestVersionInfo, VersionManifestRoot};
 use qomicex_core_rust::models::version_metadata::{ArgumentItem, VersionArguments};
@@ -137,4 +138,44 @@ fn manifest_creates_structs() {
         versions: vec![v],
     };
     assert_eq!(root.versions[0].id, "1.21");
+}
+
+// ── 特殊兼容：CurseForge id 字段的数字/字符串双形态 ──────────────
+
+#[test]
+fn cf_file_info_accepts_integer_ids_from_real_api() {
+    // CurseForge API v1 的 File schema 里 id / modId 是 integer，而模型按源 C#
+    // record 声明为 String。没有 de_id_as_string 时这里会失败并让 get_file_info
+    // 对真实响应恒定报错。
+    let json = r#"{
+        "id": 6238281,
+        "modId": 238222,
+        "displayName": "JEI 1.20.1-15.3.0.4.jar",
+        "fileName": "jei-1.20.1-forge-15.3.0.4.jar",
+        "fileLength": 1234567,
+        "releaseType": 1,
+        "fileStatus": 4,
+        "dependencies": []
+    }"#;
+    let parsed: CurseForgeFileInfo = serde_json::from_str(json).unwrap();
+    assert_eq!(parsed.file_id, "6238281");
+    assert_eq!(parsed.mod_id, "238222");
+    assert_eq!(parsed.file_name.as_deref(), Some("jei-1.20.1-forge-15.3.0.4.jar"));
+    assert_eq!(parsed.file_length, 1234567);
+}
+
+#[test]
+fn cf_file_info_still_accepts_string_ids() {
+    let json = r#"{
+        "id": "6238281",
+        "modId": "238222",
+        "fileName": "a.jar",
+        "releaseType": 1,
+        "fileStatus": 4
+    }"#;
+    let parsed: CurseForgeFileInfo = serde_json::from_str(json).unwrap();
+    assert_eq!(parsed.file_id, "6238281");
+    assert_eq!(parsed.mod_id, "238222");
+    // fileLength 缺失时走 default
+    assert_eq!(parsed.file_length, 0);
 }
