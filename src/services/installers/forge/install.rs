@@ -618,17 +618,38 @@ impl ForgeInstaller {
             }
             // 源：if (installProfileJson["install"] is not null)
             //      { if (install.path?.ToString() == libInfo.FullName) { 写出主jar; continue; } }
-            if let Some(install) = install_profile_json.get("install") {
-                if install.get("path").map(json_node_to_string).as_deref() == Some(lib_info.full_name.as_str()) {
-                    // 源：try { File.WriteAllBytes(libPath, ReadSpecifyFileFromZip(filePath)); }
-                    //      catch { continue; } continue;（成功/失败均 continue，即不入缺失列表）
-                    if let Some(file_path) = install.get("filePath").map(json_node_to_string) {
-                        if let Ok(bytes) = InstallerBase::read_specify_file_from_zip(forge_installer_path, &file_path) {
-                            let _ = std::fs::write(&lib_path, bytes);
+            // ⚠️ 补顶层 path fallback：新版 legacy 安装器（如 1.12.2-14.23.5.2864）
+            // 的 install_profile.json 无 install 字段，主 jar 坐标在顶层 path，
+            // 与 InstallLegacyForge 的 fallback（install.path ?? 顶层 path）保持一致。
+            let main_jar_name = install_profile_json
+                .get("install")
+                .and_then(|i| i.get("path"))
+                .map(json_node_to_string)
+                .or_else(|| install_profile_json.get("path").map(json_node_to_string));
+            if main_jar_name.as_deref() == Some(lib_info.full_name.as_str()) {
+                // 源：try { File.WriteAllBytes(libPath, ReadSpecifyFileFromZip(filePath)); }
+                //      catch { continue; } continue;（成功/失败均 continue，即不入缺失列表）
+                let main_jar_file = install_profile_json
+                    .get("install")
+                    .and_then(|i| i.get("filePath"))
+                    .map(json_node_to_string)
+                    .or_else(|| {
+                        install_profile_json
+                            .get("path")
+                            .map(json_node_to_string)
+                            .map(|p| format!("maven/{}", InstallerBase::maven_to_path(&p)))
+                    });
+                if let Some(file_path) = main_jar_file {
+                    if let Ok(bytes) = InstallerBase::read_specify_file_from_zip(forge_installer_path, &file_path) {
+                        // 释放前确保父目录存在（源 File.WriteAllBytes 要求目录已存在；
+                        // 流水线在 InstallLegacyForge 之前扫描时 libraries 目录可能尚未创建）
+                        if let Some(parent) = Path::new(&lib_path).parent() {
+                            let _ = std::fs::create_dir_all(parent);
                         }
+                        let _ = std::fs::write(&lib_path, bytes);
                     }
-                    continue;
                 }
+                continue;
             }
             libs.push(lib_info);
         }
