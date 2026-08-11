@@ -91,6 +91,14 @@ pub trait ModsManager: Send + Sync {
         on_progress: Option<&mut (dyn FnMut(i32, i32) + Send)>,
     ) -> Result<Vec<ModInfo>, Error>;
 
+    /// 轻量扫描：仅本地扫描 + SHA1，跳过 Modrinth/CurseForge 网络反查。
+    /// 用于只需哈希比对的场景（如联机 mods 匹配），避免每个实例数十秒的 API 反查。
+    async fn get_mod_list_light(&self) -> Result<Vec<ModInfo>, Error>;
+
+    /// 网络反查补全远程 id（Modrinth SHA1 → project/version id、CurseForge 指纹 → mod/file id）。
+    /// 供两段式流程使用：先 light 扫描展示，再按需反查 id（网络失败静默，与 C# catch{} 一致）。
+    async fn enrich_mod_ids(&self, mod_infos: &mut [ModInfo]);
+
     /// 禁用 Mod（源：DisableMod，重命名为 .disabled）
     fn disable_mod(&self, mod_file_path: &str);
 

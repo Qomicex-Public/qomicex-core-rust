@@ -128,6 +128,94 @@ impl Mods {
     /// 反查补全（源：GetModList 尾部，B13 接线）。
     /// Modrinth：`v2/version_files` 按 SHA1 批量反查 → 回填 modrinth_id；
     /// CurseForge：`v2/fingerprints` 按 CF 指纹批量反查 → 回填 curse_forge_id（无 apiKey 跳过）。
+    /// 本地扫描（get_mod_list 主体，不含网络反查）：
+    /// 收集 `*.jar` / `*.disabled` → 逐文件 SHA1 + CF 指纹 → 解析元数据 → 名称兜底 → 进度。
+    /// ⚠️ 并行化（对齐 C# 源 `Parallel.ForEach` + ConcurrentBag）：SHA1 + zip 解析是
+    /// CPU/IO 密集，顺序循环在 180+ mods 时 15s+（超过前端 15s 全局请求超时）；
+    /// 任务返回 (index, ModInfo)，按 index 归位保序，进度回调按完成数递增。
+    async fn scan_local(
+        &self,
+        on_progress: &mut Option<&mut (dyn FnMut(i32, i32) + Send)>,
+    ) -> Result<Vec<ModInfo>, Error> {
+        let mod_files = self.get_mod_files()?;
+
+        // 源：Trace.WriteLine($"Fetching mod list: {_version}, dir: {ModDirectory}, count: {modFiles.Count}")
+        // → eprintln!（B6 约定，同 file_helper.rs）
+        eprintln!(
+            "Fetching mod list: {}, dir: {}, count: {}",
+            self.version,
+            self.mod_directory().display(),
+            mod_files.len()
+        );
+
+        let total_count = mod_files.len() as i32;
+        if let Some(cb) = on_progress.as_deref_mut() {
+            call_progress(cb, 0, total_count);
+        }
+
+        let mut tasks = tokio::task::JoinSet::new();
+        for (idx, mod_path) in mod_files.iter().enumerate() {
+            let mod_path = mod_path.clone();
+            tasks.spawn_blocking(move || -> Result<(usize, ModInfo), Error> {
+                let bytes = std::fs::read(&mod_path).map_err(|e| Error::DownloadFailed {
+                    message: format!("读取 Mod 文件失败: {mod_path}"),
+                    source: Some(Box::new(e)),
+                })?;
+
+                let hash = sha1_hex(&bytes);
+                // 源：CurseForgeFingerprint(fileBytes)（基类静态成员 → 关联函数调用形态，见 P44）
+                let cf_hash = LocalResourceBase::curse_forge_fingerprint(&bytes);
+
+                let mut info = ModInfo {
+                    name: String::new(),
+                    description: String::new(),
+                    version: String::new(),
+                    authors: Vec::new(),
+                    file_path: mod_path.clone(),
+                    icon: String::new(),
+                    curse_forge_id: 0,
+                    modrinth_id: String::new(),
+                    sha1_hash: hash,
+                    cf_hash,
+                    modrinth_version_id: String::new(),
+                    curse_forge_file_id: 0,
+                };
+
+                parse_metadata(&bytes, &mut info);
+
+                // 源：if string.IsNullOrEmpty(modInfo.Name) → Path.GetFileNameWithoutExtension(mod)
+                // （file_stem 等价：去掉最后一个扩展名）
+                if info.name.is_empty() {
+                    info.name = Path::new(&mod_path)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                }
+
+                Ok((idx, info))
+            });
+        }
+
+        let mut ordered: Vec<Option<ModInfo>> = (0..mod_files.len()).map(|_| None).collect();
+        let mut completed = 0i32;
+        while let Some(joined) = tasks.join_next().await {
+            match joined {
+                Ok(Ok((idx, info))) => {
+                    ordered[idx] = Some(info);
+                    completed += 1;
+                }
+                Ok(Err(e)) => return Err(e),
+                // 源 Parallel.ForEach 的线程异常不向外传播（只中断该任务）→ 跳过
+                Err(_) => {}
+            }
+            if let Some(cb) = on_progress.as_deref_mut() {
+                call_progress(cb, completed, total_count);
+            }
+        }
+
+        Ok(ordered.into_iter().flatten().collect())
+    }
+
     /// 网络/解析失败静默（源 try/catch 吞错），不影响扫描结果。
     async fn enrich_from_remote(&self, mod_infos: &mut [ModInfo]) {
         if mod_infos.is_empty() {
@@ -147,6 +235,8 @@ impl Mods {
                         if info.modrinth_id.is_empty() {
                             if let Some(pv) = map.get(&info.sha1_hash) {
                                 info.modrinth_id = pv.project_id.clone();
+                                // 文件（版本）id：ProjectVersionInfo.id（C# 未落盘，此处补全）
+                                info.modrinth_version_id = pv.id.clone();
                             }
                         }
                     }
@@ -171,6 +261,8 @@ impl Mods {
                             if info.curse_forge_id == 0 {
                                 if let Some(meta) = map.get(&info.cf_hash) {
                                     info.curse_forge_id = meta.mod_id;
+                                    // 文件 id：FingerprintsFilesMeta.id（C# 未落盘，此处补全）
+                                    info.curse_forge_file_id = meta.file_id as i64;
                                 }
                             }
                         }
@@ -377,15 +469,17 @@ fn parse_forge_toml<R: Read + Seek>(
     let Some(toml::Value::Array(mods)) = table.get("mods") else {
         return;
     };
-    let Some(toml::Value::Table(_first)) = mods.first() else {
+    let Some(toml::Value::Table(mod_table)) = mods.first() else {
         return;
     };
 
     // 源：`TryGetValue(key, out var v) ? v?.ToString() ?? default : default`
+    // ⚠️ 必须从 mods[0] 表读取（源从 `(TomlTable)mods[0]` 取 displayName/description/version），
+    // 顶层 table 无这些键（仅 modLoaderId/license/mods 等）
     // 非字符串 TOML 值（整数/布尔等）→ TOML 文本（源为 Tomlyn ToString，格式差异
     // 仅影响理论上的非字符串 displayName，实际 mods.toml 均为字符串，见日志）
     let toml_get = |key: &str, default: &str| -> String {
-        match table.get(key) {
+        match mod_table.get(key) {
             Some(toml::Value::String(s)) => s.clone(),
             Some(v) => v.to_string(),
             None => default.to_string(),
@@ -469,71 +563,20 @@ impl ModsManager for Mods {
         &self,
         mut on_progress: Option<&mut (dyn FnMut(i32, i32) + Send)>,
     ) -> Result<Vec<ModInfo>, Error> {
-        let mod_files = self.get_mod_files()?;
-
-        // 源：Trace.WriteLine($"Fetching mod list: {_version}, dir: {ModDirectory}, count: {modFiles.Count}")
-        // → eprintln!（B6 约定，同 file_helper.rs）
-        eprintln!(
-            "Fetching mod list: {}, dir: {}, count: {}",
-            self.version,
-            self.mod_directory().display(),
-            mod_files.len()
-        );
-
-        let total_count = mod_files.len() as i32;
-        if let Some(cb) = on_progress.as_deref_mut() {
-            call_progress(cb, 0, total_count);
-        }
-
-        // 源 Parallel.ForEach + ConcurrentBag → 顺序循环（bag 结果集本就无序，语义等价）。
-        // 每文件：读字节（源 ReadAllBytes 失败会向外抛出 → Err 传播）→ SHA1 + CF 指纹
-        // → 解析元数据（失败静默）→ 名称兜底 → 进度 +1
-        let mut mod_infos = Vec::with_capacity(mod_files.len());
-        for (idx, mod_path) in mod_files.iter().enumerate() {
-            let bytes = std::fs::read(mod_path).map_err(|e| Error::DownloadFailed {
-                message: format!("读取 Mod 文件失败: {mod_path}"),
-                source: Some(Box::new(e)),
-            })?;
-
-            let hash = sha1_hex(&bytes);
-            // 源：CurseForgeFingerprint(fileBytes)（基类静态成员 → 关联函数调用形态，见 P44）
-            let cf_hash = LocalResourceBase::curse_forge_fingerprint(&bytes);
-
-            let mut info = ModInfo {
-                name: String::new(),
-                description: String::new(),
-                version: String::new(),
-                authors: Vec::new(),
-                file_path: mod_path.clone(),
-                icon: String::new(),
-                curse_forge_id: 0,
-                modrinth_id: String::new(),
-                sha1_hash: hash,
-                cf_hash,
-            };
-
-            parse_metadata(&bytes, &mut info);
-
-            // 源：if string.IsNullOrEmpty(modInfo.Name) → Path.GetFileNameWithoutExtension(mod)
-            // （file_stem 等价：去掉最后一个扩展名）
-            if info.name.is_empty() {
-                info.name = Path::new(mod_path)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-            }
-
-            if let Some(cb) = on_progress.as_deref_mut() {
-                call_progress(cb, idx as i32 + 1, total_count);
-            }
-
-            mod_infos.push(info);
-        }
-
+        let mut mod_infos = self.scan_local(&mut on_progress).await?;
         // 源 GetModList 尾部：CF/MR 哈希反查 + 图标兜底（B13 ⚠️ UNMAPPED，见方法文档）
         self.enrich_from_remote(&mut mod_infos).await;
-
         Ok(mod_infos)
+    }
+
+    /// 轻量扫描：仅本地扫描 + SHA1，跳过网络反查（联机 mods 匹配用）。
+    async fn get_mod_list_light(&self) -> Result<Vec<ModInfo>, Error> {
+        self.scan_local(&mut None).await
+    }
+
+    /// 网络反查补全远程 id（Modrinth SHA1 → project/version id、CurseForge 指纹 → mod/file id）。
+    async fn enrich_mod_ids(&self, mod_infos: &mut [ModInfo]) {
+        self.enrich_from_remote(mod_infos).await;
     }
 
     /// 禁用 Mod（源：DisableMod）：文件存在时重命名为 `{path}.disabled`

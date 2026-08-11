@@ -57,6 +57,10 @@ pub struct ModInfo {
     pub sha1_hash: String,
     /// CurseForge 指纹哈希
     pub cf_hash: i64,
+    /// Modrinth 版本（文件）ID：SHA1 反查 `ProjectVersionInfo.id`（C# 响应里有但未落盘）
+    pub modrinth_version_id: String,
+    /// CurseForge 文件 ID：指纹反查 `FingerprintsFilesMeta.id`（C# 响应里有但未落盘）
+    pub curse_forge_file_id: i64,
 }
 
 impl ModInfo {
