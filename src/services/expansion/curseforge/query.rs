@@ -77,17 +77,29 @@ impl CurseForgeBase {
     /// 相对 URL 自动拼接基址（源 `url.StartsWith("http") ? url : _baseUrl + url`）；
     /// 请求头 `x-api-key` + `Accept: application/json`；非 2xx 按 .NET
     /// EnsureSuccessStatusCode 的 HttpRequestException 语义报错（Error::Http）。
+    ///
+    /// 显式超时：与 POST 一致 30s（源 GetData 走 .NET HttpClient.Timeout 默认 100s，
+    /// 此处统一用 POST_TIMEOUT 兜底，避免上游连接挂死拖垮资源中心请求）。
     async fn get_data(&self, url: &str) -> Result<String, Error> {
         let full_url = full_url(&self.base_url, url);
-        let response = self
+        let send = self
             .http
             .get(&full_url)
             .header("x-api-key", self.api_key.as_str())
             .header("Accept", "application/json")
             .header("User-Agent", "QomicexCore/1.0")
-            .send()
-            .await
-            .map_err(http_err)?;
+            .send();
+        let response = match tokio::time::timeout(POST_TIMEOUT, send).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(e)) => return Err(http_err(e)),
+            Err(_) => {
+                return Err(Error::Http {
+                    message: format!("[CurseForge] GET {full_url} 请求超时（30s）"),
+                    status: None,
+                    source: None,
+                })
+            }
+        };
         let status = response.status();
         let body = response.text().await.map_err(http_err)?;
         if !status.is_success() {

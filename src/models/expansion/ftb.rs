@@ -69,6 +69,8 @@ pub struct VersionInfo {
     pub name: String,
     pub r#type: String,
     pub updated: i64,
+    /// FTB API 的部分版本（beta/snapshot）不返回 released；缺省 0。
+    #[serde(default)]
     pub released: i64,
     pub private: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,6 +139,8 @@ pub struct ArtInfo {
     pub compressed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha1: Option<String>,
+    /// FTB API 自 2026 年起不再返回 size（实测 art 条目无该字段）；保留类型但缺省 0。
+    #[serde(default)]
     pub size: i64,
     pub updated: i64,
 }
