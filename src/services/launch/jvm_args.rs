@@ -80,8 +80,9 @@ impl LaunchExecutor {
     /// 顺序逐字保留：JVM → mainClass → 游戏参数 → assetIndex → 账户 → classpath →
     /// 主 jar（Forge/NeoForge 跳过逻辑）→ 版本隔离目录 → OptiFine 兼容改写 → 令牌替换。
     pub(crate) fn select_params(&self, options: &LaunchOptions) -> Result<String, Error> {
+        let game_dir = self.effective_game_dir(options);
         let mut param_list: Vec<String> = Vec::new();
-        let config = self.parse_game_json(&options.version)?;
+        let config = self.parse_game_json(&game_dir, &options.version)?;
 
         // 拼接 JVM
         param_list.extend(self.get_jvm_params(options)?);
@@ -101,7 +102,7 @@ impl LaunchExecutor {
                     source: None,
                 });
             };
-            let parent_config = self.parse_game_json(parent)?;
+            let parent_config = self.parse_game_json(&game_dir, parent)?;
             // 源此处直接 `inheritsFromConfig.AssetIndex.Id`，父版本无 assetIndex 时 NRE
             // → 启动失败；Rust 以 Error::Params 表达同语义（见日志 p33 §7）
             assets_index = parent_config.asset_index_id.ok_or_else(|| Error::Params {
@@ -135,7 +136,7 @@ impl LaunchExecutor {
         let separator = get_separator();
 
         // 处理主 jar 路径（源 389-418 行，Forge/NeoForge 跳过逻辑逐字）
-        let base_main_jar = Path::new(&self.game_dir)
+        let base_main_jar = Path::new(&game_dir)
             .join("versions")
             .join(&options.version)
             .join(format!("{}.jar", options.version));
@@ -174,7 +175,7 @@ impl LaunchExecutor {
                         source: None,
                     });
                 };
-                Path::new(&self.game_dir)
+                Path::new(&game_dir)
                     .join("versions")
                     .join(parent)
                     .join(format!("{parent}.jar"))
@@ -188,7 +189,7 @@ impl LaunchExecutor {
         // 拼接 classpath（源 420-428 行：每库后接路径分隔符，最后接主 jar）
         let mut cp_libs_str = String::new();
         for cp in &cp_libs {
-            let path = Path::new(&self.game_dir)
+            let path = Path::new(&game_dir)
                 .join("libraries")
                 .join(maven_to_path(&cp.name));
             cp_libs_str.push_str(&path.to_string_lossy());
@@ -198,13 +199,13 @@ impl LaunchExecutor {
 
         // 处理版本隔离路径（源 430-439 行）
         let game_version_dir = if options.version_isolation {
-            Path::new(&self.game_dir)
+            Path::new(&game_dir)
                 .join("versions")
                 .join(&options.version)
                 .to_string_lossy()
                 .into_owned()
         } else {
-            self.game_dir.clone()
+            game_dir.clone()
         };
 
         // 处理 OptiFine 与 Forge 兼容（源 441-457 行）：移除 tweaker 及其前一参数，
@@ -235,17 +236,17 @@ impl LaunchExecutor {
             .as_ref()
             .map(|j| j.max_memory_mb)
             .unwrap_or(512);
-        let natives_dir = Path::new(&self.game_dir)
+        let natives_dir = Path::new(&game_dir)
             .join("versions")
             .join(&options.version)
             .join(format!("{}-natives", options.version))
             .to_string_lossy()
             .into_owned();
-        let game_assets = Path::new(&self.game_dir)
+        let game_assets = Path::new(&game_dir)
             .join("assets")
             .to_string_lossy()
             .into_owned();
-        let libraries_dir = Path::new(&self.game_dir)
+        let libraries_dir = Path::new(&game_dir)
             .join("libraries")
             .to_string_lossy()
             .into_owned();
@@ -317,7 +318,8 @@ impl LaunchExecutor {
     /// IsClassPath + 去重；无规则直接判定；沿 InheritsFrom 递归；
     /// 收尾 CheckLibsVer + RemoveConflictingLibraries
     pub(crate) fn get_class_path(&self, options: &LaunchOptions) -> Result<Vec<Library>, Error> {
-        let locator = DefaultVersionLocator::new(self.game_dir.clone(), DownloadMirror::Official);
+        let game_dir = self.effective_game_dir(options);
+        let locator = DefaultVersionLocator::new(game_dir, DownloadMirror::Official);
         let meta = locator
             .get_version_metadata(&options.version)
             .ok_or_else(|| Error::Params {
@@ -362,11 +364,12 @@ impl LaunchExecutor {
     /// 经 DefaultVersionLocator 读取元数据；MainClass 为空 → 沿 InheritsFrom 递归；
     /// 仍无 → ParamsException("MainClass键不存在 (Version: {version})")
     pub(crate) fn get_main_class(&self, options: &LaunchOptions) -> Result<String, Error> {
-        self.get_main_class_inner(&options.version)
+        let game_dir = self.effective_game_dir(options);
+        self.get_main_class_inner(&game_dir, &options.version)
     }
 
-    fn get_main_class_inner(&self, version: &str) -> Result<String, Error> {
-        let locator = DefaultVersionLocator::new(self.game_dir.clone(), DownloadMirror::Official);
+    fn get_main_class_inner(&self, game_dir: &str, version: &str) -> Result<String, Error> {
+        let locator = DefaultVersionLocator::new(game_dir.to_string(), DownloadMirror::Official);
         let Some(meta) = locator.get_version_metadata(version) else {
             // 源：meta 为 null → mainClass 为 null → 无继承可查 → 抛 ParamsException
             return Err(Error::Params {
@@ -379,7 +382,7 @@ impl LaunchExecutor {
         }
         if let Some(parent) = &meta.inherits_from {
             if !parent.is_empty() {
-                return self.get_main_class_inner(parent);
+                return self.get_main_class_inner(game_dir, parent);
             }
         }
         Err(Error::Params {
@@ -401,6 +404,7 @@ impl LaunchExecutor {
         options: &LaunchOptions,
         add_default_params: bool,
     ) -> Result<Vec<String>, Error> {
+        let game_dir = self.effective_game_dir(options);
         let mut jvm_list: Vec<String> = Vec::new();
         if options.version.is_empty() {
             // 源：ArgumentException("Version cannot be null or empty.", nameof(options.Version))
@@ -410,7 +414,7 @@ impl LaunchExecutor {
             });
         }
 
-        let config = self.parse_game_json(&options.version)?;
+        let config = self.parse_game_json(&game_dir, &options.version)?;
 
         if add_default_params {
             // 添加默认参数（源 607-632 行，顺序逐字）
@@ -524,6 +528,7 @@ impl LaunchExecutor {
     /// 顺序逐字保留：InheritsFrom 递归（JoinServer/JoinWorld 置 null）→ legacy
     /// minecraftArguments → game 列表 → JoinServer/JoinWorld（quickPlay 判定）
     pub(crate) fn get_game_params(&self, options: &LaunchOptions) -> Result<Vec<String>, Error> {
+        let game_dir = self.effective_game_dir(options);
         let mut game_list: Vec<String> = Vec::new();
         if options.version.is_empty() {
             // 源：ArgumentException("Version cannot be null or empty.", nameof(options.Version))
@@ -533,7 +538,7 @@ impl LaunchExecutor {
             });
         }
 
-        let config = self.parse_game_json(&options.version)?;
+        let config = self.parse_game_json(&game_dir, &options.version)?;
 
         // 处理 InheritsFrom（源 723-729 行：JoinServer/JoinWorld 置 null 后递归）
         if let Some(parent) = &config.inherits_from {
@@ -644,8 +649,8 @@ impl LaunchExecutor {
     /// ⚠️ B1 的 params_meta::Config 为全必填 serde 模型，无法表达 C# "缺键 → null" 语义
     /// （legacy JSON 无 arguments 键、新版本 JSON 无 minecraftArguments 键），故按
     /// serde_json::Value 手工访问字段，复刻 C# null 语义（见文件头决策说明）
-    fn parse_game_json(&self, version: &str) -> Result<ParsedConfig, Error> {
-        let json = self.read_version_json(version)?;
+    fn parse_game_json(&self, game_dir: &str, version: &str) -> Result<ParsedConfig, Error> {
+        let json = self.read_version_json(game_dir, version)?;
 
         // 源：JSON "null" → Config null → ParamsException("版本Json解析失败")；
         // 其他非对象形态 → JsonException（同样以"版本Json解析失败"承载）
@@ -712,8 +717,8 @@ impl LaunchExecutor {
     /// 读取版本 JSON 文本（源：File.ReadAllText，路径
     /// Path.Combine(_gameDir, "versions", version, "{version}.json")）
     /// 源 IO 异常（文件不存在等）向上传播 → 启动失败；Rust 以 Error::Params 承载（见日志 p33）
-    fn read_version_json(&self, version: &str) -> Result<String, Error> {
-        let path = Path::new(&self.game_dir)
+    fn read_version_json(&self, game_dir: &str, version: &str) -> Result<String, Error> {
+        let path = Path::new(game_dir)
             .join("versions")
             .join(version)
             .join(format!("{version}.json"));

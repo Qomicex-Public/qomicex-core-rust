@@ -276,7 +276,9 @@ impl LaunchExecutor {
     /// `if (!string.IsNullOrEmpty(GameRoot)) _gameDir = GameRoot`）。
     /// ⚠️ UNMAPPED：源为实例字段持久修改（同一实例后续调用沿用覆盖值）；Rust `&self`
     /// 不可变，按每次调用独立计算（见日志 p34）。
-    fn effective_game_dir(&self, options: &LaunchOptions) -> String {
+    /// pub(crate)：jvm_args.rs 全部路径拼接统一经此解析，保证每实例 game_root 覆盖生效
+    /// （与源 `if (!string.IsNullOrEmpty(GameRoot)) _gameDir = GameRoot` 的字段变异语义对齐）。
+    pub(crate) fn effective_game_dir(&self, options: &LaunchOptions) -> String {
         match &options.game_root {
             Some(root) if !root.is_empty() => root.clone(),
             _ => self.game_dir.clone(),
