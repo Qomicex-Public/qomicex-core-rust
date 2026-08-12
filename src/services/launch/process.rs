@@ -469,6 +469,12 @@ impl LaunchExecutor {
                 if let Some(eq_idx) = jvm.find('=') {
                     let mut lib_path = jvm[eq_idx + 1..].trim().to_string();
                     lib_path = lib_path.replace("${natives_directory}", natives_dir);
+                    // verbatim（\\?\ 前缀）路径下 '/' 不是分隔符而是普通字符，与模板
+                    // 里的 '/java' 拼接后 CreateDirectory 报 ERROR_INVALID_NAME (123)；
+                    // Windows 上 '/' 与 '\' 等价（verbatim 除外），统一换成 '\' 无害且必要。
+                    if lib_path.starts_with(r"\\?\") {
+                        lib_path = lib_path.replace('/', "\\");
+                    }
                     if !lib_path.is_empty() && lib_path != natives_dir {
                         return Ok(lib_path);
                     }
