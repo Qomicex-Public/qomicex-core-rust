@@ -157,6 +157,19 @@ impl LocalResourcesFactory for DefaultLocalResourcesFactory {
             api_key.to_string(),
         ))
     }
+
+    /// 创建服务器管理器（源：ContentService.CreateServerManager → new ServerManager(gameDir, version, versionSpecific)）
+    fn create_server_manager(
+        &self,
+        version: &str,
+        version_specific: bool,
+    ) -> Box<dyn crate::api::server::ServerManager + Send + Sync> {
+        Box::new(crate::services::server::servers_dat::ServerManager::new(
+            self.game_root.clone(),
+            version.to_string(),
+            version_specific,
+        ))
+    }
 }
 
 /// 本地资源基类共享逻辑（源：`LocalResourceBase`，LocalResourceBase.cs）。

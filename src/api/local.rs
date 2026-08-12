@@ -5,6 +5,7 @@
 //! namespace Qomicex.Core.AOT.Services.Expansion.Local）
 
 use async_trait::async_trait;
+use crate::api::server::ServerManager;
 use crate::error::Error;
 use crate::models::expansion::local::{
     DataPackInfo, ModInfo, ResourcePackInfo, SaveInfo, ScreenshotInfo, ShaderInfo,
@@ -19,6 +20,10 @@ use crate::models::expansion::local::{
 // - `CreateScreenshots(...) -> Screenshots` → `create_screenshots(...) -> Box<dyn ScreenshotsManager + Send + Sync>`
 // - `CreateDataPacks(...) -> DataPacks` → `create_data_packs(...) -> Box<dyn DataPacksManager + Send + Sync>`
 //   （6 个方法参数形态一致，均为同步方法，无 Task → 普通 fn）
+// - `CreateServerManager(string gameDir, string version, bool versionSpecific) -> ServerManager`
+//   （源：ContentService.CreateServerManager，Services/Options/ServerManager.cs）
+//   → `create_server_manager(&self, version: &str, version_specific: bool) -> Box<dyn ServerManager + Send + Sync>`
+//   （gameDir 由工厂持有的 game_root 提供 → 签名缺省 game_dir 参数；无 apiKey，与其余 6 个形态不同）
 //
 // ⚠️ 占位标注：源方法返回的是 concrete class（Mods/Saves/Resourcepack/Shaders/
 // Screenshots/DataPacks，均继承 LocalResourceBase，见 Services/Expansion/Local/），
@@ -78,6 +83,14 @@ pub trait LocalResourcesFactory: Send + Sync {
         version_segmented: bool,
         api_key: &str,
     ) -> Box<dyn DataPacksManager + Send + Sync>;
+
+    /// 创建服务器管理器（源：ContentService.CreateServerManager(gameDir, version, versionSpecific)；
+    /// 后端按实例调用。gameDir 由工厂持有的 game_root 提供 → 签名缺省 game_dir 参数）
+    fn create_server_manager(
+        &self,
+        version: &str,
+        version_specific: bool,
+    ) -> Box<dyn ServerManager + Send + Sync>;
 }
 
 /// Mod 管理器（源：concrete class `Mods`，Services/Expansion/Local/Mods.cs）。
