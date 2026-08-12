@@ -18,6 +18,7 @@
 //!
 //! Android 兼容性：纯 Rust（std + reqwest），无平台 API。
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -87,6 +88,8 @@ pub struct CoreOptions {
     pub descriptions_json_path: Option<String>,
     /// 版本清单 JSON 文件路径（源：`MinecraftManifestPath`，可空）
     pub minecraft_manifest_path: Option<String>,
+    /// 图标缓存目录（源无对应；Rust 新增：mod 图标 per-jar 内容哈希磁盘缓存）
+    pub icon_cache_dir: Option<String>,
 }
 
 impl Default for CoreOptions {
@@ -107,6 +110,7 @@ impl Default for CoreOptions {
             options_json_path: None,
             descriptions_json_path: None,
             minecraft_manifest_path: None,
+            icon_cache_dir: None,
         }
     }
 }
@@ -205,6 +209,12 @@ impl GameCoreBuilder {
     /// 设置下载镜像偏好（源：`UseDownloadMirror(DownloadMirror mirror)`）。
     pub fn use_download_mirror(&mut self, mirror: DownloadMirror) -> &mut Self {
         self.options.download_mirror = mirror;
+        self
+    }
+
+    /// 设置图标缓存目录（源无对应；Rust 新增：mod 图标 per-jar 内容哈希磁盘缓存）。
+    pub fn with_icon_cache_dir(&mut self, dir: impl Into<PathBuf>) -> &mut Self {
+        self.options.icon_cache_dir = Some(dir.into().to_string_lossy().into_owned());
         self
     }
 
@@ -401,6 +411,7 @@ impl GameCoreBuilder {
             None => Arc::new(DefaultLocalResourcesFactory::new(
                 http.clone(),
                 self.options.game_root.clone(),
+                self.options.icon_cache_dir.as_deref().map(PathBuf::from),
             )),
         };
 

@@ -11,7 +11,7 @@
 
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use zip::ZipArchive;
 
@@ -40,13 +40,23 @@ pub(crate) struct DefaultLocalResourcesFactory {
     http: reqwest::Client,
     /// 游戏根目录（源：`_gameRoot`）
     game_root: String,
+    /// 图标缓存目录（源无对应；Rust 新增：per-jar 图标内容哈希磁盘缓存）
+    icon_cache_dir: Option<PathBuf>,
 }
 
 impl DefaultLocalResourcesFactory {
     /// 创建工厂（源：`DefaultLocalResourcesFactory(HttpClient http, string gameRoot)`；
     /// `HttpClient` → `reqwest::Client`，MAPPING_TABLE runtime 映射）
-    pub(crate) fn new(http: reqwest::Client, game_root: String) -> Self {
-        Self { http, game_root }
+    pub(crate) fn new(
+        http: reqwest::Client,
+        game_root: String,
+        icon_cache_dir: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            http,
+            game_root,
+            icon_cache_dir,
+        }
     }
 }
 
@@ -64,6 +74,7 @@ impl LocalResourcesFactory for DefaultLocalResourcesFactory {
             version.to_string(),
             version_segmented,
             api_key.to_string(),
+            self.icon_cache_dir.clone(),
         ))
     }
 

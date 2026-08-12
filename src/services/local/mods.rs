@@ -17,8 +17,10 @@
 
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use zip::ZipArchive;
 
@@ -44,6 +46,8 @@ pub(crate) struct Mods {
     version_segmented: bool,
     /// API Key（源字段 `_apiKey`：用于 CurseForge 反查）
     api_key: String,
+    /// 图标缓存目录（为空时禁用 per-jar 缓存）
+    icon_cache_dir: Option<PathBuf>,
 }
 
 impl Mods {
@@ -56,6 +60,7 @@ impl Mods {
         version: String,
         version_segmented: bool,
         api_key: String,
+        icon_cache_dir: Option<PathBuf>,
     ) -> Self {
         Self {
             http,
@@ -63,6 +68,7 @@ impl Mods {
             version,
             version_segmented,
             api_key,
+            icon_cache_dir,
         }
     }
 
@@ -79,7 +85,46 @@ impl Mods {
             PathBuf::from(&self.game_directory).join("mods")
         }
     }
+}
 
+// =====================================================================
+// Per-jar scan cache (avoid re-unzipping unchanged mods)
+// =====================================================================
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CachedModMeta {
+    size: u64,
+    mtime: u64,
+    sha1: String,
+    cf_hash: i64,
+    name: String,
+    description: String,
+    version: String,
+    authors: Vec<String>,
+    icon_sha1: Option<String>,
+}
+
+fn load_cached_mod(cache_file: &Path, size: u64, mtime: u64) -> Option<CachedModMeta> {
+    let bytes = std::fs::read(cache_file).ok()?;
+    let meta: CachedModMeta = serde_json::from_slice(&bytes).ok()?;
+    if meta.size == size && meta.mtime == mtime {
+        Some(meta)
+    } else {
+        None
+    }
+}
+
+fn save_cached_mod(cache_file: &Path, meta: &CachedModMeta) {
+    if let Some(parent) = cache_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_vec(meta) {
+        let _ = std::fs::write(cache_file, json);
+    }
+}
+
+impl Mods {
     /// 扫描 Mod 文件（源：GetModFiles）：目录不存在 → 空列表；
     /// 收集 `*.jar` 与 `*.disabled` 文件（源 GetFiles(ModDirectory, "*.jar" / "*.disabled")，
     /// Windows 下通配符按扩展名大小写不敏感匹配 → eq_ignore_ascii_case）。
@@ -133,6 +178,10 @@ impl Mods {
     /// ⚠️ 并行化（对齐 C# 源 `Parallel.ForEach` + ConcurrentBag）：SHA1 + zip 解析是
     /// CPU/IO 密集，顺序循环在 180+ mods 时 15s+（超过前端 15s 全局请求超时）；
     /// 任务返回 (index, ModInfo)，按 index 归位保序，进度回调按完成数递增。
+    ///
+    /// Per-jar 磁盘缓存（`icon_cache_dir` 存在时启用）：以 jar 文件路径 SHA1 为 key
+    /// 缓存元数据 + 图标内容哈希，缓存命中时跳过文件读取和 zip 解析，直接从磁盘
+    /// 读取图标文件，避免重复解压 Jar。
     async fn scan_local(
         &self,
         on_progress: &mut Option<&mut (dyn FnMut(i32, i32) + Send)>,
@@ -156,7 +205,62 @@ impl Mods {
         let mut tasks = tokio::task::JoinSet::new();
         for (idx, mod_path) in mod_files.iter().enumerate() {
             let mod_path = mod_path.clone();
+            let cache_dir = self.icon_cache_dir.clone();
             tasks.spawn_blocking(move || -> Result<(usize, ModInfo), Error> {
+                // Stat jar for cache validation (cheap, no file content read)
+                let (file_size, file_mtime_millis) =
+                    match std::fs::metadata(&mod_path) {
+                        Ok(m) => {
+                            let size = m.len();
+                            let mtime = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                            let millis = mtime
+                                .duration_since(SystemTime::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as u64)
+                                .unwrap_or(0);
+                            (size, millis)
+                        }
+                        Err(_) => (0, 0),
+                    };
+
+                let path_hash = sha1_hex(mod_path.as_bytes());
+
+                // Per-jar cache hit: skip file read and zip parsing entirely
+                if let Some(ref dir) = cache_dir {
+                    let cache_file = dir.join(format!("{path_hash}.json"));
+                    if let Some(cached) = load_cached_mod(&cache_file, file_size, file_mtime_millis) {
+                        let icon_base64 = cached.icon_sha1.and_then(|sha1| {
+                            let icon_file = dir.join("icons").join(format!("{sha1}.png"));
+                            std::fs::read(&icon_file)
+                                .ok()
+                                .and_then(|bytes| {
+                                    if bytes.is_empty() {
+                                        None
+                                    } else {
+                                        Some(base64_encode(&bytes))
+                                    }
+                                })
+                        });
+                        return Ok((
+                            idx,
+                            ModInfo {
+                                name: cached.name,
+                                description: cached.description,
+                                version: cached.version,
+                                authors: cached.authors,
+                                file_path: mod_path.clone(),
+                                icon: icon_base64.unwrap_or_default(),
+                                curse_forge_id: 0,
+                                modrinth_id: String::new(),
+                                sha1_hash: cached.sha1,
+                                cf_hash: cached.cf_hash,
+                                modrinth_version_id: String::new(),
+                                curse_forge_file_id: 0,
+                            },
+                        ));
+                    }
+                }
+
+                // Cache miss: full scan
                 let bytes = std::fs::read(&mod_path).map_err(|e| Error::DownloadFailed {
                     message: format!("读取 Mod 文件失败: {mod_path}"),
                     source: Some(Box::new(e)),
@@ -175,7 +279,7 @@ impl Mods {
                     icon: String::new(),
                     curse_forge_id: 0,
                     modrinth_id: String::new(),
-                    sha1_hash: hash,
+                    sha1_hash: hash.clone(),
                     cf_hash,
                     modrinth_version_id: String::new(),
                     curse_forge_file_id: 0,
@@ -190,6 +294,39 @@ impl Mods {
                         .file_stem()
                         .map(|s| s.to_string_lossy().into_owned())
                         .unwrap_or_default();
+                }
+
+                // Write per-jar cache (icon + metadata) after successful parse
+                if let Some(dir) = cache_dir {
+                    let icon_sha1 = if info.icon.is_empty() {
+                        None
+                    } else {
+                        base64::decode(&info.icon).ok().and_then(|bytes| {
+                            if bytes.is_empty() {
+                                None
+                            } else {
+                                let sha1 = sha1_hex(&bytes);
+                                let icon_file = dir.join("icons").join(format!("{sha1}.png"));
+                                let _ = std::fs::create_dir_all(icon_file.parent().unwrap());
+                                let _ = std::fs::write(&icon_file, &bytes);
+                                Some(sha1)
+                            }
+                        })
+                    };
+
+                    let cache_file = dir.join(format!("{path_hash}.json"));
+                    let meta = CachedModMeta {
+                        size: file_size,
+                        mtime: file_mtime_millis,
+                        sha1: hash.clone(),
+                        cf_hash,
+                        name: info.name.clone(),
+                        description: info.description.clone(),
+                        version: info.version.clone(),
+                        authors: info.authors.clone(),
+                        icon_sha1,
+                    };
+                    let _ = save_cached_mod(&cache_file, &meta);
                 }
 
                 Ok((idx, info))
@@ -217,6 +354,7 @@ impl Mods {
     }
 
     /// 网络/解析失败静默（源 try/catch 吞错），不影响扫描结果。
+    /// Modrinth 与 CurseForge 反查并行执行（tokio::join!），互不阻塞。
     async fn enrich_from_remote(&self, mod_infos: &mut [ModInfo]) {
         if mod_infos.is_empty() {
             return;
@@ -228,50 +366,61 @@ impl Mods {
             .filter(|m| m.modrinth_id.is_empty() && !m.sha1_hash.is_empty())
             .map(|m| m.sha1_hash.clone())
             .collect();
-        if !sha1s.is_empty() {
-            match modrinth.get_project_versions_from_hashes_dict(&sha1s).await {
-                Ok(map) => {
-                    for info in mod_infos.iter_mut() {
-                        if info.modrinth_id.is_empty() {
-                            if let Some(pv) = map.get(&info.sha1_hash) {
-                                info.modrinth_id = pv.project_id.clone();
-                                // 文件（版本）id：ProjectVersionInfo.id（C# 未落盘，此处补全）
-                                info.modrinth_version_id = pv.id.clone();
-                            }
+
+        let cf_hashes: Vec<i64> = mod_infos
+            .iter()
+            .filter(|m| m.curse_forge_id == 0 && m.cf_hash != 0)
+            .map(|m| m.cf_hash)
+            .collect();
+
+        let api_key = self.api_key.clone();
+        let http = self.http.clone();
+
+        // MR 与 CF 反查并行（源两段串行 await → tokio::join!）
+        let (mr_result, cf_result) = tokio::join!(
+            async {
+                if sha1s.is_empty() {
+                    return Ok(std::collections::HashMap::new());
+                }
+                modrinth
+                    .get_project_versions_from_hashes_dict(&sha1s)
+                    .await
+            },
+            async {
+                if api_key.is_empty() || cf_hashes.is_empty() {
+                    return Ok(std::collections::HashMap::new());
+                }
+                let cf = CurseForgeBase::new(http, api_key, None);
+                cf.get_info_from_hashes_dict(&cf_hashes).await
+            }
+        );
+
+        match mr_result {
+            Ok(map) => {
+                for info in mod_infos.iter_mut() {
+                    if info.modrinth_id.is_empty() {
+                        if let Some(pv) = map.get(&info.sha1_hash) {
+                            info.modrinth_id = pv.project_id.clone();
+                            info.modrinth_version_id = pv.id.clone();
                         }
                     }
                 }
-                Err(e) => {
-                    eprintln!("Modrinth hash lookup failed: {e}");
-                }
             }
+            Err(e) => eprintln!("Modrinth hash lookup failed: {e}"),
         }
 
-        if !self.api_key.is_empty() {
-            let cf = CurseForgeBase::new(self.http.clone(), self.api_key.clone(), None);
-            let hashes: Vec<i64> = mod_infos
-                .iter()
-                .filter(|m| m.curse_forge_id == 0 && m.cf_hash != 0)
-                .map(|m| m.cf_hash)
-                .collect();
-            if !hashes.is_empty() {
-                match cf.get_info_from_hashes_dict(&hashes).await {
-                    Ok(map) => {
-                        for info in mod_infos.iter_mut() {
-                            if info.curse_forge_id == 0 {
-                                if let Some(meta) = map.get(&info.cf_hash) {
-                                    info.curse_forge_id = meta.mod_id;
-                                    // 文件 id：FingerprintsFilesMeta.id（C# 未落盘，此处补全）
-                                    info.curse_forge_file_id = meta.file_id as i64;
-                                }
-                            }
+        match cf_result {
+            Ok(map) => {
+                for info in mod_infos.iter_mut() {
+                    if info.curse_forge_id == 0 {
+                        if let Some(meta) = map.get(&info.cf_hash) {
+                            info.curse_forge_id = meta.mod_id;
+                            info.curse_forge_file_id = meta.file_id as i64;
                         }
-                    }
-                    Err(e) => {
-                        eprintln!("CurseForge fingerprint lookup failed: {e}");
                     }
                 }
             }
+            Err(e) => eprintln!("CurseForge fingerprint lookup failed: {e}"),
         }
     }
 }

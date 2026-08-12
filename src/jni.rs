@@ -1741,7 +1741,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_instanceFilesMe
     let category = get_string(&mut env, category);
     let version_segmented = get_string(&mut env, version_segmented) == "true";
 
-    let factory = DefaultLocalResourcesFactory::new(reqwest::Client::new(), game_dir);
+    let factory = DefaultLocalResourcesFactory::new(reqwest::Client::new(), game_dir, None);
     let result: Value = match category.as_str() {
         "mods" => match block_on(factory.create_mods(&version_name, version_segmented, "").get_mod_list(None)) {
             Ok(list) => json!(list.iter().map(|m| {
