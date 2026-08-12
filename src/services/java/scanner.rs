@@ -65,6 +65,7 @@ static HIGH_PRIORITY_PATHS: LazyLock<Vec<String>> = LazyLock::new(|| {
     let pf = env_dir("ProgramFiles");
     let pf86 = env_dir("ProgramFiles(x86)");
     let local_app_data = env_dir("LOCALAPPDATA");
+    let app_data = env_dir("APPDATA");
     let user_profile = env_user_profile();
     let common_app_data = env_dir("ProgramData");
     let system_drive = system_drive_root();
@@ -94,6 +95,8 @@ static HIGH_PRIORITY_PATHS: LazyLock<Vec<String>> = LazyLock::new(|| {
         join_path(&join_path(&user_profile, "scoop"), "apps"),
         join_path(&join_path(&system_drive, "tools"), "java"),
         join_path(&join_path(&common_app_data, "chocolatey"), "lib"),
+        // 官方 Minecraft 启动器自带 runtime（%APPDATA%\.minecraft\runtime\{版本}\bin\java.exe）
+        join_path(&app_data, ".minecraft/runtime"),
     ]
 });
 
