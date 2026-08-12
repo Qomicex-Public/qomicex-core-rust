@@ -124,8 +124,10 @@ impl DefaultVersionLocator {
             download_source,
             http_client: reqwest::Client::new(),
         };
-        // 源构造函数末尾调用 RefreshCache()（→ EnsureCacheFresh 首次全量扫描）
-        locator.refresh_cache();
+        // 源构造函数末尾调用 RefreshCache()（→ EnsureCacheFresh 首次全量扫描）。
+        // ⚠️ 修复：不再构造时同步扫描。versions 目录可含数万条目（modpack 场景实测
+        // 43,868 条目需 ~21.8s），每次 launch 重建 locator 都会阻塞 16-20s；
+        // 扫描改为惰性，由 get_all_versions / is_version_installed 等查询入口触发一次。
         locator
     }
 
@@ -610,8 +612,10 @@ impl VersionLocator for DefaultVersionLocator {
             return None;
         }
 
-        self.ensure_cache_fresh();
-
+        // ⚠️ 修复：此处不再调用 ensure_cache_fresh()（全量扫描 versions 目录）。
+        // 元数据按 id 直读版本 JSON，缓存 miss 时直接读文件（下方已有逻辑），
+        // 无需求助全量缓存；launch 完整性检查（InheritsFrom 链会经过本方法）
+        // 因此不再被每次 locator 重建触发的扫描阻塞（见 p28a 修复记录）。
         if let Some(metadata) = self.cache.lock().expect("版本缓存锁被毒化").metadata_cache.get(version_id)
         {
             return Some(metadata.clone());

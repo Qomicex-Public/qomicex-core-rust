@@ -206,9 +206,9 @@ impl LaunchExecutor {
             .map(|j| j.java_path.as_str())
             .unwrap_or("java");
         let file_name = crate::services::launch::jvm_args::normalize_arg(java_path);
-        // ⚠️ 偏差：Windows CreateProcess 会剥掉 FileName 的外层引号；Unix execvp 不去引号
-        // （源为 Windows 优先行为），此处补去引号（见日志 p34）
-        #[cfg(not(windows))]
+        // ⚠️ 偏差：normalize_arg 对含空格路径加外层引号；直接传给 Command::new 时，
+        // Windows CreateProcess 会将带引号的 exe 路径解析失败（os error 123，
+        // ERROR_INVALID_NAME），Unix execvp 亦不去引号 → 统一在此去引号（见日志 p34）
         let file_name = file_name.trim_matches('"').to_string();
 
         // 源：WorkingDirectory = VersionIsolation ? gameDir/versions/version : gameDir
