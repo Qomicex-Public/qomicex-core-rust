@@ -13,6 +13,9 @@
 //! - `string GetServerFilePath()` → `get_server_file_path(&self) -> String`
 //! - `ServerState? GetServerStateByName(string name)` → `get_server_state_by_name(&self, name: &str) -> Option<ServerState>`
 //! - `ServerState GetServerStateByAddress(string address)` → `get_server_state_by_address(&self, address: &str) -> ServerState`
+//!   （async 变体 `get_server_state_by_address_async`：供 tokio async 上下文直接调用，
+//!   避免同步变体在 runtime worker 线程内 block_on 的 "Cannot start a runtime from within
+//!   a runtime" panic，见日志）
 //! - `Task<ServerState?> PingAsync(string host, int port, CancellationToken ct)`
 //!   → `async fn ping(&self, host: &str, port: i32, ct: &tokio_util::sync::CancellationToken) -> Result<Option<ServerState>, Error>`
 //! - `Task<ServerState?> PingAsync(ServerEntry entry, CancellationToken ct)`（重载 → 改名
@@ -82,6 +85,12 @@ pub trait ServerManager: Send + Sync {
 
     /// 按地址获取服务器状态（源：GetServerStateByAddress，同步方法）
     fn get_server_state_by_address(&self, address: &str) -> ServerState;
+
+    /// 按地址获取服务器状态的 async 编排版本（源：GetServerStateByAddress 的 async 等价；
+    /// 供 tokio async 上下文（axum handler 等）直接调用——同步变体内部
+    /// `Handle::current().block_on` 在 runtime worker 线程内调用会 panic
+    /// "Cannot start a runtime from within a runtime"，见日志）
+    async fn get_server_state_by_address_async(&self, address: &str) -> ServerState;
 
     /// Ping 指定主机与端口，返回服务器状态（源：PingAsync(string host, int port, CancellationToken ct)；
     /// `Task<ServerState?>` → `Result<Option<ServerState>, Error>`）

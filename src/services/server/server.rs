@@ -7,7 +7,9 @@
 //! - 8 个 servers.dat CRUD 方法 → 委托 servers_dat.rs 固有方法
 //!   （`self.load_server_list()` 等：固有方法优先于 trait 方法 → 不会递归）
 //! - `get_server_state_by_name` / `get_server_state_by_address` → 本文件编排
-//!   （地址解析 → StatusEndpoint（SRV）→ modern 查询 → 失败回退条件 → legacy 查询）
+//!   （地址解析 → StatusEndpoint（SRV）→ modern 查询 → 失败回退条件 → legacy 查询；
+//!   async 编排核心 = 固有方法 `get_server_state_by_address_inner`；同步方法 block_on
+//!   委托之，trait 另暴露 `get_server_state_by_address_async` 供 async 上下文直调）
 //! - `ping` / `ping_entry` → 本文件编排（modern 查询；异步路径无 legacy 回退，同源）
 //! - `discover_lan_servers` / `discover_lan` / `resolve_srv` → 委托 lan_discovery.rs 固有方法
 //!   （⚠️ 该三方法原为 lan_discovery.rs 私有，本批次追加 pub(crate) 方可跨模块委托，见日志）
@@ -24,7 +26,11 @@
 //!
 //! 同步 trait 方法（get_server_state_by_name / get_server_state_by_address）内以
 //! `tokio::runtime::Handle::current().block_on` 阻塞驱动 async（对应源 sync-over-async
-//! `GetAwaiter().GetResult()`）：⚠️ 调用方须处于 tokio runtime 上下文（无 runtime 线程 → panic）。
+//! `GetAwaiter().GetResult()`）：⚠️ 调用方须处于 tokio runtime 上下文（无 runtime 线程 →
+//! panic）且不得在 runtime worker 线程内调用（worker 内 block_on → "Cannot start a runtime
+//! from within a runtime" panic）→ tokio async 上下文（axum handler 等）改用
+//! `get_server_state_by_address_async`（async 编排核心 = 固有方法
+//! `get_server_state_by_address_inner`）。
 //!
 //! Android 兼容性：纯 Rust（tokio + std），无 FFI、无平台专用库。
 
@@ -226,6 +232,57 @@ impl ServerManager {
     }
 }
 
+// ===== 状态查询 async 编排核心（源 GetServerStateByAddress async 块体）=====
+
+/// 按地址获取服务器状态的 async 编排核心（源：GetServerStateByAddress 的 async 块体，
+/// 自同步 trait 方法提取；由同步方法 block_on 委托 / `get_server_state_by_address_async`
+/// await 调用，两入口共享同一实现）。
+///
+/// 流程（逐字）：构造 state（Address + Name=TryGetServerNameByAddress）→
+/// ResolveStatusEndpoint（**try 块外**：地址解析失败异常上抛 → 本实现 panic! 同位置上抛）
+/// → modern 查询 → 失败且（tcpConnected && ShouldFallbackToLegacy）→ legacy 查询。
+///
+/// ⚠️ tcpConnected：源以 `out bool` 记录 TCP 是否已连接，仅 true 且错误类型命中才回退；
+/// Protocol/Json 类错误只在连接成功后出现（读/解析阶段）→ tcpConnected 由错误种类蕴含，
+/// 本实现直接按错误消息分类（should_fallback_to_legacy），等价。
+///
+/// modern 查询的 ct 用新建令牌（源同步路径自建 5s 连接 CTS，无外部 ct）。
+impl ServerManager {
+    /// 按地址获取服务器状态的 async 编排核心（源：GetServerStateByAddress async 块体；
+    /// 供同步方法 block_on 委托与 `get_server_state_by_address_async` await 调用）
+    pub(crate) async fn get_server_state_by_address_inner(&self, address: &str) -> ServerState {
+        // 源：var state = new ServerState { Address = address, Name = TryGetServerNameByAddress(address) };
+        let state = ServerState {
+            address: address.to_string(),
+            name: self.try_get_server_name_by_address(address),
+            ..ServerState::default()
+        };
+
+        // 源：var endpoint = ResolveStatusEndpoint(address);（try 块外）
+        let endpoint = resolve_status_endpoint(self, address).await;
+
+        // 源：QueryModernServerState（同步路径）；错误在内部收敛为离线状态
+        let ct = CancellationToken::new();
+        let modern = query_modern_server_state(&endpoint, state, &ct).await;
+        // 源成功路径：直接返回（IsOnline/ErrorMessage/Ping 已填）
+        if modern.is_online {
+            return modern;
+        }
+
+        // 源：catch → if (tcpConnected && ShouldFallbackToLegacy(ex))
+        //      → QueryLegacyServerState(endpoint, state, ex.Message)
+        if should_fallback_to_legacy(&modern.error_message) {
+            // 传入 modern 查询后的状态（源 catch 后同一 state 对象续用，保留可能
+            // 已解析的 icon 等字段）；priorError = ex.Message = ErrorMessage
+            let prior_error = modern.error_message.clone();
+            query_legacy_server_state(&endpoint, modern, &prior_error).await
+        } else {
+            // 源：state.IsOnline = false; state.ErrorMessage = ex.Message; return state;
+            modern
+        }
+    }
+}
+
 // ===== ServerManager trait 聚合实现（源 ServerManager.cs 编排方法）=====
 
 /// 服务器管理器（源：`ServerManager` 具体类）。聚合 trait 全部 15 方法：
@@ -287,52 +344,29 @@ impl ServerManagerApi for ServerManager {
         Some(self.get_server_state_by_address(&server.address))
     }
 
-    /// 按地址获取服务器状态（源：GetServerStateByAddress，同步方法；sync-over-async）。
+    /// 按地址获取服务器状态（源：GetServerStateByAddress，同步方法；sync-over-async 委托）。
     ///
     /// 流程（逐字）：构造 state（Address + Name=TryGetServerNameByAddress）→
     /// ResolveStatusEndpoint（**try 块外**：地址解析失败异常上抛 → 本实现 panic! 同位置上抛）
     /// → modern 查询 → 失败且（tcpConnected && ShouldFallbackToLegacy）→ legacy 查询。
+    /// 实际编排见固有方法 `get_server_state_by_address_inner`。
     ///
-    /// ⚠️ tcpConnected：源以 `out bool` 记录 TCP 是否已连接，仅 true 且错误类型命中才回退；
-    /// Protocol/Json 类错误只在连接成功后出现（读/解析阶段）→ tcpConnected 由错误种类蕴含，
-    /// 本实现直接按错误消息分类（should_fallback_to_legacy），等价。
-    ///
-    /// ⚠️ 同步方法内以 `Handle::current().block_on` 阻塞驱动 async（对应源
-    /// `GetAwaiter().GetResult()`）：调用方须处于 tokio runtime 上下文（无 runtime → panic）。
-    /// modern 查询的 ct 用新建令牌（源同步路径自建 5s 连接 CTS，无外部 ct）。
+    /// ⚠️ 同步包装：以 `Handle::current().block_on` 阻塞驱动 async（对应源
+    /// `GetAwaiter().GetResult()`）：调用方须处于 tokio runtime 上下文（无 runtime → panic），
+    /// 且**不得在 runtime worker 线程内调用**（worker 内 block_on → panic
+    /// "Cannot start a runtime from within a runtime"）→ tokio async 上下文
+    /// （axum handler 等）请用 `get_server_state_by_address_async`。
     fn get_server_state_by_address(&self, address: &str) -> ServerState {
-        // 源：var state = new ServerState { Address = address, Name = TryGetServerNameByAddress(address) };
-        let state = ServerState {
-            address: address.to_string(),
-            name: self.try_get_server_name_by_address(address),
-            ..ServerState::default()
-        };
-
-        // 源：var endpoint = ResolveStatusEndpoint(address);（try 块外）
+        // 源：GetAwaiter().GetResult()（同步驱动 async 编排核心）
         let handle = tokio::runtime::Handle::current();
-        handle.block_on(async {
-            let endpoint = resolve_status_endpoint(self, address).await;
+        handle.block_on(self.get_server_state_by_address_inner(address))
+    }
 
-            // 源：QueryModernServerState（同步路径）；错误在内部收敛为离线状态
-            let ct = CancellationToken::new();
-            let modern = query_modern_server_state(&endpoint, state, &ct).await;
-            // 源成功路径：直接返回（IsOnline/ErrorMessage/Ping 已填）
-            if modern.is_online {
-                return modern;
-            }
-
-            // 源：catch → if (tcpConnected && ShouldFallbackToLegacy(ex))
-            //      → QueryLegacyServerState(endpoint, state, ex.Message)
-            if should_fallback_to_legacy(&modern.error_message) {
-                // 传入 modern 查询后的状态（源 catch 后同一 state 对象续用，保留可能
-                // 已解析的 icon 等字段）；priorError = ex.Message = ErrorMessage
-                let prior_error = modern.error_message.clone();
-                query_legacy_server_state(&endpoint, modern, &prior_error).await
-            } else {
-                // 源：state.IsOnline = false; state.ErrorMessage = ex.Message; return state;
-                modern
-            }
-        })
+    /// 按地址获取服务器状态的 async 编排版本（源：GetServerStateByAddress 的 async 等价；
+    /// 供 tokio async 上下文直接调用，避免同步变体在 runtime worker 线程内
+    /// block_on 的 "Cannot start a runtime from within a runtime" panic）。
+    async fn get_server_state_by_address_async(&self, address: &str) -> ServerState {
+        self.get_server_state_by_address_inner(address).await
     }
 
     /// Ping 指定主机与端口（源：PingAsync(string host, int port, CancellationToken ct)；
