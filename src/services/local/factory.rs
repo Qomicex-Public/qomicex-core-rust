@@ -29,48 +29,46 @@ use super::screenshots::Screenshots;
 use super::shaders::ShadersService;
 
 /// 本地资源工厂（源：`DefaultLocalResourcesFactory`，DefaultLocalModsFactory.cs）。
-/// 持有共享的 HTTP 客户端与游戏根目录，按调用参数创建各类本地内容管理器实例。
+/// 持有共享的 HTTP 客户端，按调用参数创建各类本地内容管理器实例。
 ///
 /// 分派语义：C# 每次 create 调用 `new Xxx(...)` 创建新实例并共享同一个 HttpClient
 /// （引用传递）→ Rust 返回 `Box<dyn XxxManager + Send + Sync>` 转移所有权；
 /// `reqwest::Client` 内部为 Arc 包装的轻量克隆，`clone()` 保持"共享同一客户端"语义
 /// （同 api/installer.rs 的 CreateFtbModpack 映射决策）。
+///
+/// ⚠️ 签名差异（翻译日志 p18 后修订）：源方法首参为 `gameDir`（按实例目录），早期
+/// Rust 翻译由工厂持有的 `game_root` 提供 → 实例拥有独立 .minecraft 目录时扫错目录
+/// （主仓 instance_files.rs resolve() 按实例解析，全局 game_root 对不上）→ 已移除
+/// `game_root` 字段，game_dir 由调用方每次显式传入。
 pub(crate) struct DefaultLocalResourcesFactory {
     /// 共享 HTTP 客户端（源：`_http`，HttpClient）
     http: reqwest::Client,
-    /// 游戏根目录（源：`_gameRoot`）
-    game_root: String,
     /// 图标缓存目录（源无对应；Rust 新增：per-jar 图标内容哈希磁盘缓存）
     icon_cache_dir: Option<PathBuf>,
 }
 
 impl DefaultLocalResourcesFactory {
-    /// 创建工厂（源：`DefaultLocalResourcesFactory(HttpClient http, string gameRoot)`；
-    /// `HttpClient` → `reqwest::Client`，MAPPING_TABLE runtime 映射）
-    pub(crate) fn new(
-        http: reqwest::Client,
-        game_root: String,
-        icon_cache_dir: Option<PathBuf>,
-    ) -> Self {
+    /// 创建工厂（源：`DefaultLocalResourcesFactory(HttpClient http)`）
+    pub(crate) fn new(http: reqwest::Client, icon_cache_dir: Option<PathBuf>) -> Self {
         Self {
             http,
-            game_root,
             icon_cache_dir,
         }
     }
 }
 
 impl LocalResourcesFactory for DefaultLocalResourcesFactory {
-    /// 创建 Mod 管理器（源：`CreateMods(string version, bool versionSegmented, string apiKey)`）
+    /// 创建 Mod 管理器（源：`CreateMods(string gameDir, string version, bool versionSegmented, string apiKey)`）
     fn create_mods(
         &self,
+        game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
     ) -> Box<dyn ModsManager + Send + Sync> {
         Box::new(Mods::new(
             self.http.clone(),
-            self.game_root.clone(),
+            game_dir.to_string(),
             version.to_string(),
             version_segmented,
             api_key.to_string(),
@@ -78,94 +76,100 @@ impl LocalResourcesFactory for DefaultLocalResourcesFactory {
         ))
     }
 
-    /// 创建存档管理器（源：`CreateSaves(string version, bool versionSegmented, string apiKey)`）
+    /// 创建存档管理器（源：`CreateSaves(string gameDir, string version, bool versionSegmented, string apiKey)`）
     fn create_saves(
         &self,
+        game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
     ) -> Box<dyn SavesManager + Send + Sync> {
         Box::new(Saves::new(
             self.http.clone(),
-            self.game_root.clone(),
+            game_dir.to_string(),
             version.to_string(),
             version_segmented,
             api_key.to_string(),
         ))
     }
 
-    /// 创建资源包管理器（源：`CreateResourcepack(string version, bool versionSegmented, string apiKey)`）
+    /// 创建资源包管理器（源：`CreateResourcepack(string gameDir, string version, bool versionSegmented, string apiKey)`）
     fn create_resourcepack(
         &self,
+        game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
     ) -> Box<dyn ResourcepackManager + Send + Sync> {
         Box::new(ResourcepackService::new(
             self.http.clone(),
-            self.game_root.clone(),
+            game_dir.to_string(),
             version.to_string(),
             version_segmented,
             api_key.to_string(),
         ))
     }
 
-    /// 创建光影管理器（源：`CreateShaders(string version, bool versionSegmented, string apiKey)`）
+    /// 创建光影管理器（源：`CreateShaders(string gameDir, string version, bool versionSegmented, string apiKey)`）
     fn create_shaders(
         &self,
+        game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
     ) -> Box<dyn ShadersManager + Send + Sync> {
         Box::new(ShadersService::new(
             self.http.clone(),
-            self.game_root.clone(),
+            game_dir.to_string(),
             version.to_string(),
             version_segmented,
             api_key.to_string(),
         ))
     }
 
-    /// 创建截图管理器（源：`CreateScreenshots(string version, bool versionSegmented, string apiKey)`）
+    /// 创建截图管理器（源：`CreateScreenshots(string gameDir, string version, bool versionSegmented, string apiKey)`）
     fn create_screenshots(
         &self,
+        game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
     ) -> Box<dyn ScreenshotsManager + Send + Sync> {
         Box::new(Screenshots::new(
             self.http.clone(),
-            self.game_root.clone(),
+            game_dir.to_string(),
             version.to_string(),
             version_segmented,
             api_key.to_string(),
         ))
     }
 
-    /// 创建数据包管理器（源：`CreateDataPacks(string version, bool versionSegmented, string apiKey)`）
+    /// 创建数据包管理器（源：`CreateDataPacks(string gameDir, string version, bool versionSegmented, string apiKey)`）
     fn create_data_packs(
         &self,
+        game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
     ) -> Box<dyn DataPacksManager + Send + Sync> {
         Box::new(DataPacks::new(
             self.http.clone(),
-            self.game_root.clone(),
+            game_dir.to_string(),
             version.to_string(),
             version_segmented,
             api_key.to_string(),
         ))
     }
 
-    /// 创建服务器管理器（源：ContentService.CreateServerManager → new ServerManager(gameDir, version, versionSpecific)）
+    /// 创建服务器管理器（源：ContentService.CreateServerManager(gameDir, version, versionSpecific)）
     fn create_server_manager(
         &self,
+        game_dir: &str,
         version: &str,
         version_specific: bool,
     ) -> Box<dyn crate::api::server::ServerManager + Send + Sync> {
         Box::new(crate::services::server::servers_dat::ServerManager::new(
-            self.game_root.clone(),
+            game_dir.to_string(),
             version.to_string(),
             version_specific,
         ))

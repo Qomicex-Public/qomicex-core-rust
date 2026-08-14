@@ -1741,9 +1741,9 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_instanceFilesMe
     let category = get_string(&mut env, category);
     let version_segmented = get_string(&mut env, version_segmented) == "true";
 
-    let factory = DefaultLocalResourcesFactory::new(reqwest::Client::new(), game_dir, None);
+    let factory = DefaultLocalResourcesFactory::new(reqwest::Client::new(), None);
     let result: Value = match category.as_str() {
-        "mods" => match block_on(factory.create_mods(&version_name, version_segmented, "").get_mod_list(None)) {
+        "mods" => match block_on(factory.create_mods(&game_dir, &version_name, version_segmented, "").get_mod_list(None)) {
             Ok(list) => json!(list.iter().map(|m| {
                 let mut j = local_meta_json(
                     &m.file_path,
@@ -1764,7 +1764,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_instanceFilesMe
             }).collect::<Vec<Value>>()),
             Err(e) => err_json(format!("{e}")),
         },
-        "resourcepacks" => match block_on(factory.create_resourcepack(&version_name, version_segmented, "").get_resource_pack_list()) {
+        "resourcepacks" => match block_on(factory.create_resourcepack(&game_dir, &version_name, version_segmented, "").get_resource_pack_list()) {
             Ok(list) => json!(list.iter().map(|r| {
                 local_meta_json(
                     &r.file_path,
@@ -1779,7 +1779,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_instanceFilesMe
             }).collect::<Vec<Value>>()),
             Err(e) => err_json(format!("{e}")),
         },
-        "shaders" => match block_on(factory.create_shaders(&version_name, version_segmented, "").get_shader_list()) {
+        "shaders" => match block_on(factory.create_shaders(&game_dir, &version_name, version_segmented, "").get_shader_list()) {
             Ok(list) => json!(list.iter().map(|s| {
                 local_meta_json(
                     &s.file_path,
@@ -1794,7 +1794,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_instanceFilesMe
             }).collect::<Vec<Value>>()),
             Err(e) => err_json(format!("{e}")),
         },
-        "datapacks" => match block_on(factory.create_data_packs(&version_name, version_segmented, "").get_data_pack_list()) {
+        "datapacks" => match block_on(factory.create_data_packs(&game_dir, &version_name, version_segmented, "").get_data_pack_list()) {
             Ok(list) => json!(list.iter().map(|d| {
                 local_meta_json(
                     &d.file_path,

@@ -12,8 +12,8 @@ use crate::models::expansion::local::{
 };
 
 // 方法映射表：
-// - `CreateMods(string version, bool versionSegmented, string apiKey) -> Mods`
-//   → `create_mods(&self, version: &str, version_segmented: bool, api_key: &str) -> Box<dyn ModsManager + Send + Sync>`
+// - `CreateMods(string gameDir, string version, bool versionSegmented, string apiKey) -> Mods`
+//   → `create_mods(&self, game_dir: &str, version: &str, version_segmented: bool, api_key: &str) -> Box<dyn ModsManager + Send + Sync>`
 // - `CreateSaves(...) -> Saves` → `create_saves(...) -> Box<dyn SavesManager + Send + Sync>`
 // - `CreateResourcepack(...) -> Resourcepack` → `create_resourcepack(...) -> Box<dyn ResourcepackManager + Send + Sync>`
 // - `CreateShaders(...) -> Shaders` → `create_shaders(...) -> Box<dyn ShadersManager + Send + Sync>`
@@ -22,8 +22,13 @@ use crate::models::expansion::local::{
 //   （6 个方法参数形态一致，均为同步方法，无 Task → 普通 fn）
 // - `CreateServerManager(string gameDir, string version, bool versionSpecific) -> ServerManager`
 //   （源：ContentService.CreateServerManager，Services/Options/ServerManager.cs）
-//   → `create_server_manager(&self, version: &str, version_specific: bool) -> Box<dyn ServerManager + Send + Sync>`
-//   （gameDir 由工厂持有的 game_root 提供 → 签名缺省 game_dir 参数；无 apiKey，与其余 6 个形态不同）
+//   → `create_server_manager(&self, game_dir: &str, version: &str, version_specific: bool) -> Box<dyn ServerManager + Send + Sync>`
+//
+// ⚠️ 签名差异（翻译日志 p18 后修订）：源方法第一个参数均为 `gameDir`（`new Mods(gameDir, ...)`），
+// 早期 Rust 翻译以工厂持有的 `game_root` 提供该参数 → 签名缺省 game_dir。C# 后端按实例
+// 传入 `ResolveGameDir(inst)`，实例可拥有独立 .minecraft 目录，固定 game_root 会导致
+// 实例目录 ≠ 全局设置时扫错目录（见主仓 instance_files.rs resolve()）→ 已按源补齐
+// `game_dir` 首参，工厂不再持有固定目录。
 //
 // ⚠️ 占位标注：源方法返回的是 concrete class（Mods/Saves/Resourcepack/Shaders/
 // Screenshots/DataPacks，均继承 LocalResourceBase，见 Services/Expansion/Local/），
@@ -33,12 +38,13 @@ use crate::models::expansion::local::{
 // 逐次 new）→ Rust 所有权转移 `Box<dyn ...>`；不用 `&dyn`（借用无法持有新创建对象）。
 
 /// 本地内容资源工厂（源：ILocalResourcesFactory）。
-/// 按版本号、版本分段目录、API Key 创建各类本地内容管理器
+/// 按实例游戏目录、版本号、版本分段目录、API Key 创建各类本地内容管理器
 /// （Mods/存档/资源包/光影/截图/数据包）。
 pub trait LocalResourcesFactory: Send + Sync {
     /// 创建 Mod 管理器（源：CreateMods）
     fn create_mods(
         &self,
+        game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
@@ -47,6 +53,7 @@ pub trait LocalResourcesFactory: Send + Sync {
     /// 创建存档管理器（源：CreateSaves）
     fn create_saves(
         &self,
+        game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
@@ -55,6 +62,7 @@ pub trait LocalResourcesFactory: Send + Sync {
     /// 创建资源包管理器（源：CreateResourcepack）
     fn create_resourcepack(
         &self,
+        game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
@@ -63,6 +71,7 @@ pub trait LocalResourcesFactory: Send + Sync {
     /// 创建光影管理器（源：CreateShaders）
     fn create_shaders(
         &self,
+        game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
@@ -71,6 +80,7 @@ pub trait LocalResourcesFactory: Send + Sync {
     /// 创建截图管理器（源：CreateScreenshots）
     fn create_screenshots(
         &self,
+        game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
@@ -79,15 +89,17 @@ pub trait LocalResourcesFactory: Send + Sync {
     /// 创建数据包管理器（源：CreateDataPacks）
     fn create_data_packs(
         &self,
+        game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
     ) -> Box<dyn DataPacksManager + Send + Sync>;
 
     /// 创建服务器管理器（源：ContentService.CreateServerManager(gameDir, version, versionSpecific)；
-    /// 后端按实例调用。gameDir 由工厂持有的 game_root 提供 → 签名缺省 game_dir 参数）
+    /// 后端按实例调用，game_dir 为实例目录）
     fn create_server_manager(
         &self,
+        game_dir: &str,
         version: &str,
         version_specific: bool,
     ) -> Box<dyn ServerManager + Send + Sync>;

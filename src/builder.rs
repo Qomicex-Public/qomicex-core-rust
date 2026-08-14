@@ -405,12 +405,11 @@ impl GameCoreBuilder {
             None => Arc::new(DefaultInstallerFactory),
         };
 
-        // 源：_localResourceProvider ??= new DefaultLocalResourcesFactory(http, _options.GameRoot)
+        // 源：_localResourceProvider ??= new DefaultLocalResourcesFactory(http)
         let local_resource_provider = match &self.local_resource_provider {
             Some(provider) => provider.clone(),
             None => Arc::new(DefaultLocalResourcesFactory::new(
                 http.clone(),
-                self.options.game_root.clone(),
                 self.options.icon_cache_dir.as_deref().map(PathBuf::from),
             )),
         };
