@@ -566,3 +566,98 @@ fn join_path(a: &str, b: &str) -> String {
     Path::new(a).join(b).to_string_lossy().to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::installers::installer::InstallerBase;
+
+    fn base_with(game_dir: &str) -> ForgeInstallerBase {
+        ForgeInstallerBase {
+            base_url: "https://maven.minecraftforge.net".to_string(),
+            source_id: 0,
+            game_dir: game_dir.to_string(),
+            game_version: "26.2".to_string(),
+            installer_path: "C:/tmp/forge-26.2-65.1.1-installer.jar".to_string(),
+            main_jar_path: "versions/26.2/26.2.jar".to_string(),
+            source_mappings: Vec::new(),
+        }
+    }
+
+    /// install_profile.json 的 data 段（对齐 Forge 1.21.x / 26.2-65.1.1）
+    fn install_profile_with_data() -> serde_json::Value {
+        serde_json::json!({
+            "path": "net.minecraftforge:forge:26.2-65.1.1:shim",
+            "data": {
+                "PATCHED": { "client": "[net.minecraftforge:forge:26.2-65.1.1:client]" },
+                "PATCHED_SHA": { "client": "'f9ef709fa7988febfca4c91b87d3d1ad8a438097'" },
+                "MC_UNPACKED": { "client": "[net.minecraft:client:26.2]" },
+                "MINECRAFT_JAR": { "client": null }
+            }
+        })
+    }
+
+    #[test]
+    fn replace_arguments_with_populated_game_dir_resolves_patched_to_absolute_path() {
+        // 回归：基类 game_dir 必须被填充，否则 `{PATCHED}`（内联 Maven 坐标
+        // `[net.minecraftforge:forge:26.2-65.1.1:client]`）会解析成相对 `libraries\…`，
+        // 导致 binarypatcher 的 --output 指向坏路径、processor 退出码 1。
+        let base = base_with(r"C:\Games\.minecraft");
+        let ip_obj = install_profile_with_data();
+        let ip_map = ip_obj.as_object().expect("object");
+
+        let resolved =
+            base.replace_arguments(ip_map, &format!("{{PATCHED}}={{PATCHED_SHA}}"))
+                .expect("replace_arguments 不应失败");
+
+        let expected_abs = join_path(
+            &join_path(r"C:\Games\.minecraft", "libraries"),
+            &InstallerBase::maven_to_path("net.minecraftforge:forge:26.2-65.1.1:client")
+                .replace('/', &std::path::MAIN_SEPARATOR.to_string()),
+        );
+        assert!(
+            resolved.starts_with(&expected_abs),
+            "应解析为绝对库路径，got: {resolved}"
+        );
+        // 不应是相对 `libraries\…`（修复前空 game_dir 的错误形态）
+        assert!(
+            !resolved.starts_with("libraries\\net\\"),
+            "不应是相对 libraries 路径: {resolved}"
+        );
+    }
+
+    #[test]
+    fn output_key_resolves_to_absolute_with_populated_game_dir_not_reparsed() {
+        // 回归核心：`resolve_processor_output_path` 对二进制补丁输出键在此前空 game_dir 下
+        // 拿到的是“相对 libraries 路径”，随后把它当 Maven 坐标再喂给 maven_to_path →
+        // 日志 `无效的Maven坐标格式：libraries\net\…client.jar，至少需要3个部分`，
+        // 且 --output 指向无盘符的坏路径。修复后 game_dir 非空 → 输出键为绝对路径，
+        // resolve_processor_output_path 走 rooted 分支、不再触发该报错。
+        let processed_key =
+            base_with("")
+                .replace_arguments(
+                    install_profile_with_data().as_object().expect("object"),
+                    "{PATCHED}".into(),
+                )
+                .expect("resolve");
+        // 修复前形态：空 game_dir 得到相对 `libraries\net\…`
+        assert!(
+            processed_key.starts_with("libraries\\net\\minecraftforge\\forge\\"),
+            "空 game_dir 应产生相对 libraries 路径：{processed_key}"
+        );
+        // 修复后形态：game_dir 非空 → 输出键为绝对、rooted，可直接归属 gameDir 前缀
+        let populated_key = base_with(r"C:\Games\.minecraft")
+            .replace_arguments(
+                install_profile_with_data().as_object().expect("object"),
+                "{PATCHED}".into(),
+            )
+            .expect("resolve");
+        assert!(Path::new(&populated_key).is_absolute(), "应为绝对路径：{populated_key}");
+        assert!(
+            populated_key
+                .get(..r"C:\Games\.minecraft".len())
+                .is_some_and(|h| h.eq_ignore_ascii_case(r"C:\Games\.minecraft")),
+            "应以 gameDir 为前缀：{populated_key}"
+        );
+    }
+}
+

@@ -109,13 +109,13 @@ impl ForgeInstaller {
         Self {
             source_id,
             base_url: base_url.clone(),
-            game_dir,
-            game_version,
+            game_dir: game_dir.clone(),
+            game_version: game_version.clone(),
             base: ForgeInstallerBase {
                 base_url,
                 source_id,
-                game_dir: String::new(),
-                game_version: String::new(),
+                game_dir: game_dir.clone(),
+                game_version: game_version.clone(),
                 installer_path: String::new(),
                 main_jar_path: String::new(),
                 source_mappings: source_mappings.iter().map(|(o, d)| SourcesList { original: o.clone(), default: d.clone() }).collect(),
@@ -134,8 +134,8 @@ impl ForgeInstaller {
         inherits_from_json: &str,
         java_path: &str,
         forge_installer_path: &str,
-        _installer_path: &str,
-        _main_jar_path: &str,
+        installer_path: &str,
+        main_jar_path: &str,
     ) -> Result<(), Error> {
         // 源：List<string> backFiles = []; List<string> backDirs = [];
         let mut back_files: Vec<String> = Vec::new();
@@ -329,6 +329,29 @@ impl ForgeInstaller {
 
         // 源：var processors = installProfileJson["processors"] as JsonArray;
         //      if (processors != null && processors.Count > 0) { ... }
+        //
+        // ⚠️ ForgeInstallerBase 未派生 Clone（P38 定案）→ 镜像 neoforge/install.rs 的
+        // Neoforge 先例（install_neoforge 内的"手工逐字段复制"）：trait 仅提供 `&self`，
+        // 故把本次安装动态状态（installer_path / main_jar_path）写入基类副本后再转交
+        // run_processor，否则 run_processor/replace_arguments 读到的基类 game_dir /
+        // installer_path / main_jar_path 为空，处理器输出路径会解析成相对 `libraries\…`。
+        let base = ForgeInstallerBase {
+            base_url: self.base.base_url.clone(),
+            source_id: self.base.source_id,
+            game_dir: self.base.game_dir.clone(),
+            game_version: self.base.game_version.clone(),
+            installer_path: installer_path.to_string(),
+            main_jar_path: main_jar_path.to_string(),
+            source_mappings: self
+                .base
+                .source_mappings
+                .iter()
+                .map(|m| SourcesList {
+                    original: m.original.clone(),
+                    default: m.default.clone(),
+                })
+                .collect(),
+        };
         if let Some(processors) = install_profile_json.get("processors").and_then(|v| v.as_array()) {
             if !processors.is_empty() {
                 eprintln!("开始执行Processor后处理，共 {} 个处理器", processors.len());
@@ -348,13 +371,12 @@ impl ForgeInstaller {
                     }
                     // 源：await RunProcessor(installProfileJson, processorObj, versionId, gameDir, javaPath);
                     //      catch (Exception ex) { BackInstall; throw new Exception($"处理器执行失败: ..."); }
-                    if let Err(ex) = self
-                        .base
+                    if let Err(ex) = base
                         .run_processor(
                             install_profile_json.as_object().unwrap_or(&Map::new()),
                             processor.as_object().unwrap_or(&Map::new()),
                             version_id,
-                            &self.game_dir,
+                            &base.game_dir,
                             java_path,
                         )
                         .await
