@@ -626,6 +626,60 @@ mod tests {
     }
 
     #[test]
+    fn binarypatcher_client_args_compose_cleanly() {
+        // 诊断：对真实 binarypatcher(client) 参数做替换，打印最终传给 Java 的完整命令串，
+        // 确认参数没有错位/缺参（此前 exit code 1 需确认是参数问题还是运行时）。
+        let base = base_with(r"C:\Games\.minecraft");
+        let ip_obj = serde_json::json!({
+            "path": "net.minecraftforge:forge:26.2-65.1.1:shim",
+            "data": {
+                "PATCHED": { "client": "[net.minecraftforge:forge:26.2-65.1.1:client]" },
+                "PATCHED_SHA": { "client": "'f9ef709fa7988febfca4c91b87d3d1ad8a438097'" },
+                "MC_UNPACKED": { "client": "[net.minecraft:client:26.2]" },
+                "BINPATCH": { "client": r"%BINPATCH" }
+            }
+        });
+        // 模拟 install_forge 改写 BINPATCH.client 为 lzma 绝对路径
+        let lzma_dir = join_path(
+            &join_path(&join_path(&base.game_dir, "libraries"), "net"),
+            "minecraftforge",
+        );
+        let lzma_dir = join_path(&join_path(&lzma_dir, "forge"), "26.2-65.1.1");
+        let binpatch_val = format!("\"{}\"", join_path(&lzma_dir, "client.lzma"));
+        let mut ip_mut = ip_obj;
+        ip_mut["data"]["BINPATCH"]["client"] = serde_json::Value::String(binpatch_val.clone());
+        let ip_map = ip_mut.as_object().expect("obj");
+
+        let raw_args = "--clean {MINECRAFT_JAR} --output {PATCHED} --apply {BINPATCH} --data --unpatched --store --marker .forge_patched_minecraft";
+        let args = base
+            .replace_arguments(ip_map, raw_args)
+            .expect("replace_arguments 不应失败");
+        eprintln!("[binarypatcher client args] {args}");
+        assert!(
+            args.contains("--clean ") && args.contains("--apply ") && args.contains("--output "),
+            "参数不完整: {args}"
+        );
+        // `{MINECRAFT_JAR}` 应指向 versions 目录下的 jar（分隔符可能是 \ 或 /）
+        assert!(
+            args.contains("versions") && args.contains("26.2.jar"),
+            "{{MINECRAFT_JAR}} 应含 versions 目录与 26.2.jar: {args}"
+        );
+        assert!(
+            args.contains("forge-26.2-65.1.1-client.jar"),
+            "--output 应指向 forge client jar: {args}"
+        );
+        assert!(
+            args.contains("client.lzma"),
+            "--apply 应指向 client.lzma: {args}"
+        );
+        assert!(
+            !args.contains("{BINPATCH}") && !args.contains("{PATCHED}") && !args.contains("{MINECRAFT_JAR}"),
+            "未替换的占位符残留: {args}"
+        );
+        eprintln!("[binarypatcher client args] {args}");
+    }
+
+    #[test]
     fn output_key_resolves_to_absolute_with_populated_game_dir_not_reparsed() {
         // 回归核心：`resolve_processor_output_path` 对二进制补丁输出键在此前空 game_dir 下
         // 拿到的是“相对 libraries 路径”，随后把它当 Maven 坐标再喂给 maven_to_path →
