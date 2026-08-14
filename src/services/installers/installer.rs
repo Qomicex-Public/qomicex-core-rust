@@ -370,7 +370,8 @@ impl InstallerBase {
     /// 整个字符串当作**单个字面参数**（不做命令行切词）传给 java → java 把
     /// `-cp "…classpath…" main …` 判为 `Unrecognized option` → `Could not create the
     /// Java Virtual Machine` → 退出码 1（binarypatcher/installertools 等 java 处理器全失败）。
-    /// 修复：Windows 下对非 cmd 程序（java 等）用 Windows 命令行规则切词，逐参数 `.arg()`。
+    /// 修复：Windows 下对非 cmd 程序（java 等）复用 `launch::process::split_command_line`
+    /// （CommandLineToArgvW 规则，launch 路径已用）切词，逐参数 `.arg()`。
     pub(crate) fn run_install_process(arguments: &str, program: Option<&str>) -> i32 {
         let program = match program {
             Some(p) => p.to_string(),
@@ -386,8 +387,8 @@ impl InstallerBase {
                 // cmd 仍需原始命令串，交由 cmd 自身的解析器处理
                 _command.arg("/c").arg(arguments);
             } else {
-                // java 等非 cmd 程序：按 Windows 命令行规则切词，逐参数传递（对齐 C#）
-                for token in split_windows_args(arguments) {
+                // java 等非 cmd 程序：按 Windows 命令行规则切词、逐参数传递（对齐 C#）
+                for token in crate::services::launch::process::split_command_line(arguments) {
                     _command.arg(token);
                 }
             }
@@ -462,100 +463,6 @@ fn is_redirect_status(status: reqwest::StatusCode) -> bool {
             | reqwest::StatusCode::SEE_OTHER
             | reqwest::StatusCode::TEMPORARY_REDIRECT
     )
-}
-
-/// 按 Windows 命令行规则把参数字符串切词（对齐 Win32 `CommandLineToArgvW` /
-/// `CreateProcess` 对 `ProcessStartInfo.Arguments` 的解析语义）。
-///
-/// 规则（微软 `Parsing C Command-Line Arguments`）：
-/// - 引号外的空白（空格/制表符）分隔参数；
-/// - `"` 进入/退出引号段，引号段内的空白不切词；引号本身不保留；
-/// - `\\` 连续反斜杠后跟 `"` 时，`2n` 个反斜杠 + `"` → `n` 个反斜杠 + 引号分割；
-/// - 引号段内的 `\"` → 字面 `"`。
-///
-/// ⚠️ 仅用于修复 `run_install_process` 在 Windows 非 cmd 程序（如 java.exe）下的
-/// 整串单参传递问题，使最终命令行与 C# 一致。
-#[cfg(windows)]
-fn split_windows_args(input: &str) -> Vec<String> {
-    let chars: Vec<char> = input.chars().collect();
-    let mut tokens: Vec<String> = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '\\' {
-            // 统计连续反斜杠数
-            let mut backslashes = 0usize;
-            while i < chars.len() && chars[i] == '\\' {
-                backslashes += 1;
-                i += 1;
-            }
-            // 若反斜杠后紧跟引号，视反斜杠为转义（微软 2n / 2n+1 规则）
-            if i < chars.len() && chars[i] == '"' {
-                let pairs = backslashes / 2;
-                for _ in 0..pairs {
-                    current.push('\\');
-                }
-                if backslashes % 2 == 1 {
-                    // 2n+1 个反斜杠 + " → n 个反斜杠 + 字面引号（不切换引号段）
-                    current.push('"');
-                } else {
-                    // 2n 个反斜杠 + " → n 个反斜杠 + 引号分割（切换引号段）
-                    in_quotes = !in_quotes;
-                }
-                i += 1; // 跳过引号
-            } else {
-                // 普通反斜杠，原样保留
-                for _ in 0..backslashes {
-                    current.push('\\');
-                }
-            }
-        } else if c == '"' {
-            in_quotes = !in_quotes;
-            i += 1;
-        } else if (c == ' ' || c == '\t') && !in_quotes {
-            if !current.is_empty() {
-                tokens.push(std::mem::take(&mut current));
-            }
-            i += 1;
-        } else {
-            current.push(c);
-            i += 1;
-        }
-    }
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-    tokens
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(windows)]
-    #[test]
-    fn split_windows_args_parses_quoted_arguments() {
-        let tokens = split_windows_args(
-            "-cp \"C:\\path\\.minecraft\\libraries net\\forge\\a.jar;C:\\b.jar\" net.minecraftforge.binarypatcher.ConsoleTool --clean \"C:\\x y\\26.2.jar\" --data",
-        );
-        assert_eq!(tokens.len(), 6, "got {tokens:?}");
-        assert_eq!(tokens[0], "-cp");
-        assert_eq!(tokens[1], "C:\\path\\.minecraft\\libraries net\\forge\\a.jar;C:\\b.jar");
-        assert_eq!(tokens[2], "net.minecraftforge.binarypatcher.ConsoleTool");
-        assert_eq!(tokens[3], "--clean");
-        assert_eq!(tokens[4], "C:\\x y\\26.2.jar");
-        assert_eq!(tokens[5], "--data");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn split_windows_args_handles_backslash_quote_escape() {
-        // `\"` 在引号内为字面引号
-        let tokens = split_windows_args(r#"--x "a\"b""#);
-        assert_eq!(tokens, vec!["--x", "a\"b"]);
-    }
 }
 
 

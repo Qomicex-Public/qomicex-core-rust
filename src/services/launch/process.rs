@@ -573,7 +573,9 @@ where
 /// - 双引号切换引号状态；引号内空白不切分
 /// - 反斜杠转义：`\` + `"` 时偶数个 `\` → 半数 `\` + 引号开关；奇数个 `\` → 半数 `\` + 字面 `"`
 /// - `""` 空参数保留为空字符串项（any_content 标记）
-fn split_command_line(line: &str) -> Vec<String> {
+/// pub(crate)：launch 与 install（installer.rs::run_install_process 修复 windows java 处理器
+/// 整串单参问题）共用同一套切词，避免两处规则漂移。
+pub(crate) fn split_command_line(line: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
