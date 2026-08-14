@@ -314,7 +314,6 @@ impl ForgeInstallerBase {
             &normalized_relative_path,
         ))
     }
-
     /// 解析 processor 输出键为本地文件路径（源：`internal string
     /// ResolveProcessorOutputPath(string outputKey)`）。
     ///

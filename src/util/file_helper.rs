@@ -28,6 +28,28 @@ pub fn validate_file_hash(file_path: &str, expected_hash: &str) -> bool {
     actual.eq_ignore_ascii_case(expected_hash)
 }
 
+/// 将文件系统路径字符串的目录分隔符统一为平台分隔符（对应
+/// 后端 `install_service.rs::normalize_sep`、`launch::process.rs` 的既有先例）。
+///
+/// Windows 上 `canonicalize()` 产生的 verbatim 路径（`\\?\` 前缀）中 `/` 不再是
+/// 路径分隔符而是普通字符，安装器经 `path_combine` 拼接 Maven 坐标路径时保留的 `/`
+/// （如 `libraries\net/minecraftforge/...jar`）会令 `create_dir_all`/`rename`/
+/// `std::fs::write` 报 `ERROR_INVALID_NAME (os error 123)`。为规避 verbatim 路径的
+/// 特殊语义，且 Windows 上 `/` 与 `\` 等价（verbatim 除外），统一替换为 `\` 无害。
+/// 非 Windows（且非 verbatim）平台上无操作。
+///
+/// ⚠️ 此函数仅用于**本地文件系统路径**，不可用于 URL 构造（URL 必须保留 `/`）。
+pub fn normalize_separators(path: &str) -> String {
+    #[cfg(windows)]
+    {
+        path.replace('/', "\\")
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string()
+    }
+}
+
 /// 格式化目录路径（对应 FileHelper.FormatDirPath）：含空格时用双引号包裹（供命令行参数使用）
 pub fn format_dir_path(path: &str) -> String {
     if path.contains(' ') {

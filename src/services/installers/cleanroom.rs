@@ -36,6 +36,7 @@ use serde_json::Value;
 use crate::error::Error;
 use crate::services::installers::installer::{Installer, InstallerBase, MissFileData};
 use crate::services::installers::neoforge::install::{check_libs_ver_static, LibInfo};
+use crate::util::file_helper::normalize_separators;
 
 /// Cleanroom 安装器（源：`internal class CleanroomInstaller : InstallerBase, IInstaller`）。
 ///
@@ -149,6 +150,9 @@ impl CleanroomInstaller {
                         InstallerBase::read_specify_file_from_zip(installer_path, &jar_entry_path)?;
                     let jar_full_path =
                         path_combine(&path_combine(&self.game_dir, "libraries"), &jar_rel_path);
+                    // Windows verbatim 路径（\\?\ 前缀）下 '/' 非分隔符，需换成 '\'
+                    //（详见 file_helper::normalize_separators），否则 std::fs::write 报 os error 123。
+                    let jar_full_path = normalize_separators(&jar_full_path);
                     // 源：`var jarDir = Path.GetDirectoryName(jarFullPath);
                     //      if (!string.IsNullOrEmpty(jarDir) && !Directory.Exists(jarDir)) { ...; backDirs.Add(jarDir); }`
                     if let Some(jar_dir) = Path::new(&jar_full_path).parent() {

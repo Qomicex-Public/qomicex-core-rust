@@ -245,7 +245,11 @@ impl InstallerBase {
             });
         }
 
-        let path = Path::new(destination_path);
+        // Windows verbatim（\\?\ 前缀）路径下 '/' 不是分隔符，安装器经 path_combine
+        // 拼接的 Maven 库路径（如 `libraries\net/...jar`）会令写文件报
+        // ERROR_INVALID_NAME (os error 123)；统一换成 '\'（规避同 download_batch）。
+        let destination_path = crate::util::file_helper::normalize_separators(destination_path);
+        let path = Path::new(&destination_path);
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() && !parent.is_dir() {
                 std::fs::create_dir_all(parent).map_err(|e| Error::DownloadFailed {

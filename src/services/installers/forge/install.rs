@@ -56,6 +56,7 @@ use crate::models::download::DownloadMirror;
 use crate::services::installers::forge_base::{ForgeInstallerBase, SourcesList};
 use crate::services::installers::installer::MissFileData;
 use crate::services::installers::installer::{Installer, InstallerBase};
+use crate::util::file_helper::normalize_separators;
 
 /// Forge 安装器（源：`internal class ForgeInstaller : ForgeInstallerBase, IInstaller`）。
 ///
@@ -286,6 +287,9 @@ impl ForgeInstaller {
             // 源：var forgeJar = ReadSpecifyFileFromZip(installer, $@"maven/{jarMavenPath}");
             let forge_jar = InstallerBase::read_specify_file_from_zip(forge_installer_path, &format!("maven/{jar_maven_path}"))?;
             let jar_full_path = path_combine(&path_combine(&self.game_dir, "libraries"), &jar_maven_path);
+            // Windows verbatim 路径（\\?\ 前缀）下 '/' 非分隔符，需换成 '\'
+            // （详见 file_helper::normalize_separators），否则 std::fs::write 报 os error 123。
+            let jar_full_path = normalize_separators(&jar_full_path);
             // 源：Path.GetDirectoryName → 无父目录时为 null → Directory.CreateDirectory(null) 抛 ArgumentNullException
             let jar_dir = Path::new(&jar_full_path)
                 .parent()
@@ -489,6 +493,9 @@ impl ForgeInstaller {
         //      （zip 内文件名与落盘名可能不同：filePath 取自 install.filePath，落盘为 MavenToPath(install.path ?? path)）
         let forge_jar = InstallerBase::read_specify_file_from_zip(forge_installer_path, &file_path)?;
         let jar_full_path = path_combine(&path_combine(&self.game_dir, "libraries"), &jar_maven_path);
+        // Windows verbatim 路径（\\?\ 前缀）下 '/' 非分隔符，需换成 '\'
+        // （详见 file_helper::normalize_separators），否则 std::fs::write 报 os error 123。
+        let jar_full_path = normalize_separators(&jar_full_path);
         let jar_dir = Path::new(&jar_full_path)
             .parent()
             .ok_or_else(|| Error::Params {
@@ -604,7 +611,7 @@ impl ForgeInstaller {
             // 源：var libInfo = new LibInfo { FullName = libObj["name"]?.ToString() ?? string.Empty };
             let lib_info = LibInfo::new(lib_obj.get("name").map(json_node_to_string).unwrap_or_default());
             // 源：var libPath = Path.Combine(gameDir, "libraries", libInfo.Path);
-            let lib_path = path_combine(&path_combine(&self.game_dir, "libraries"), &lib_info.path);
+            let lib_path = normalize_separators(&path_combine(&path_combine(&self.game_dir, "libraries"), &lib_info.path));
             if Path::new(&lib_path).is_file() {
                 // 源：if (!string.IsNullOrEmpty(Hash) && VerifyFileSha1(libPath, Hash)) continue;
                 //      else { if (string.IsNullOrEmpty(Hash)) continue; }
@@ -659,7 +666,7 @@ impl ForgeInstaller {
 
         let mut miss_files = Vec::new();
         for lib in libs {
-            let lib_path = path_combine(&path_combine(&self.game_dir, "libraries"), &lib.path);
+            let lib_path = normalize_separators(&path_combine(&path_combine(&self.game_dir, "libraries"), &lib.path));
             if !Path::new(&lib_path).is_file() {
                 // 源：url 解析（见方法 doc）
                 let mut url = String::new();
