@@ -265,6 +265,50 @@ pub struct FingerprintsRequest {
     pub fingerprints: Vec<i64>,
 }
 
+/// 指纹反查命中的文件（源 CurseForge 指纹响应 file / latestFiles 元素；Rust 新增，用于更新判定）。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseForgeFingerprintFile {
+    #[serde(rename = "id")]
+    pub file_id: i64,
+    #[serde(rename = "modId")]
+    pub mod_id: i64,
+    #[serde(default)]
+    pub is_available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_name: Option<String>,
+    /// 源字段为 DateTime，按 B1 决策用 String 保存原始文本（未引入 chrono）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub download_url: Option<String>,
+    #[serde(default)]
+    pub hashes: Vec<CurseForgeFingerprintFileHash>,
+    #[serde(default)]
+    pub game_versions: Vec<String>,
+}
+
+/// 指纹反查文件哈希（algo 1 = SHA1）。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseForgeFingerprintFileHash {
+    pub value: String,
+    pub algo: i32,
+}
+
+/// 指纹反查完整命中（file = 当前已安装文件，latestFiles = 候选更新文件）。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CurseForgeFingerprintMatch {
+    pub fingerprint: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<CurseForgeFingerprintFile>,
+    #[serde(default)]
+    pub latest_files: Vec<CurseForgeFingerprintFile>,
+}
+
 /// CurseForge ModLoaderType 字符串常量类（源：ModLoaderType.cs 静态类，非枚举）。
 /// JSON 值即字符串本身；All 为除 Any 外的全部加载器。
 pub mod mod_loader_type {

@@ -37,7 +37,8 @@
 use async_trait::async_trait;
 use crate::error::Error;
 use crate::models::expansion::curseforge::{
-    CurseForgeFileInfo, CurseForgeInfo, CurseForgeSearchResponse, FingerprintsFilesMeta,
+    CurseForgeFileInfo, CurseForgeFingerprintMatch, CurseForgeInfo, CurseForgeSearchResponse,
+    FingerprintsFilesMeta,
 };
 use crate::models::expansion::ftb::{
     ChangelogResult, ModpackInfo, VersionDetail, VersionInfo as FtbVersionInfo,
@@ -87,6 +88,15 @@ pub trait ModrinthSource: Send + Sync {
         &self,
         hashes: &[String],
     ) -> Result<HashMap<String, ProjectVersionInfo>, Error>;
+
+    /// 通过哈希值反查匹配指定加载器/游戏版本的最新版本，返回 哈希 → 最新版本 映射
+    /// （Modrinth `POST v2/version_files/update`；源 C# 无对应方法，为更新检查新增）。
+    async fn get_latest_versions_from_hashes(
+        &self,
+        hashes: &[String],
+        loaders: &[String],
+        game_versions: &[String],
+    ) -> Result<HashMap<String, ModrinthVersionInfo>, Error>;
 
     /// 获取分类标签列表（源：`GetCategoriesAsync`）。
     async fn get_categories(&self) -> Result<Vec<ModrinthTag>, Error>;
@@ -139,6 +149,13 @@ pub trait CurseForgeSource: Send + Sync {
         &self,
         hashes: &[i64],
     ) -> Result<HashMap<i64, FingerprintsFilesMeta>, Error>;
+
+    /// 通过指纹反查完整命中（file = 当前已安装文件，latestFiles = 候选更新文件）。
+    /// 源 C# 无对应方法，为批次更新检查新增。
+    async fn get_fingerprint_matches(
+        &self,
+        hashes: &[i64],
+    ) -> Result<Vec<CurseForgeFingerprintMatch>, Error>;
 }
 
 /// FTB 数据源（源：IFTBSource 接口）。

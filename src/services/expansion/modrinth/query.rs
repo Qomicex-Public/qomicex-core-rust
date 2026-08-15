@@ -42,7 +42,7 @@ use crate::api::expansion::ModrinthSource;
 use crate::error::Error;
 use crate::models::expansion::modrinth::{
     FileHashes, ModrinthFile, ModrinthTag, ModrinthVersionInfo, ProjectInfo, ProjectVersionInfo,
-    SearchResult, VersionFileInfo, VersionFilesRequest, VersionInfo,
+    SearchResult, VersionFileInfo, VersionFilesRequest, VersionFilesUpdateRequest, VersionInfo,
 };
 
 /// 默认基础 URL（源：`private const string DefaultBaseUrl`，逐字保留）
@@ -387,6 +387,46 @@ impl ModrinthSource for ModrinthBase {
             .into_iter()
             .map(|(hash, v)| (hash, to_project_version_info_from_hash(v)))
             .collect())
+    }
+
+    /// 通过哈希值反查匹配指定加载器/游戏版本的最新版本，返回 哈希 → 最新版本 映射
+    /// （源 C# 无对应方法，为批次更新检查新增；POST `v2/version_files/update`）。
+    ///
+    /// body 为 VersionFilesUpdateRequest：`{"hashes":[...],"algorithm":"sha1",
+    /// "loaders":[...],"game_versions":[...]}`（空数组表示不限）；
+    /// 响应为 哈希 → VersionInfo 映射；响应为 null → 空映射。
+    async fn get_latest_versions_from_hashes(
+        &self,
+        hashes: &[String],
+        loaders: &[String],
+        game_versions: &[String],
+    ) -> Result<HashMap<String, VersionInfo>, Error> {
+        if hashes.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let request = VersionFilesUpdateRequest {
+            hashes: hashes.to_vec(),
+            algorithm: "sha1".to_string(),
+            loaders: loaders.to_vec(),
+            game_versions: game_versions.to_vec(),
+        };
+        let json_data = serde_json::to_string(&request).map_err(|e| Error::Http {
+            message: "最新版本反查请求序列化失败".to_string(),
+            status: None,
+            source: Some(Box::new(e)),
+        })?;
+
+        let body = self
+            .post_data(
+                &format!("{}v2/version_files/update", self.base_url),
+                &json_data,
+            )
+            .await?;
+        // 源先反序列化为可空字典，null → 空映射 → 以 Option<HashMap> 承载
+        let dict: Option<HashMap<String, VersionInfo>> =
+            serde_json::from_str(&body).map_err(json_err)?;
+        Ok(dict.unwrap_or_default())
     }
 
     /// 获取分类标签列表（源：`GetCategoriesAsync` → `GetTagsAsync("category")`）。

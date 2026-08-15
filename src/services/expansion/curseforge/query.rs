@@ -34,9 +34,9 @@ use crate::api::expansion::CurseForgeSource;
 use crate::error::Error;
 use crate::models::expansion::curseforge::{
     AuthorMeta, CategoryMeta, CurseForgeBatchFileInfo, CurseForgeFileInfo,
-    CurseForgeFilePageItem, CurseForgeFilePageResponse, CurseForgeInfo,
-    CurseForgeSearchResponse, CurseForgeSearchResult, FingerprintsFilesMeta,
-    FingerprintsRequest, ScreenshotsMeta,
+    CurseForgeFilePageItem, CurseForgeFilePageResponse, CurseForgeFingerprintFile,
+    CurseForgeFingerprintMatch, CurseForgeInfo, CurseForgeSearchResponse, CurseForgeSearchResult,
+    FingerprintsFilesMeta, FingerprintsRequest, ScreenshotsMeta,
 };
 use serde_json::Value;
 
@@ -678,6 +678,76 @@ impl CurseForgeSource for CurseForgeBase {
         hashes: &[i64],
     ) -> Result<HashMap<i64, FingerprintsFilesMeta>, Error> {
         Ok(self.get_info_from_hashes_inner(hashes).await?.into_iter().collect())
+    }
+
+    /// 通过指纹反查完整命中（file + latestFiles，用于批次更新检查）。
+    /// body 同 FingerprintsRequest（`{"fingerprints":[...]}`）；键取
+    /// `file.fileFingerprint ?? file.id`，为 0 时跳过；file 缺失 → None，
+    /// latestFiles 缺失 → 空列表。
+    async fn get_fingerprint_matches(
+        &self,
+        hashes: &[i64],
+    ) -> Result<Vec<CurseForgeFingerprintMatch>, Error> {
+        if hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let json_data = serde_json::to_string(&FingerprintsRequest {
+            fingerprints: hashes.to_vec(),
+        })
+        .map_err(|e| Error::Http {
+            message: "序列化 FingerprintsRequest 失败（源 JsonException）".to_string(),
+            status: None,
+            source: Some(Box::new(e)),
+        })?;
+        let data = self.post_data("/v1/fingerprints", &json_data).await?;
+        let root = parse_json(&data, "指纹反查响应")?;
+        let Some(exact_matches) = root
+            .get("data")
+            .and_then(|d| d.get("exactMatches"))
+            .and_then(|v| v.as_array())
+        else {
+            return Ok(Vec::new());
+        };
+
+        let mut result = Vec::with_capacity(exact_matches.len());
+        for match_node in exact_matches {
+            let file_raw = match_node.get("file").filter(|v| !v.is_null());
+            let file: Option<CurseForgeFingerprintFile> = match file_raw {
+                Some(v) => Some(
+                    serde_json::from_value(v.clone()).map_err(|e| Error::Http {
+                        message: "解析 CurseForgeFingerprintFile 失败".to_string(),
+                        status: None,
+                        source: Some(Box::new(e)),
+                    })?,
+                ),
+                None => None,
+            };
+            let fingerprint = match file_raw {
+                Some(v) => match v.get("fileFingerprint") {
+                    Some(fp) if !fp.is_null() => to_i64(Some(fp)),
+                    _ => to_i64(v.get("id")),
+                },
+                None => to_i64(match_node.get("fingerprint")),
+            };
+            let latest_files: Vec<CurseForgeFingerprintFile> = match_node
+                .get("latestFiles")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|n| serde_json::from_value(n.clone()).ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if fingerprint != 0 {
+                result.push(CurseForgeFingerprintMatch {
+                    fingerprint,
+                    file,
+                    latest_files,
+                });
+            }
+        }
+        Ok(result)
     }
 }
 

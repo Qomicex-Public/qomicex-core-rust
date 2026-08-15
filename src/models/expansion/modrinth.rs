@@ -399,6 +399,28 @@ fn default_algorithm() -> String {
     "sha1".to_string()
 }
 
+/// 版本文件哈希反查最新版本请求（Modrinth `POST v2/version_files/update`）。
+/// 在 VersionFilesRequest 基础上增加 loader / 游戏版本筛选；源 C# 无此端点，
+/// 为模组更新检查（批次哈希匹配）新增能力。JSON 键走 CamelCase 策略。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionFilesUpdateRequest {
+    /// 哈希值列表
+    pub hashes: Vec<String>,
+    /// 哈希算法，默认 "sha1"
+    #[serde(default = "default_algorithm")]
+    pub algorithm: String,
+    /// 加载器筛选（如 "forge" / "fabric"），空数组表示不限
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub loaders: Vec<String>,
+    /// 游戏版本筛选（如 "1.20.1"），空数组表示不限
+    /// 注：Modrinth API 用 snake_case `game_versions`（rename_all=camelCase 会序列化成
+    /// `gameVersions` 导致 API 忽略该过滤条件），此处显式指定 JSON 键名。
+    #[serde(rename = "game_versions")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub game_versions: Vec<String>,
+}
+
 /// Modrinth 版本信息（源：VersionInfo）
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
