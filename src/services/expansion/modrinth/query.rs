@@ -507,7 +507,12 @@ fn to_project_version_info_from_hash(v: ModrinthVersionInfo) -> ProjectVersionIn
         published_at: v.date_published,
         download_count: 0,
         version_type: None,
-        files: None,
+        // ⚠️ 源 C# 在此路径显式 Files=null；Rust 保留 files，供 mrpack 导出等
+        //    哈希反查场景取下载 URL/大小/哈希（mods.rs 更新检查只取 id/project_id，
+        //    不受影响）。
+        files: v
+            .files
+            .map(|files| files.into_iter().map(modrinth_file_to_version_file_info).collect()),
         dependencies_infos: None,
     }
 }
@@ -516,15 +521,15 @@ fn to_project_version_info_from_hash(v: ModrinthVersionInfo) -> ProjectVersionIn
 ///
 /// ⚠️ 仅源 `GetProjectVersionInfoAsync` 路径需要（v.Files 类型不匹配属源编译错误）：
 /// 按字段名/语义取可提取部分——filename/url 直映；hashes 从 哈希算法→值 键值表
-/// 提取 sha1/sha512（源 FileHashes 结构）；size/is_primary/file_type 在源
-/// ModrinthFile 中不存在 → 默认值 0/false/None。
+/// 提取 sha1/sha512（源 FileHashes 结构）；size/is_primary 源 C# ModrinthFile 缺失
+/// （有损），Rust 模型已补字段（缺失按 0/false）。
 fn modrinth_file_to_version_file_info(f: ModrinthFile) -> VersionFileInfo {
     VersionFileInfo {
         filename: f.filename,
         download_url: f.url,
-        size: 0,           // ⚠️ UNMAPPED：源 ModrinthFile 无 size 字段
-        is_primary: false, // ⚠️ UNMAPPED：源 ModrinthFile 无 primary 字段
-        file_type: None,   // ⚠️ UNMAPPED：源 ModrinthFile 无 file_type 字段
+        size: f.size.unwrap_or(0),
+        is_primary: f.primary.unwrap_or(false),
+        file_type: None,
         hashes: f.hashes.map(|h| FileHashes {
             sha1: h.get("sha1").cloned(),
             sha512: h.get("sha512").cloned(),

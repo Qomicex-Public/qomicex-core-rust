@@ -102,6 +102,13 @@ pub struct ModrinthFile {
     pub filename: String,
     /// 下载地址
     pub url: String,
+    /// 文件大小（字节）。API 恒返回；C# 源模型缺失（有损），Rust 补上以便
+    /// mrpack 导出等场景使用（缺失按 0 处理）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
+    /// 是否主文件。同上：C# 源模型缺失，Rust 补上（缺失按 false）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary: Option<bool>,
 }
 
 /// Modrinth 多版本响应（源：ModrinthVersionResponse，为 Dictionary<string, ModrinthVersionInfo> 子类）
