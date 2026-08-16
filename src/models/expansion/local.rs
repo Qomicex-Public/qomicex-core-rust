@@ -115,6 +115,60 @@ pub struct SaveInfo {
     pub icon: String,
 }
 
+/// 存档设置（level.dat `Data` 复合的精选白名单字段，camelCase 直通前端表单）。
+/// 对应「存档设置管理」功能；未出现在 level.dat 的字段读取时取默认值，
+/// 写入时按标准标签类型补齐。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LevelDatSettings {
+    /// 存档名称（Data.LevelName，String）
+    pub level_name: String,
+    /// 游戏模式（Data.GameType，Int；0=生存 1=创造 2=冒险 3=旁观）
+    pub game_type: i32,
+    /// 难度（Data.Difficulty，Byte；0=和平 1=简单 2=普通 3=困难）
+    pub difficulty: u8,
+    /// 允许作弊（Data.allowCommands，Byte）
+    pub allow_commands: bool,
+    /// 硬核模式（Data.hardcore，Byte）
+    pub hardcore: bool,
+    /// 世界时间（Data.Time，Long；自世界创建起的总 tick）
+    pub time: i64,
+    /// 昼夜时间（Data.DayTime，Long；0-24000 循环）
+    pub day_time: i64,
+    /// 是否下雨（Data.raining，Byte）
+    pub raining: bool,
+    /// 是否雷暴（Data.thundering，Byte）
+    pub thundering: bool,
+    /// 出生点 X（Data.SpawnX，Int）
+    pub spawn_x: i32,
+    /// 出生点 Y（Data.SpawnY，Int）
+    pub spawn_y: i32,
+    /// 出生点 Z（Data.SpawnZ，Int）
+    pub spawn_z: i32,
+    /// 世界种子（Data.RandomSeed，Long）
+    pub random_seed: i64,
+    /// 游戏规则（Data.GameRules，Compound(String "true"/"false") 子集）
+    pub game_rules: LevelGameRules,
+}
+
+/// 精选游戏规则子集（Data.GameRules；未出现时读取取默认值，写入按字符串补齐）。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LevelGameRules {
+    /// 死亡不掉落（keepInventory，默认 false）
+    pub keep_inventory: bool,
+    /// 昼夜循环（doDaylightCycle，默认 true）
+    pub do_daylight_cycle: bool,
+    /// 火焰蔓延（doFireTick，默认 true）
+    pub do_fire_tick: bool,
+    /// 生物破坏方块（mobGriefing，默认 true）
+    pub mob_griefing: bool,
+    /// 生物生成（doMobSpawning，默认 true）
+    pub do_mob_spawning: bool,
+    /// 天气循环（doWeatherCycle，默认 true）
+    pub do_weather_cycle: bool,
+}
+
 /// 表示一个本地截图的信息
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]

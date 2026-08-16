@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use crate::api::server::ServerManager;
 use crate::error::Error;
 use crate::models::expansion::local::{
-    DataPackInfo, ModInfo, ResourcePackInfo, SaveInfo, ScreenshotInfo, ShaderInfo,
+    DataPackInfo, LevelDatSettings, ModInfo, ResourcePackInfo, SaveInfo, ScreenshotInfo, ShaderInfo,
 };
 
 // 方法映射表：
@@ -132,7 +132,7 @@ pub trait ModsManager: Send + Sync {
 }
 
 /// 存档管理器（源：concrete class `Saves`，Services/Expansion/Local/Saves.cs）。
-/// 存档列表 / 重命名 / 备份（B10 定案签名）。
+/// 存档列表 / 重命名 / 备份（B10 定案签名）+ 存档设置（level.dat NBT，新增功能）。
 pub trait SavesManager: Send + Sync {
     /// 扫描存档列表（源：GetSaveList）
     fn get_save_list(&self) -> Vec<SaveInfo>;
@@ -142,6 +142,22 @@ pub trait SavesManager: Send + Sync {
 
     /// 备份存档（源：BackupSave）
     fn backup_save(&self, save_directory: &str);
+
+    /// 读取存档设置（level.dat `Data` 精选白名单字段）。
+    /// 缺失字段取默认值；level.dat 缺失/损坏 → Err。
+    fn read_level_dat_settings(&self, save_directory: &str) -> Result<LevelDatSettings, Error>;
+
+    /// 更新存档设置（level.dat NBT 写回）：
+    /// 写前自动备份 `level.dat.qomicex.bak`，任一步失败回滚原字节后返回 Err。
+    fn update_level_dat_settings(
+        &self,
+        save_directory: &str,
+        settings: &LevelDatSettings,
+    ) -> Result<(), Error>;
+
+    /// 从 `level.dat_old` 恢复存档设置（备份当前 level.dat 后覆盖）。
+    /// `level.dat_old` 缺失 → Err。
+    fn restore_level_dat_from_old(&self, save_directory: &str) -> Result<(), Error>;
 }
 
 /// 资源包管理器（源：concrete class `Resourcepack`，Services/Expansion/Local/Resourcepacks.cs）。
