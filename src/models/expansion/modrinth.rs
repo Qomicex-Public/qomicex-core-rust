@@ -89,6 +89,10 @@ pub struct ModrinthVersionInfo {
     /// 文件列表
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<ModrinthFile>>,
+    /// 依赖列表（Modrinth API 每个版本恒携带；修复前置模组解析缺失）
+    #[serde(rename = "dependencies")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<Vec<DependenciesInfo>>,
 }
 
 /// Modrinth 版本文件（源：ModrinthFile）

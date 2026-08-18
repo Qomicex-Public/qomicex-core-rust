@@ -465,9 +465,11 @@ impl ModrinthSource for ModrinthBase {
 /// （源：`GetProjectVersionInfoAsync` 内 `v => new ProjectVersionInfo(...)`）。
 ///
 /// ⚠️ 源 C# 引用 ModrinthVersionInfo 不存在的成员（见 trait 方法注释），按可用字段保真：
-/// - `changelog` / `dependencies_infos` → None（源 v.Changelog / v.DependenciesInfos 不存在）
+/// - `changelog` → None（源 v.Changelog 不存在）
 /// - `download_count` → 0（源 v.DownloadCount 不存在）
 /// - `version_type` → None（源显式传 null）
+/// - `dependencies_infos` → `v.dependencies` 直映（Rust 模型已补 dependencies 字段，
+///   供前置模组/依赖解析使用；源虽不映射，但 API 恒携带依赖）
 /// - `files` → 跨类型转换（源 List<ModrinthFile> vs List<VersionFileInfo> 不匹配，
 ///   属源编译错误；转换规则见 modrinth_file_to_version_file_info）
 fn to_project_version_info(v: ModrinthVersionInfo) -> ProjectVersionInfo {
@@ -488,7 +490,7 @@ fn to_project_version_info(v: ModrinthVersionInfo) -> ProjectVersionInfo {
                 .map(modrinth_file_to_version_file_info)
                 .collect()
         }),
-        dependencies_infos: None, // ⚠️ UNMAPPED：源 ModrinthVersionInfo 无 dependencies 字段
+        dependencies_infos: v.dependencies,
     }
 }
 
