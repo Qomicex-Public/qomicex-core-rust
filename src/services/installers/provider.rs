@@ -658,14 +658,27 @@ impl InstallerProviderService {
     /// `_mirror == DownloadMirror.Official ? GetNeoForgeFromOfficialApi : GetNeoForgeFromBmclApi`
     /// （Official：maven.neoforged.net 双端点 + ParseNeoForgeMinecraftVersion；BMCLAPI 镜像）；
     /// 实现在 provider_forge.rs，B13 接线
+    ///
+    /// 额外行为：Official 源无结果时自动回退 BMCLAPI，避免国内网络下官方 API 不可达导致列表为空。
     async fn get_neoforge_versions(&self, minecraft_version: &str) -> Vec<ModLoaderResult> {
-        let result = if self.mirror == DownloadMirror::Official {
-            crate::services::installers::provider_forge::get_neoforge_from_official_api(
+        if self.mirror == DownloadMirror::Official {
+            let official = crate::services::installers::provider_forge::get_neoforge_from_official_api(
                 &self.http,
                 self.mirror,
                 minecraft_version,
             )
             .await
+            .unwrap_or_default();
+            if !official.is_empty() {
+                return official;
+            }
+            crate::services::installers::provider_forge::get_neoforge_from_bmcl_api(
+                &self.http,
+                self.mirror,
+                minecraft_version,
+            )
+            .await
+            .unwrap_or_default()
         } else {
             crate::services::installers::provider_forge::get_neoforge_from_bmcl_api(
                 &self.http,
@@ -673,8 +686,8 @@ impl InstallerProviderService {
                 minecraft_version,
             )
             .await
-        };
-        result.unwrap_or_default()
+            .unwrap_or_default()
+        }
     }
 
     /// 源 `GetCleanroomVersions`（GitHub releases API：
