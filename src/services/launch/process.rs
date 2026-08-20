@@ -27,11 +27,13 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use futures::future::OptionFuture;
 use tokio::io::AsyncBufReadExt;
+use tokio::sync::broadcast;
 
 use crate::api::version::VersionLocator as _;
 use crate::error::Error;
@@ -43,6 +45,36 @@ use crate::services::version::locator::DefaultVersionLocator;
 use crate::util::file_helper::unzip;
 use crate::util::lib_helper::{check_libs_ver, is_natives, is_rule_suitable, maven_to_path};
 use crate::util::platform::{get_arch, get_current_arch, get_current_os_name};
+
+/// 一行游戏进程输出（供启动器后端实时日志推送）。
+#[derive(Debug, Clone)]
+pub struct GameLogLine {
+    /// 产生该输出的游戏进程 PID。
+    pub pid: i32,
+    /// true = stdout，false = stderr。
+    pub is_stdout: bool,
+    /// 去掉行尾换行后的内容。
+    pub text: String,
+}
+
+/// 全局游戏输出总线。`forward_pipe` 读取子进程 stdout/stderr 的每一行都会广播到这里，
+/// 启动器后端可订阅后按 PID 归属到实例并实时推送。独立于 `LaunchOptions` 模型，
+/// 避免给公开串行化模型引入非串行化字段。
+static GAME_LOG_TX: OnceLock<broadcast::Sender<GameLogLine>> = OnceLock::new();
+
+fn game_log_tx() -> broadcast::Sender<GameLogLine> {
+    GAME_LOG_TX
+        .get_or_init(|| {
+            let (tx, _rx) = broadcast::channel(1024);
+            tx
+        })
+        .clone()
+}
+
+/// 订阅所有游戏进程的实时输出（每实例归属由订阅方按 `GameLogLine::pid` 关联）。
+pub fn subscribe_game_log() -> broadcast::Receiver<GameLogLine> {
+    game_log_tx().subscribe()
+}
 
 /// 启动执行器实现（源：`internal sealed class LaunchExecutor : ILaunchExecutor` 的
 /// LaunchAsync / KillAsync 部分；struct 定义与参数组装方法在 jvm_args.rs）。
@@ -254,8 +286,8 @@ impl LaunchExecutor {
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
         tokio::spawn(async move {
-            let out_fut = OptionFuture::from(stdout_pipe.map(|p| forward_pipe(p, true)));
-            let err_fut = OptionFuture::from(stderr_pipe.map(|p| forward_pipe(p, false)));
+            let out_fut = OptionFuture::from(stdout_pipe.map(|p| forward_pipe(p, true, process_id)));
+            let err_fut = OptionFuture::from(stderr_pipe.map(|p| forward_pipe(p, false, process_id)));
             let _ = futures::future::join(out_fut, err_fut).await;
             // 源：process.Exited → result.OnExit?.Invoke(process.ExitCode)（写 stderr）+ Dispose
             let mut child = child;
@@ -535,15 +567,20 @@ impl LaunchExecutor {
 
 // ── 源 private static / 辅助函数 ────────────────────────
 
-/// 逐行读取子进程管道并转发到控制台（源 BeginOutputReadLine / BeginErrorReadLine 的
+/// 逐行读取子进程管道并转发到控制台 + 全局实时日志总线
+/// （源 BeginOutputReadLine / BeginErrorReadLine 的
 /// 行读取线程语义；空行丢弃，对应源 `if (!string.IsNullOrEmpty(e.Data))`；
-/// 输出流向：源 OnOutput → Console.WriteLine("[OUT] ...")，OnError → Console.Error.WriteLine）
-async fn forward_pipe<R>(mut pipe: R, is_stdout: bool)
+/// 输出流向：源 OnOutput → Console.WriteLine("[OUT] ...")，OnError → Console.Error.WriteLine）。
+///
+/// 除控制台外，每行还广播到 [`subscribe_game_log`] 返回的全局总线，供启动器后端
+/// 按 PID 归属到实例后实时推送日志（本库自身不保留任何状态）。
+async fn forward_pipe<R>(mut pipe: R, is_stdout: bool, pid: i32)
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     let mut reader = tokio::io::BufReader::new(&mut pipe);
     let mut line = String::new();
+    let tx = game_log_tx();
     loop {
         line.clear();
         match reader.read_line(&mut line).await {
@@ -557,6 +594,11 @@ where
                     } else {
                         eprintln!("[ERR] {trimmed}");
                     }
+                    let _ = tx.send(GameLogLine {
+                        pid,
+                        is_stdout,
+                        text: trimmed.to_string(),
+                    });
                 }
             }
         }
