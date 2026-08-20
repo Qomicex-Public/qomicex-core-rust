@@ -13,15 +13,17 @@
 
 use std::sync::OnceLock;
 
-/// 网络配置：可选代理 URL + 是否跳过 TLS 证书校验。
+/// 网络配置：可选代理 URL + 是否禁用所有代理 + 是否跳过 TLS 证书校验。
 ///
 /// `proxy_url` 支持 HTTP(S)/SOCKS5 代理（如 `http://127.0.0.1:7890`、
-/// `socks5://127.0.0.1:1080`），`None` = 不走代理。
+/// `socks5://127.0.0.1:1080`），`None` = 不使用自定义代理。
+/// `no_proxy = true` → 禁用所有代理（含系统代理，等价 reqwest `ClientBuilder::no_proxy()`）。
 /// `ignore_ssl_certs = true` → 关闭 TLS 校验（等同事先注入客户端的
 /// `danger_accept_invalid_certs`）。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct NetworkConfig {
     pub proxy_url: Option<String>,
+    pub no_proxy: bool,
     pub ignore_ssl_certs: bool,
 }
 
@@ -40,12 +42,16 @@ impl NetworkConfig {
         GLOBAL_CONFIG.get_or_init(NetworkConfig::default)
     }
 
-    /// 把代理 / TLS 校验开关应用到 reqwest builder。
+    /// 把代理 / 禁用代理 / TLS 校验开关应用到 reqwest builder。
     ///
+    /// - `no_proxy` → `.no_proxy()`（禁用系统代理）。
     /// - `proxy_url` 为非法 URL 时静默跳过（`reqwest::Proxy::all` 返回 Err 时不应用，
     ///   保持 reqwest 标准语义）；SOCKS5 需 reqwest `socks` feature。
     /// - `ignore_ssl_certs` → `.danger_accept_invalid_certs(true)`。
     pub(crate) fn apply(&self, mut builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+        if self.no_proxy {
+            builder = builder.no_proxy();
+        }
         if self.ignore_ssl_certs {
             builder = builder.danger_accept_invalid_certs(true);
         }
@@ -66,10 +72,12 @@ impl NetworkConfig {
 pub(crate) fn build_http_client_ex(
     user_agent: &str,
     proxy_url: Option<&str>,
+    no_proxy: bool,
     ignore_ssl_certs: bool,
 ) -> reqwest::Client {
     let config = NetworkConfig {
         proxy_url: proxy_url.map(str::to_string),
+        no_proxy,
         ignore_ssl_certs,
     };
     config

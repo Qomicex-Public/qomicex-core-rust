@@ -94,6 +94,9 @@ pub struct CoreOptions {
     /// 可选代理 URL（`http://` / `https://` / `socks5://`），`None` = 不走代理。
     /// 供核心内部自建 HTTP 客户端使用（与注入客户端的 proxy 语义一致）。
     pub proxy_url: Option<String>,
+    /// 是否禁用所有代理（含系统代理，`true` = 完全无代理，默认 `false`）。
+    /// 供核心内部自建 HTTP 客户端使用。
+    pub no_proxy: bool,
     /// 是否跳过 TLS 证书校验（`true` = 关闭校验，默认 `false`）。
     /// 供核心内部自建 HTTP 客户端使用（等同事先注入客户端的
     /// `danger_accept_invalid_certs`）。
@@ -120,6 +123,7 @@ impl Default for CoreOptions {
             minecraft_manifest_path: None,
             icon_cache_dir: None,
             proxy_url: None,
+            no_proxy: false,
             ignore_ssl_certs: false,
         }
     }
@@ -341,6 +345,7 @@ impl GameCoreBuilder {
         // （locator/completer/mirror/installer 等）统一读取应用。
         let net_config = NetworkConfig {
             proxy_url: self.options.proxy_url.clone(),
+            no_proxy: self.options.no_proxy,
             ignore_ssl_certs: self.options.ignore_ssl_certs,
         };
         NetworkConfig::set_global(net_config.clone());
@@ -544,7 +549,12 @@ impl Default for GameCoreBuilder {
 /// Rust 追加：接收 `NetworkConfig`（可选代理 + TLS 校验开关），经
 /// `build_http_client_ex` 应用到默认注入客户端。
 fn build_http_client(user_agent: &str, net: &NetworkConfig) -> reqwest::Client {
-    build_http_client_ex(user_agent, net.proxy_url.as_deref(), net.ignore_ssl_certs)
+    build_http_client_ex(
+        user_agent,
+        net.proxy_url.as_deref(),
+        net.no_proxy,
+        net.ignore_ssl_certs,
+    )
 }
 
 
