@@ -22,7 +22,7 @@ zip = { version = "2", default-features = false, features = ["deflate-miniz", "d
 regex = "1"
 async-trait = "0.1"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "gzip", "http2", "charset", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "gzip", "http2", "charset", "rustls-tls", "socks"] }
 uuid = { version = "1", features = ["v4"] }
 futures = "0.3"
 toml = "0.8"

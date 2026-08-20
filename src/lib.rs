@@ -16,5 +16,6 @@ pub mod error;
 pub mod event;
 pub mod jni;
 pub mod models;
+pub mod net;
 pub mod services;
 pub mod util;

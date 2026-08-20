@@ -53,6 +53,7 @@ use serde_json::Value;
 
 use crate::error::Error;
 use crate::models::download::DownloadMirror;
+use crate::net::NetworkConfig;
 use crate::services::installers::installer::MissFileData;
 use crate::services::installers::installer::{Installer, InstallerBase};
 use crate::util::lib_helper::maven_to_path;
@@ -201,14 +202,14 @@ impl LiteloaderInstaller {
     ///
     /// ⚠️ 源 HttpClient 为 `new HttpClient { Timeout = TimeSpan.FromSeconds(5) }`
     /// （独立客户端，不带 DefaultUserAgent）→ 直接构建 reqwest Client（5 秒超时），
-    /// 不经 InstallerBase::create_http_client。
+    /// 不经 InstallerBase::create_http_client；应用全局 proxy/TLS 配置。
     async fn get_remote_version_by_versions(
         &self,
         mc_version: &str,
         lite_version: &str,
     ) -> Result<Option<LiteLoaderRemoteVersion>, Error> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
+        let client = NetworkConfig::global()
+            .apply(reqwest::Client::builder().timeout(Duration::from_secs(5)))
             .build()
             .expect("创建 HTTP 客户端失败（源 HttpClient 构造不抛异常）");
 

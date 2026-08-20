@@ -24,6 +24,7 @@ use crate::models::download::DownloadMirror;
 use crate::models::installer::MissFileInfo;
 use crate::models::local::{LocalVersionInfo, ModloaderInfo, ModloaderType};
 use crate::models::version_metadata::{ArgumentItem, CompleteVersionMetadata, Library, VersionArguments};
+use crate::net::NetworkConfig;
 use crate::services::version::locator_miss::AssetIndexData;
 use crate::util::file_helper::validate_file_hash;
 use crate::util::json_helper;
@@ -122,7 +123,11 @@ impl DefaultVersionLocator {
                 is_refreshing: false,
             }),
             download_source,
-            http_client: reqwest::Client::new(),
+            // 内部自建客户端：应用全局 proxy/TLS 配置（启动器经 CoreOptions 注入）
+            http_client: NetworkConfig::global()
+                .apply(reqwest::Client::builder())
+                .build()
+                .expect("构建版本定位器 HTTP 客户端失败"),
         };
         // 源构造函数末尾调用 RefreshCache()（→ EnsureCacheFresh 首次全量扫描）。
         // ⚠️ 修复：不再构造时同步扫描。versions 目录可含数万条目（modpack 场景实测

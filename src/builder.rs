@@ -34,6 +34,7 @@ use crate::api::version::{VersionLocator, VersionManagement};
 use crate::core::GameCore;
 use crate::models::auth::{AuthMode, AuthOptions};
 use crate::models::download::DownloadMirror;
+use crate::net::{NetworkConfig, build_http_client_ex};
 use crate::services::auth::microsoft::MicrosoftAuthProvider;
 use crate::services::auth::offline::OfflineAuthProvider;
 use crate::services::auth::yggdrasil::YggdrasilAuthProvider;
@@ -90,6 +91,13 @@ pub struct CoreOptions {
     pub minecraft_manifest_path: Option<String>,
     /// 图标缓存目录（源无对应；Rust 新增：mod 图标 per-jar 内容哈希磁盘缓存）
     pub icon_cache_dir: Option<String>,
+    /// 可选代理 URL（`http://` / `https://` / `socks5://`），`None` = 不走代理。
+    /// 供核心内部自建 HTTP 客户端使用（与注入客户端的 proxy 语义一致）。
+    pub proxy_url: Option<String>,
+    /// 是否跳过 TLS 证书校验（`true` = 关闭校验，默认 `false`）。
+    /// 供核心内部自建 HTTP 客户端使用（等同事先注入客户端的
+    /// `danger_accept_invalid_certs`）。
+    pub ignore_ssl_certs: bool,
 }
 
 impl Default for CoreOptions {
@@ -111,6 +119,8 @@ impl Default for CoreOptions {
             descriptions_json_path: None,
             minecraft_manifest_path: None,
             icon_cache_dir: None,
+            proxy_url: None,
+            ignore_ssl_certs: false,
         }
     }
 }
@@ -326,10 +336,20 @@ impl GameCoreBuilder {
     /// 源 Build() 无失败返回路径 → 返回 `Arc<GameCore>`（不返回 Result）。
     pub fn build(&self) -> Arc<GameCore> {
         // 源：var http = _http ?? new HttpClient();
+        //      http.DefaultRequestHeaders.UserAgent.ParseAdd(_options.UserAgent)
+        // Rust 追加：把 CoreOptions 的 proxy/TLS 配置写入全局，供内部自建客户端
+        // （locator/completer/mirror/installer 等）统一读取应用。
+        let net_config = NetworkConfig {
+            proxy_url: self.options.proxy_url.clone(),
+            ignore_ssl_certs: self.options.ignore_ssl_certs,
+        };
+        NetworkConfig::set_global(net_config.clone());
+
+        // 源：var http = _http ?? new HttpClient();
         //      http.DefaultRequestHeaders.UserAgent.ParseAdd(_options.UserAgent);
         let http = match &self.http {
             Some(client) => client.clone(),
-            None => build_http_client(&self.options.user_agent),
+            None => build_http_client(&self.options.user_agent, &net_config),
         };
 
         // 源：InstallerBase.DefaultUserAgent ??= _options.UserAgent
@@ -521,12 +541,10 @@ impl Default for GameCoreBuilder {
 /// reqwest 在 `build()` 时校验 User-Agent；失败处理决策（翻译日志 p59）：
 /// 源 `ParseAdd` 对非法 UA 抛 `FormatException`，且 Build() 无失败返回路径 →
 /// Rust 侧 `panic!`（消息含 UA），等价"构建即失败"语义；build() 保持无 Result 通道。
-fn build_http_client(user_agent: &str) -> reqwest::Client {
-    reqwest::Client::builder()
-        .user_agent(user_agent)
-        .build()
-        .unwrap_or_else(|e| panic!("构建 HTTP 客户端失败（UserAgent: {user_agent}）: {e}"))
+/// Rust 追加：接收 `NetworkConfig`（可选代理 + TLS 校验开关），经
+/// `build_http_client_ex` 应用到默认注入客户端。
+fn build_http_client(user_agent: &str, net: &NetworkConfig) -> reqwest::Client {
+    build_http_client_ex(user_agent, net.proxy_url.as_deref(), net.ignore_ssl_certs)
 }
-
 
 

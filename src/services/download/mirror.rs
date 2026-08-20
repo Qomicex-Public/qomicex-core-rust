@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use crate::api::download::DownloadSourceManager;
 use crate::error::Error;
 use crate::models::download::{DownloadMirror, DownloadSource, DownloadSourceType, ResourceType};
+use crate::net::NetworkConfig;
 
 /// 源可用性测试超时（B6 设计值：源 HttpClient 默认 100s 超时过宽，
 /// ping 测试取 10s，见 test_source 的差异说明）。
@@ -48,7 +49,11 @@ impl DefaultDownloadSourceManager {
     /// 提到当前最低优先级之下（官方源变为首选）；否则保持内置默认
     /// （BMCLAPI 优先级 1 已为最低，天然首选）。
     pub(crate) fn new(preferred_mirror: DownloadMirror) -> Self {
-        let http_client = reqwest::Client::new();
+        // 内部自建客户端：应用全局 proxy/TLS 配置（启动器经 CoreOptions 注入）
+        let http_client = NetworkConfig::global()
+            .apply(reqwest::Client::builder())
+            .build()
+            .expect("构建下载源 HTTP 客户端失败");
         let sources = vec![
             DownloadSource {
                 r#type: DownloadSourceType::Official,

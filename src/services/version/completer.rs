@@ -38,6 +38,7 @@ use crate::models::download::{DownloadProgress, DownloadStatus, ResourceType};
 use crate::models::version_metadata::{
     Artifact, AssetIndex, CompleteVersionMetadata, Library, Rule,
 };
+use crate::net::NetworkConfig;
 use crate::util::file_helper::validate_file_hash;
 use crate::util::platform::{get_current_arch, get_current_os_name, is_os_match};
 
@@ -87,7 +88,11 @@ impl DefaultResourceCompleter {
         Self {
             game_root_path,
             source_manager,
-            http_client: reqwest::Client::new(),
+            // 内部自建客户端：应用全局 proxy/TLS 配置（启动器经 CoreOptions 注入）
+            http_client: NetworkConfig::global()
+                .apply(reqwest::Client::builder())
+                .build()
+                .expect("构建资源补全器 HTTP 客户端失败"),
             max_concurrent_downloads,
         }
     }

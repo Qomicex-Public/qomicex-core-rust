@@ -22,6 +22,7 @@ use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 
 use crate::error::Error;
+use crate::net::NetworkConfig;
 use crate::util::lib_helper;
 
 /// 安装器接口（源：`IInstaller` 接口，IInstaller.cs）。
@@ -97,12 +98,14 @@ impl InstallerBase {
     /// - 已设置全局默认 User-Agent 则携带（源仅在 `DefaultUserAgent` 非空时添加）；
     /// - 重定向策略 `Policy::limited(50)`：对齐 .NET HttpClient 默认
     ///   `MaxAutomaticRedirections = 50`（reqwest 默认为 10）；
+    /// - 应用全局 proxy/TLS 配置（`build()` 经 CoreOptions 写入，见 net.rs）；
     /// - 构建失败（源构造不抛异常）→ `expect` 直接中止。
     pub(crate) fn create_http_client() -> reqwest::Client {
         let mut builder = reqwest::Client::builder();
         if let Some(user_agent) = DEFAULT_USER_AGENT.get() {
             builder = builder.user_agent(user_agent);
         }
+        builder = NetworkConfig::global().apply(builder);
         builder
             .redirect(reqwest::redirect::Policy::limited(50))
             .build()

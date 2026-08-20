@@ -33,6 +33,7 @@ use crate::models::download::DownloadMirror;
 use crate::models::local::LocalVersionInfo;
 use crate::models::version_manifest::{LatestVersionInfo, ManifestVersionInfo, VersionManifestRoot};
 use crate::models::version_metadata::CompleteVersionMetadata;
+use crate::net::NetworkConfig;
 use crate::services::download::mirror::DefaultDownloadSourceManager;
 use crate::services::version::completer::DefaultResourceCompleter;
 use crate::services::version::locator::DefaultVersionLocator;
@@ -150,7 +151,13 @@ impl VersionManagementService {
         max_concurrent_downloads: usize,
     ) -> Self {
         // 源：httpClient ?? new HttpClient()
-        let http = http_client.unwrap_or_else(reqwest::Client::new);
+        // （内部自建时应用全局 proxy/TLS 配置）
+        let http = http_client.unwrap_or_else(|| {
+            NetworkConfig::global()
+                .apply(reqwest::Client::builder())
+                .build()
+                .expect("构建版本管理 HTTP 客户端失败")
+        });
 
         // 源：new VersionManifestService(httpClient)
         let manifest_service = VersionManifestService::new(http);

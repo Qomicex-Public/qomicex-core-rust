@@ -29,6 +29,7 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 use crate::error::Error;
+use crate::net::NetworkConfig;
 use crate::services::download::checksum::sha1_hex;
 use crate::services::installers::installer::InstallerBase;
 
@@ -277,10 +278,11 @@ impl ForgeInstallerBase {
         if !(parsed.scheme() == "http" || parsed.scheme() == "https") {
             return false;
         }
-        let Ok(client) = reqwest::Client::builder()
-            .timeout(Duration::from_secs(timeout_seconds))
-            .build()
-        else {
+        let builder =
+            NetworkConfig::global().apply(reqwest::Client::builder().timeout(Duration::from_secs(
+                timeout_seconds,
+            )));
+        let Ok(client) = builder.build() else {
             return false;
         };
         let Ok(response) = client.head(url).send().await else {
