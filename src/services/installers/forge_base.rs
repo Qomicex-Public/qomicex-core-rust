@@ -568,6 +568,18 @@ fn join_path(a: &str, b: &str) -> String {
     Path::new(a).join(b).to_string_lossy().to_string()
 }
 
+/// 版本隔离的主 jar 相对路径：`versions/{version_dir_name}/{version_dir_name}.jar`。
+///
+/// Forge/NeoForge processor 的 `{MINECRAFT_JAR}` 占位符必须指向**版本隔离目录**
+/// （`version_dir_name`，如 `1.21.11-NeoForge-21.11.45`），与启动器 launch
+/// （`services/launch/jvm_args.rs` 用 `options.version`＝版本目录名）及 AGENTS.md 路径系统
+/// 一致。不能回落到共享的 `versions/{gameVersion}/{gameVersion}.jar`，否则会在
+/// `versions/{gameVersion}/` 下产生一个"孤儿" vanilla 目录（只有 jar + json），
+/// 实例列表里会多出一个损坏的原版实例。
+pub(crate) fn main_jar_relative_path(version_dir_name: &str) -> String {
+    format!("versions/{version_dir_name}/{version_dir_name}.jar")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,6 +608,22 @@ mod tests {
                 "MINECRAFT_JAR": { "client": null }
             }
         })
+    }
+
+    #[test]
+    fn main_jar_relative_path_is_version_isolated_not_vanilla_shared() {
+        // 回归：`{MINECRAFT_JAR}` 处理器占位符必须指向版本隔离目录 `version_dir_name`，
+        // 而不能回落到共享 vanilla 目录 `versions/{gameVersion}/`，否则会产生"孤儿"
+        // vanilla 目录、实例列表多出一个损坏的原版实例（社区反馈的现象）。
+        let p = main_jar_relative_path("1.21.11-NeoForge-21.11.45");
+        assert_eq!(
+            p,
+            "versions/1.21.11-NeoForge-21.11.45/1.21.11-NeoForge-21.11.45.jar"
+        );
+        assert!(
+            !p.starts_with("versions/1.21.11/"),
+            "不应回落到共享 vanilla 目录: {p}"
+        );
     }
 
     #[test]

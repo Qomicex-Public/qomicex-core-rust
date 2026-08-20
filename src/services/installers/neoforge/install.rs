@@ -41,7 +41,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::error::Error;
-use crate::services::installers::forge_base::{ForgeInstallerBase, SourcesList};
+use crate::services::installers::forge_base::{
+    main_jar_relative_path, ForgeInstallerBase, SourcesList,
+};
 use crate::services::installers::installer::{Installer, InstallerBase, MissFileData};
 
 /// NeoForge 安装器（源：`internal class NeoForgeInstaller : ForgeInstallerBase, IInstaller`）。
@@ -117,8 +119,9 @@ impl NeoForgeInstaller {
     ///    「处理NeoForge处理器失败: {jar}\n{原因}」）。
     ///
     /// ⚠️ 源 InstallAsync 先将 `_installerPath`/`_mainJarPath` 实例字段赋值再进入本方法；
-    /// trait 仅提供 `&self` → 手工复制 base 并在副本上写入本次安装动态状态
-    /// （`_mainJarPath = Path.Combine("versions", gameVersion, "{gameVersion}.jar")`）。
+    /// trait 仅提供 `&self` → 手工复制 base 并在副本上写入本次安装动态状态。
+    /// 主 jar 指向**版本隔离目录** `versions/{versionId}/{versionId}.jar`（源为共享的
+    /// `versions/{gameVersion}`；见 `forge_base::main_jar_relative_path` 原因说明）。
     async fn install_neoforge(
         &self,
         version_id: &str,
@@ -145,10 +148,7 @@ impl NeoForgeInstaller {
                 .collect(),
         };
         base.installer_path = neo_forge_installer_path.to_string();
-        base.main_jar_path = path_combine(
-            &path_combine("versions", &base.game_version),
-            &format!("{}.jar", base.game_version),
-        );
+        base.main_jar_path = main_jar_relative_path(version_id);
 
         // 源：try { ... } catch (Exception ex) {
         //      throw new Exception("读取NeoForge安装器内容失败，请检查安装器文件是否正确", ex); }

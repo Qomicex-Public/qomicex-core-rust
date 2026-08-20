@@ -53,7 +53,9 @@ use serde_json::{Map, Value};
 
 use crate::error::Error;
 use crate::models::download::DownloadMirror;
-use crate::services::installers::forge_base::{ForgeInstallerBase, SourcesList};
+use crate::services::installers::forge_base::{
+    main_jar_relative_path, ForgeInstallerBase, SourcesList,
+};
 use crate::services::installers::installer::MissFileData;
 use crate::services::installers::installer::{Installer, InstallerBase};
 use crate::util::file_helper::normalize_separators;
@@ -751,8 +753,12 @@ impl Installer for ForgeInstaller {
         // 源：_installerPath = forgeInstallerPath;
         //      _mainJarPath = Path.Combine("versions", gameVersion, $"{gameVersion}.jar")
         //      （相对路径；ReplaceArguments 内 IsPathRooted 判定非根 → {gameDir}/versions/...）
+        // ⚠️ 偏离源：主 jar 指向**版本隔离目录** versions/{versionId}/{versionId}.jar 而非
+        // 共享的 versions/{gameVersion}（源为 C# 旧行为）。原因：本启动器版本隔离方案下
+        // launch 与 {MINECRAFT_JAR} 都以 version_dir_name 为基准；沿用源会在
+        // versions/{gameVersion}/ 产生孤儿 vanilla 目录 → 实例列表多出损坏原版实例。
         let installer_path = forge_installer_path;
-        let main_jar_path = path_combine(&path_combine("versions", &self.game_version), &format!("{}.jar", self.game_version));
+        let main_jar_path = main_jar_relative_path(version_id);
         // 源：if (IsLegacyForgeInstaller(forgeInstallerPath)) InstallLegacyForge else InstallForge
         if self.is_legacy_forge_installer(forge_installer_path)? {
             self.install_legacy_forge(version_id, inherits_from_json, java_path, forge_installer_path)
