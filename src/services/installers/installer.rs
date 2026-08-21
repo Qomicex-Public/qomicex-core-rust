@@ -401,7 +401,11 @@ impl InstallerBase {
             if program == "/bin/bash" {
                 _command.arg("-c").arg(format!("\"{arguments}\""));
             } else {
-                _command.arg(arguments);
+                // Java processors receive the same argv semantics as Windows; do not pass
+                // the complete command line as one literal argument.
+                for token in crate::services::launch::process::split_command_line(arguments) {
+                    _command.arg(token);
+                }
             }
         }
         _command.stdout(std::process::Stdio::piped());
@@ -414,6 +418,24 @@ impl InstallerBase {
                 -1
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InstallerBase;
+
+    #[test]
+    fn direct_process_receives_split_arguments() {
+        #[cfg(windows)]
+        let (program, arguments) = ("powershell.exe", r#"-NoProfile -Command "exit 0""#);
+        #[cfg(not(windows))]
+        let (program, arguments) = ("/bin/sh", r#"-c "exit 0""#);
+
+        assert_eq!(
+            InstallerBase::run_install_process(arguments, Some(program)),
+            0
+        );
     }
 }
 
