@@ -184,16 +184,7 @@ impl ForgeInstallerBase {
             cps = cps.trim_end_matches([';', ':']).to_string();
         }
 
-        // 源：args 数组空格拼接 → `TrimEnd(' ')` → ReplaceArguments
-        let mut args = String::new();
-        if let Some(args_arr) = processor.get("args").and_then(|v| v.as_array()) {
-            for arg in args_arr {
-                args.push_str(&node_to_string(arg));
-                args.push(' ');
-            }
-            args = args.trim_end_matches(' ').to_string();
-            args = self.replace_arguments(ip_obj, &args)?;
-        }
+        let args = self.build_processor_args(ip_obj, processor)?;
 
         // 源：`var mainClass = GetJarMainClass(jarPath); if (string.IsNullOrEmpty(mainClass)) throw ...`
         let main_class = InstallerBase::get_jar_main_class(&jar_path)?;
@@ -440,6 +431,34 @@ impl ForgeInstallerBase {
         }
 
         args = self.replace_inline_maven_coordinates(&args)?;
+        Ok(args)
+    }
+
+    /// 构建 processor 的 args 字符串（源：`run_processor` 内 args 构建逻辑）。
+    ///
+    /// 逐项替换占位符 → 含空格的参数加引号 → 空格拼接。修复了原逻辑中
+    /// `ReplaceArguments` 在 quoting 之后执行导致带空格路径未被引用的问题。
+    pub(crate) fn build_processor_args(
+        &self,
+        ip_obj: &Map<String, Value>,
+        processor: &Map<String, Value>,
+    ) -> Result<String, Error> {
+        let mut args = String::new();
+        if let Some(args_arr) = processor.get("args").and_then(|v| v.as_array()) {
+            for arg in args_arr {
+                let mut raw = node_to_string(arg);
+                raw = self.replace_arguments(ip_obj, &raw)?;
+                let process_arg = if raw.contains(' ') {
+                    format!("\"{}\"", raw)
+                } else {
+                    raw
+                };
+
+                args.push_str(&process_arg);
+                args.push(' ');
+            }
+            args = args.trim_end_matches(' ').to_string();
+        }
         Ok(args)
     }
 
@@ -741,6 +760,30 @@ mod tests {
                 .get(..r"C:\Games\.minecraft".len())
                 .is_some_and(|h| h.eq_ignore_ascii_case(r"C:\Games\.minecraft")),
             "应以 gameDir 为前缀：{populated_key}"
+        );
+    }
+
+    #[test]
+    fn processor_args_with_space_are_quoted_after_replacements() {
+        // 回归：args 中的占位符（如 {MC_PATH}）替换为带空格的路径后，
+        // 必须被引号包围，否则 split_command_line 会按空格切碎参数。
+        let base = base_with(r"C:\Games\My Modpack");
+        let ip_obj = serde_json::json!({
+            "data": {
+                "MC_PATH": { "client": r"C:\Games\My Modpack\input.jar" }
+            }
+        });
+        let processor = serde_json::json!({
+            "args": ["--input", "{MC_PATH}"]
+        });
+
+        let args = base
+            .build_processor_args(ip_obj.as_object().unwrap(), processor.as_object().unwrap())
+            .expect("build_processor_args 不应失败");
+
+        assert!(
+            args.contains(r#""C:\Games\My Modpack\input.jar""#),
+            "带空格路径未被正确引用: {args}"
         );
     }
 }
