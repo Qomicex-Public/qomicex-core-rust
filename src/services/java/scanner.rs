@@ -913,7 +913,9 @@ fn get_java_info(java_path: &str, discovered_by: &str) -> Option<JavaResult> {
     let release_file = Path::new(&java_home).join("release");
     if !release_file.is_file() {
         java_info.state = JavaState::MissingReleaseFile;
-        try_get_version_from_command(&mut java_info);
+        if try_get_version_from_command(&mut java_info) {
+            java_info.state = JavaState::Valid;
+        }
         return Some(java_info);
     }
 
@@ -961,7 +963,9 @@ fn get_java_info(java_path: &str, discovered_by: &str) -> Option<JavaResult> {
         }
         Err(_) => {
             java_info.state = JavaState::CorruptedReleaseFile;
-            try_get_version_from_command(&mut java_info);
+            if try_get_version_from_command(&mut java_info) {
+                java_info.state = JavaState::Valid;
+            }
         }
     }
 
@@ -991,14 +995,16 @@ fn get_normalized_major_version(version: &str) -> i32 {
 
 /// 命令回退获取版本（源：`TryGetVersionFromCommand`）：spawn `java -version`，
 /// 读 stderr（java -version 输出到 stderr），解析引号内版本号；
-/// 命中 → Version/MajorVersion/Name(`Java {version} (未验证)`)。
+/// 命中 → Version/MajorVersion/Name(`Java {version}`)。
 ///
 /// 同时尝试检测 JDK/JRE 类型：通过 `java -version` 输出关键字或检查 `javac` 是否存在。
 ///
 /// 超时差异：源 `ReadToEnd` 阻塞读 stderr → `WaitForExit(5000)` 超时**不杀进程**
 /// （.NET 会泄漏悬挂 java 进程）；本实现 5 秒后 `child.kill()` 并回收读线程，
 /// 防止进程悬挂时 join 永久阻塞。stderr 在子线程读取避免管道填满死锁。
-fn try_get_version_from_command(java_info: &mut JavaResult) {
+///
+/// 返回 true 表示成功获取版本（可设为 Valid），false 表示失败。
+fn try_get_version_from_command(java_info: &mut JavaResult) -> bool {
     use std::io::Read;
     use std::path::Path;
     use std::process::{Command, Stdio};
@@ -1012,7 +1018,7 @@ fn try_get_version_from_command(java_info: &mut JavaResult) {
         .spawn()
     else {
         eprintln!("通过命令获取 Java 版本失败: 无法启动进程");
-        return;
+        return false;
     };
 
     let stderr = child.stderr.take();
@@ -1045,7 +1051,7 @@ fn try_get_version_from_command(java_info: &mut JavaResult) {
     let output = reader.unwrap_or_default();
 
     if output.is_empty() {
-        return;
+        return false;
     }
 
     let mut detected_type = None;
@@ -1070,7 +1076,9 @@ fn try_get_version_from_command(java_info: &mut JavaResult) {
     if let Some(version) = parsed_version {
         java_info.version = version.clone();
         java_info.major_version = get_normalized_major_version(&version);
-        java_info.name = format!("Java {version} (未验证)");
+        java_info.name = format!("Java {version}");
+    } else {
+        return false;
     }
 
     if detected_type.is_none() {
@@ -1090,6 +1098,8 @@ fn try_get_version_from_command(java_info: &mut JavaResult) {
     if let Some(t) = detected_type {
         java_info.r#type = t;
     }
+
+    true
 }
 
 /// 宽松版本解析：允许下划线（如 1.8.0_502）、额外构建信息。
