@@ -169,11 +169,12 @@ impl GameCore {
     }
 
     /// 创建 Modrinth 扩展平台客户端（源：CreateModrinthSource）
-    pub fn create_modrinth_source(&self) -> Box<dyn crate::api::expansion::ModrinthSource + Send + Sync> {
-        Box::new(crate::services::expansion::modrinth::query::ModrinthBase::new(
-            self.http.clone(),
-            None,
-        ))
+    pub fn create_modrinth_source(
+        &self,
+    ) -> Box<dyn crate::api::expansion::ModrinthSource + Send + Sync> {
+        Box::new(
+            crate::services::expansion::modrinth::query::ModrinthBase::new(self.http.clone(), None),
+        )
     }
 
     /// 创建 CurseForge 扩展平台客户端（源：CreateCurseForgeSource(apiKey)）
@@ -181,11 +182,13 @@ impl GameCore {
         &self,
         api_key: &str,
     ) -> Box<dyn crate::api::expansion::CurseForgeSource + Send + Sync> {
-        Box::new(crate::services::expansion::curseforge::query::CurseForgeBase::new(
-            self.http.clone(),
-            api_key.to_string(),
-            None,
-        ))
+        Box::new(
+            crate::services::expansion::curseforge::query::CurseForgeBase::new(
+                self.http.clone(),
+                api_key.to_string(),
+                None,
+            ),
+        )
     }
 
     /// 创建 Feed The Beast 扩展平台客户端（源：CreateFTBSource）
@@ -197,6 +200,3 @@ impl GameCore {
         ))
     }
 }
-
-
-

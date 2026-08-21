@@ -30,7 +30,7 @@ use super::level_dat;
 use crate::api::local::SavesManager;
 use crate::error::Error;
 use crate::models::expansion::local::{LevelDatSettings, SaveInfo};
-use crate::util::nbt_full::{read as nbt_read, write_gzip as nbt_write_gzip, NbtError, NbtValue};
+use crate::util::nbt_full::{NbtError, NbtValue, read as nbt_read, write_gzip as nbt_write_gzip};
 
 /// 存档管理器（源：concrete class `Saves`，Services/Expansion/Local/Saves.cs）
 pub(crate) struct Saves {
@@ -146,7 +146,8 @@ impl SavesManager for Saves {
         }
 
         // 源：`ReadLevelName(saveDirectory) ?? Path.GetFileName(saveDirectory)`
-        let original_name = read_level_name(save_dir).unwrap_or_else(|| folder_name(save_directory));
+        let original_name =
+            read_level_name(save_dir).unwrap_or_else(|| folder_name(save_directory));
 
         if let Err(e) = write_level_name(save_dir, new_name) {
             // 源 catch：WriteLevelName(saveDirectory, originalName) 恢复原名后 rethrow。
@@ -310,7 +311,10 @@ fn write_level_name(save_directory: &Path, new_name: &str) -> Result<(), NbtErro
         //（Data 复合存在 → 原位替换/追加；缺失或非复合 → 抛 InvalidDataException）
         match root.get_mut("Data") {
             Some(NbtValue::Compound(data)) => {
-                data.insert("LevelName".to_string(), NbtValue::String(new_name.to_string()));
+                data.insert(
+                    "LevelName".to_string(),
+                    NbtValue::String(new_name.to_string()),
+                );
             }
             _ => return Err(NbtError::NoDataCompound),
         }
@@ -346,9 +350,8 @@ fn copy_directory_recursive(source_dir: &Path, dest_dir: &Path) {
     let mut files = Vec::new();
     let mut dirs = Vec::new();
     for entry in entries {
-        let entry = entry.unwrap_or_else(|e| {
-            panic!("读取备份源目录项失败: {}: {e}", source_dir.display())
-        });
+        let entry =
+            entry.unwrap_or_else(|e| panic!("读取备份源目录项失败: {}: {e}", source_dir.display()));
         let path = entry.path();
         if path.is_dir() {
             dirs.push(path);
@@ -364,8 +367,13 @@ fn copy_directory_recursive(source_dir: &Path, dest_dir: &Path) {
         if dest_file.exists() {
             panic!("备份目标文件已存在: {}", dest_file.display());
         }
-        std::fs::copy(&file, &dest_file)
-            .unwrap_or_else(|e| panic!("备份文件失败 {} -> {}: {e}", file.display(), dest_file.display()));
+        std::fs::copy(&file, &dest_file).unwrap_or_else(|e| {
+            panic!(
+                "备份文件失败 {} -> {}: {e}",
+                file.display(),
+                dest_file.display()
+            )
+        });
     }
 
     for dir in dirs {

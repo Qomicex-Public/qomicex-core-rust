@@ -148,7 +148,9 @@ impl Mods {
             if !path.is_file() {
                 continue;
             }
-            let is_jar = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("jar"));
+            let is_jar = path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("jar"));
             let is_disabled = path
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("disabled"));
@@ -208,37 +210,35 @@ impl Mods {
             let cache_dir = self.icon_cache_dir.clone();
             tasks.spawn_blocking(move || -> Result<(usize, ModInfo), Error> {
                 // Stat jar for cache validation (cheap, no file content read)
-                let (file_size, file_mtime_millis) =
-                    match std::fs::metadata(&mod_path) {
-                        Ok(m) => {
-                            let size = m.len();
-                            let mtime = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                            let millis = mtime
-                                .duration_since(SystemTime::UNIX_EPOCH)
-                                .map(|d| d.as_millis() as u64)
-                                .unwrap_or(0);
-                            (size, millis)
-                        }
-                        Err(_) => (0, 0),
-                    };
+                let (file_size, file_mtime_millis) = match std::fs::metadata(&mod_path) {
+                    Ok(m) => {
+                        let size = m.len();
+                        let mtime = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                        let millis = mtime
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        (size, millis)
+                    }
+                    Err(_) => (0, 0),
+                };
 
                 let path_hash = sha1_hex(mod_path.as_bytes());
 
                 // Per-jar cache hit: skip file read and zip parsing entirely
                 if let Some(ref dir) = cache_dir {
                     let cache_file = dir.join(format!("{path_hash}.json"));
-                    if let Some(cached) = load_cached_mod(&cache_file, file_size, file_mtime_millis) {
+                    if let Some(cached) = load_cached_mod(&cache_file, file_size, file_mtime_millis)
+                    {
                         let icon_base64 = cached.icon_sha1.and_then(|sha1| {
                             let icon_file = dir.join("icons").join(format!("{sha1}.png"));
-                            std::fs::read(&icon_file)
-                                .ok()
-                                .and_then(|bytes| {
-                                    if bytes.is_empty() {
-                                        None
-                                    } else {
-                                        Some(base64_encode(&bytes))
-                                    }
-                                })
+                            std::fs::read(&icon_file).ok().and_then(|bytes| {
+                                if bytes.is_empty() {
+                                    None
+                                } else {
+                                    Some(base64_encode(&bytes))
+                                }
+                            })
                         });
                         return Ok((
                             idx,
@@ -382,9 +382,7 @@ impl Mods {
                 if sha1s.is_empty() {
                     return Ok(std::collections::HashMap::new());
                 }
-                modrinth
-                    .get_project_versions_from_hashes_dict(&sha1s)
-                    .await
+                modrinth.get_project_versions_from_hashes_dict(&sha1s).await
             },
             async {
                 if api_key.is_empty() || cf_hashes.is_empty() {
@@ -484,7 +482,9 @@ fn parse_metadata(file_bytes: &[u8], info: &mut ModInfo) {
 /// `OrdinalIgnoreCase` 匹配；zip crate 的 by_name 为精确匹配 → 先定位索引再 by_index，
 /// 同 P44 基类 try_read_file_from_zip 的处理方式）
 fn find_entry_index<R: Read + Seek>(archive: &ZipArchive<R>, entry_path: &str) -> Option<usize> {
-    archive.file_names().position(|n| n.eq_ignore_ascii_case(entry_path))
+    archive
+        .file_names()
+        .position(|n| n.eq_ignore_ascii_case(entry_path))
 }
 
 /// 读取 zip 内条目文本（源：ReadZipEntry + StreamReader）。
@@ -554,8 +554,8 @@ fn parse_fabric_json<R: Read + Seek>(
     };
     info.name = json_str(&obj, "name").unwrap_or_else(|| "Unknown".to_string());
     info.version = json_str(&obj, "version").unwrap_or_default();
-    info.description = json_str(&obj, "description")
-        .unwrap_or_else(|| "No description available".to_string());
+    info.description =
+        json_str(&obj, "description").unwrap_or_else(|| "No description available".to_string());
     info.authors = extract_fabric_authors(obj.get("authors"));
     if let Some(icon_path) = json_str(&obj, "icon").filter(|p| !p.is_empty()) {
         info.icon = extract_icon_from_archive(archive, &icon_path);
@@ -702,7 +702,11 @@ fn parse_mcmod_json(content: &str, info: &mut ModInfo) {
     } else if let Some(v @ (Value::String(_) | Value::Number(_) | Value::Bool(_))) =
         first.get("authors")
     {
-        info.authors = v.to_string().split(',').map(|a| a.trim().to_string()).collect();
+        info.authors = v
+            .to_string()
+            .split(',')
+            .map(|a| a.trim().to_string())
+            .collect();
     }
 }
 
@@ -758,7 +762,3 @@ impl ModsManager for Mods {
         }
     }
 }
-
-
-
-

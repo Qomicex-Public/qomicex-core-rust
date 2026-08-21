@@ -97,12 +97,18 @@ impl DataPacks {
 
         let mut entries: Vec<PathBuf> = Vec::new();
         for entry in std::fs::read_dir(&datapack_directory).map_err(|e| Error::Params {
-            message: format!("读取数据包目录失败（{}）：{e}", datapack_directory.display()),
+            message: format!(
+                "读取数据包目录失败（{}）：{e}",
+                datapack_directory.display()
+            ),
             source: Some(Box::new(e)),
         })? {
             let path = entry
                 .map_err(|e| Error::Params {
-                    message: format!("读取数据包目录失败（{}）：{e}", datapack_directory.display()),
+                    message: format!(
+                        "读取数据包目录失败（{}）：{e}",
+                        datapack_directory.display()
+                    ),
                     source: Some(Box::new(e)),
                 })?
                 .path();
@@ -116,12 +122,18 @@ impl DataPacks {
             }
         }
         for entry in std::fs::read_dir(&datapack_directory).map_err(|e| Error::Params {
-            message: format!("读取数据包目录失败（{}）：{e}", datapack_directory.display()),
+            message: format!(
+                "读取数据包目录失败（{}）：{e}",
+                datapack_directory.display()
+            ),
             source: Some(Box::new(e)),
         })? {
             let path = entry
                 .map_err(|e| Error::Params {
-                    message: format!("读取数据包目录失败（{}）：{e}", datapack_directory.display()),
+                    message: format!(
+                        "读取数据包目录失败（{}）：{e}",
+                        datapack_directory.display()
+                    ),
                     source: Some(Box::new(e)),
                 })?
                 .path();
@@ -207,10 +219,7 @@ impl DataPacks {
             message: format!("读取文件失败（{}）：{e}", file_path.display()),
             source: Some(Box::new(e)),
         })?;
-        Ok((
-            sha1_hex(&file_bytes),
-            curse_forge_fingerprint(&file_bytes),
-        ))
+        Ok((sha1_hex(&file_bytes), curse_forge_fingerprint(&file_bytes)))
     }
 
     /// 目录形式数据包：在内存中把目录全部文件重新压缩为 ZIP 再计算哈希
@@ -400,8 +409,7 @@ fn sha1_hex(data: &[u8]) -> String {
 /// ⚠️ 映射表规划 `base64` crate，但 Cargo.toml 尚未引入（本批禁止改动 Cargo.toml）→
 /// 手写最小 RFC 4648 编码器，crate 落地后可替换（输出等价，见 U3）。
 fn base64_encode(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
@@ -423,5 +431,3 @@ fn base64_encode(data: &[u8]) -> String {
     }
     out
 }
-
-

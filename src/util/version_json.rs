@@ -180,7 +180,10 @@ pub fn from_jar(jar_path: &str) -> Option<String> {
     let mut hasher = sha1::Sha1::new();
     hasher.update(&bytes);
     let digest = hasher.finalize();
-    let hash = digest.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+    let hash = digest
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
     if let Some(known) = known_version(&hash) {
         return Some(known.to_string());
     }
@@ -283,8 +286,12 @@ fn read_constant_pool_utf8_strings(bytes: &[u8]) -> Result<Vec<String>, String> 
                 skip(bytes, &mut pos, 2)?;
             }
 
-            CONSTANT_FIELDREF | CONSTANT_METHODREF | CONSTANT_INTERFACEMETHODREF
-            | CONSTANT_NAMEANDTYPE | CONSTANT_DYNAMIC | CONSTANT_INVOKEDYNAMIC => {
+            CONSTANT_FIELDREF
+            | CONSTANT_METHODREF
+            | CONSTANT_INTERFACEMETHODREF
+            | CONSTANT_NAMEANDTYPE
+            | CONSTANT_DYNAMIC
+            | CONSTANT_INVOKEDYNAMIC => {
                 skip(bytes, &mut pos, 4)?;
             }
 

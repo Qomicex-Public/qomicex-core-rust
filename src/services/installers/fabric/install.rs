@@ -34,8 +34,8 @@ use serde_json::Value;
 
 use crate::error::Error;
 use crate::models::download::DownloadMirror;
-use crate::services::installers::installer::MissFileData;
 use crate::services::download::checksum::sha1_hex;
+use crate::services::installers::installer::MissFileData;
 use crate::services::installers::installer::{Installer, InstallerBase};
 use crate::util::lib_helper::maven_to_path;
 
@@ -90,10 +90,7 @@ impl FabricInstaller {
         }
 
         // 源：`var versionDir = $"{_gameDir}/versions/{versionId}"; if (!Directory.Exists) Create`
-        let version_dir = path_combine(
-            &path_combine(&self.game_dir, "versions"),
-            version_id,
-        );
+        let version_dir = path_combine(&path_combine(&self.game_dir, "versions"), version_id);
         if !Path::new(&version_dir).is_dir() {
             std::fs::create_dir_all(&version_dir).map_err(|e| Error::DownloadFailed {
                 message: format!("创建版本目录失败: {version_dir}"),
@@ -109,7 +106,8 @@ impl FabricInstaller {
                 source: None,
             });
         } else {
-            let merged = InstallerBase::merge_version_json(inherits_from_json, &json_data, Some(version_id));
+            let merged =
+                InstallerBase::merge_version_json(inherits_from_json, &json_data, Some(version_id));
             if merged.is_empty() {
                 return Err(Error::DownloadFailed {
                     message: "版本JSON合并失败".to_string(),
@@ -168,20 +166,26 @@ impl FabricInstaller {
             status: None,
             source: Some(Box::new(e)),
         })?;
-        let mut meta = meta_value.as_object().ok_or_else(|| Error::Http {
-            message: "Launcher Meta 顶层非 JSON 对象".to_string(),
-            status: None,
-            source: None,
-        })?.clone();
+        let mut meta = meta_value
+            .as_object()
+            .ok_or_else(|| Error::Http {
+                message: "Launcher Meta 顶层非 JSON 对象".to_string(),
+                status: None,
+                source: None,
+            })?
+            .clone();
 
         // 源：`meta["libraries"] as JsonArray`（null/非数组 → 跳过下载）
         if let Some(libs) = meta.get("libraries").and_then(|v| v.as_array()) {
             for lib in libs {
                 // 源：`lib["name"]?.ToString()!`（name 缺失 → NRE，此处等价报错）
-                let name = lib.get("name").and_then(|v| v.as_str()).ok_or_else(|| Error::Params {
-                    message: "库条目缺少 name（源 NullReferenceException）".to_string(),
-                    source: None,
-                })?;
+                let name =
+                    lib.get("name")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| Error::Params {
+                            message: "库条目缺少 name（源 NullReferenceException）".to_string(),
+                            source: None,
+                        })?;
                 // 源：`if (!string.IsNullOrEmpty(lib["url"]?.ToString())) urlDomain = ...`
                 let url_domain = lib
                     .get("url")
@@ -253,10 +257,13 @@ impl FabricInstaller {
         let mut miss_files = Vec::new();
         if let Some(libs) = meta.get("libraries").and_then(|v| v.as_array()) {
             for lib in libs {
-                let name = lib.get("name").and_then(|v| v.as_str()).ok_or_else(|| Error::Params {
-                    message: "库条目缺少 name（源 NullReferenceException）".to_string(),
-                    source: None,
-                })?;
+                let name =
+                    lib.get("name")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| Error::Params {
+                            message: "库条目缺少 name（源 NullReferenceException）".to_string(),
+                            source: None,
+                        })?;
                 let url_domain = lib
                     .get("url")
                     .and_then(|v| v.as_str())
@@ -318,8 +325,8 @@ impl Installer for FabricInstaller {
         inherits_from_json: &str,
         para1: Option<&str>,
         para2: Option<&str>,
-    _para3: Option<&str>,
-    _para4: Option<&str>,
+        _para3: Option<&str>,
+        _para4: Option<&str>,
     ) -> Result<(), Error> {
         // 源：`if (fabricVersion == null) throw new ArgumentNullException(nameof(fabricVersion));`
         let fabric_version = para1.ok_or_else(|| Error::Params {
@@ -386,13 +393,3 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
     }
 }
-
-
-
-
-
-
-
-
-
-

@@ -17,13 +17,13 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::Error;
 use crate::models::download::DownloadMirror;
+use crate::services::installers::fabric::install::verify_file_sha1;
 use crate::services::installers::installer::MissFileData;
 use crate::services::installers::installer::{Installer, InstallerBase};
-use crate::services::installers::fabric::install::verify_file_sha1;
 use crate::util::lib_helper::maven_to_path;
 use crate::util::platform::{get_current_arch, get_current_os_name};
 
@@ -56,7 +56,9 @@ impl BabricInstaller {
         inherits_from_json: Option<&str>,
     ) -> Result<bool, Error> {
         // 源：Trace.WriteLine($"Babric 安装开始: versionId={versionId}, babricVersion={babricVersion}, gameVersion={gameVersion}")
-        eprintln!("Babric 安装开始: versionId={version_id}, babricVersion={babric_version}, gameVersion={game_version}");
+        eprintln!(
+            "Babric 安装开始: versionId={version_id}, babricVersion={babric_version}, gameVersion={game_version}"
+        );
 
         // 源：var jsonData = await BuildJson(...); if (string.IsNullOrEmpty(jsonData)) throw new Exception("构建JSON数据失败");
         let json_data = self
@@ -137,20 +139,16 @@ impl BabricInstaller {
             });
         }
 
-        let meta_str = response
-            .text()
-            .await
-            .map_err(|e| Error::Http {
-                message: format!("读取响应体失败: {url}"),
-                status: None,
-                source: Some(Box::new(e)),
-            })?;
-        let mut meta: Value =
-            serde_json::from_str(&meta_str).map_err(|e| Error::Http {
-                message: "解析 Launcher Meta JSON 失败".to_string(),
-                status: None,
-                source: Some(Box::new(e)),
-            })?;
+        let meta_str = response.text().await.map_err(|e| Error::Http {
+            message: format!("读取响应体失败: {url}"),
+            status: None,
+            source: Some(Box::new(e)),
+        })?;
+        let mut meta: Value = serde_json::from_str(&meta_str).map_err(|e| Error::Http {
+            message: "解析 Launcher Meta JSON 失败".to_string(),
+            status: None,
+            source: Some(Box::new(e)),
+        })?;
         eprintln!("Babric Meta 获取成功");
 
         // 源：var libs = meta["libraries"] as JsonArray; if (libs != null) { Trace.WriteLine($"处理 {libs.Count} 个库文件..."); ... }
@@ -163,10 +161,7 @@ impl BabricInstaller {
                 for lib in libs {
                     download_count += 1;
                     // 源：var libName = lib!["name"]?.ToString() ?? "未知";
-                    let lib_name = lib
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("未知");
+                    let lib_name = lib.get("name").and_then(|v| v.as_str()).unwrap_or("未知");
                     // 源：urlDomain 默认固定 Babric 基地址，库自带非空 "url" 时覆盖
                     let mut url_domain = BABRIC_META_BASE.to_string();
                     if let Some(url) = lib.get("url").and_then(|v| v.as_str()) {
@@ -223,9 +218,7 @@ impl BabricInstaller {
         game_dir: &str,
     ) -> Result<Vec<MissFileData>, Error> {
         // 源：Trace.WriteLine($"Babric 缺失库检查: babricVersion={babricVersion}, gameVersion={gameVersion}");
-        eprintln!(
-            "Babric 缺失库检查: babricVersion={babric_version}, gameVersion={game_version}"
-        );
+        eprintln!("Babric 缺失库检查: babricVersion={babric_version}, gameVersion={game_version}");
         // 源：using var client = CreateHttpClient();
         let client = InstallerBase::create_http_client();
         let url = format!(
@@ -248,14 +241,11 @@ impl BabricInstaller {
             });
         }
 
-        let meta_str = response
-            .text()
-            .await
-            .map_err(|e| Error::Http {
-                message: format!("读取响应体失败: {url}"),
-                status: None,
-                source: Some(Box::new(e)),
-            })?;
+        let meta_str = response.text().await.map_err(|e| Error::Http {
+            message: format!("读取响应体失败: {url}"),
+            status: None,
+            source: Some(Box::new(e)),
+        })?;
         let meta: Value = serde_json::from_str(&meta_str).map_err(|e| Error::Http {
             message: "解析 Launcher Meta JSON 失败".to_string(),
             status: None,
@@ -283,11 +273,10 @@ impl BabricInstaller {
 
                     // 源：if (File.Exists(libPath)) { if (!string.IsNullOrEmpty(...) && VerifyFileSha1(...)) { Trace.WriteLine("  已存在 (SHA1匹配): ..."); continue; } else Trace.WriteLine("  SHA1不匹配，需重下: ..."); } else Trace.WriteLine($"  缺失: ...");
                     if lib_path.is_file() {
-                        let sha1 = lib
-                            .get("sha1")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default();
-                        if !sha1.is_empty() && verify_file_sha1(lib_path.to_str().unwrap_or_default(), sha1) {
+                        let sha1 = lib.get("sha1").and_then(|v| v.as_str()).unwrap_or_default();
+                        if !sha1.is_empty()
+                            && verify_file_sha1(lib_path.to_str().unwrap_or_default(), sha1)
+                        {
                             eprintln!("  已存在 (SHA1匹配): {:?}", lib.get("name"));
                             continue;
                         } else {
@@ -364,8 +353,8 @@ impl Installer for BabricInstaller {
         inherits_from_json: &str,
         para1: Option<&str>,
         para2: Option<&str>,
-    _para3: Option<&str>,
-    _para4: Option<&str>,
+        _para3: Option<&str>,
+        _para4: Option<&str>,
     ) -> Result<(), Error> {
         // 源：if (babricVersion == null) throw new ArgumentNullException(nameof(babricVersion));
         let Some(babric_version) = para1 else {
@@ -382,8 +371,13 @@ impl Installer for BabricInstaller {
             });
         };
         // 源：await InstallBabricAsync(versionId, babricVersion, gameVersion, inheritsFromJson);
-        self.install_babric_async(version_id, babric_version, game_version, Some(inherits_from_json))
-            .await?;
+        self.install_babric_async(
+            version_id,
+            babric_version,
+            game_version,
+            Some(inherits_from_json),
+        )
+        .await?;
         Ok(())
     }
 
@@ -403,15 +397,3 @@ impl Installer for BabricInstaller {
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-

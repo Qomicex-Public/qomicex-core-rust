@@ -91,8 +91,14 @@ impl Serialize for VersionArguments {
             )),
             VersionArguments::New { game, jvm } => {
                 let mut obj = Map::new();
-                obj.insert("game".into(), serde_json::to_value(game).map_err(S::Error::custom)?);
-                obj.insert("jvm".into(), serde_json::to_value(jvm).map_err(S::Error::custom)?);
+                obj.insert(
+                    "game".into(),
+                    serde_json::to_value(game).map_err(S::Error::custom)?,
+                );
+                obj.insert(
+                    "jvm".into(),
+                    serde_json::to_value(jvm).map_err(S::Error::custom)?,
+                );
                 Value::Object(obj).serialize(serializer)
             }
         }
@@ -109,9 +115,9 @@ impl<'de> Deserialize<'de> for VersionArguments {
             // 旧形态：arguments 直接为字符串
             Value::String(s) => Ok(VersionArguments::Old(s)),
             Value::Object(obj) => {
-                let game = obj
-                    .get("game")
-                    .ok_or_else(|| D::Error::custom("arguments 缺少 game 键（源逻辑：返回 null）"))?;
+                let game = obj.get("game").ok_or_else(|| {
+                    D::Error::custom("arguments 缺少 game 键（源逻辑：返回 null）")
+                })?;
                 let game = parse_argument_items(game).map_err(D::Error::custom)?;
                 let jvm = match obj.get("jvm") {
                     Some(v) => parse_argument_items(v).map_err(D::Error::custom)?,
@@ -184,7 +190,9 @@ impl<'de> Deserialize<'de> for ArgumentItem {
                 Ok(ArgumentItem::Object { value, rules })
             }
             // 源 ParseItems：非字符串/对象元素被忽略（跳过）；此处仅对直接解析单元素时报错
-            _ => Err(D::Error::custom("参数项既非字符串也非对象（源逻辑：忽略该元素）")),
+            _ => Err(D::Error::custom(
+                "参数项既非字符串也非对象（源逻辑：忽略该元素）",
+            )),
         }
     }
 }

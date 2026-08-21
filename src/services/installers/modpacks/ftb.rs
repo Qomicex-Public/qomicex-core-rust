@@ -115,10 +115,15 @@ impl Installer for FtbModpackInstaller {
         println!("[FTB] 请求版本详情...");
         // 源：await _ftb.GetVersionDetailAsync(_packId, _packVersionId)
         // （FTBBase 内部错误吞掉 → null → Rust Option::None，不产生 Err）
-        let json = self.ftb.get_version_detail(pack_id, pack_version_id).await?;
+        let json = self
+            .ftb
+            .get_version_detail(pack_id, pack_version_id)
+            .await?;
         println!(
             "[FTB] 版本详情获取完成，文件数={}",
-            json.as_ref().and_then(|j| j.files.as_ref()).map_or(0, |f| f.len())
+            json.as_ref()
+                .and_then(|j| j.files.as_ref())
+                .map_or(0, |f| f.len())
         );
 
         let Some(detail) = json else {
@@ -142,9 +147,7 @@ impl Installer for FtbModpackInstaller {
                 }
                 // 源：string baseDir = _versionIsolation ? Path.Combine(_gameDir, "versions", versionId) : _gameDir;
                 let base_dir = if self.version_isolation {
-                    Path::new(&self.game_dir)
-                        .join("versions")
-                        .join(version_id)
+                    Path::new(&self.game_dir).join("versions").join(version_id)
                 } else {
                     PathBuf::from(&self.game_dir)
                 };
@@ -178,7 +181,10 @@ impl Installer for FtbModpackInstaller {
         let mods_info = self.ftb.get_mod_detail(pack_id, pack_version_id).await;
         println!(
             "[FTB] Mod 清单获取完成，mod数={}",
-            mods_info.as_ref().and_then(|m| m.mods.as_ref()).map_or(0, |m| m.len())
+            mods_info
+                .as_ref()
+                .and_then(|m| m.mods.as_ref())
+                .map_or(0, |m| m.len())
         );
 
         let Some(mods_info) = mods_info else {
@@ -218,7 +224,10 @@ impl Installer for FtbModpackInstaller {
         );
         // 源：var fileInfoMap = await _cf.GetFilesBatchAsync(fileIds);
         let file_info_map = cf.get_files_batch(&file_ids).await?;
-        println!("[FTB] CurseForge 批量查询完成，成功获取={}", file_info_map.len());
+        println!(
+            "[FTB] CurseForge 批量查询完成，成功获取={}",
+            file_info_map.len()
+        );
 
         // 源：foreach (FtbModInfo modIndo in modsInfo?.Mods)
         // ⚠️ 微差：Mods 为 null 时源 foreach 抛 NullReferenceException → 此处按空列表
@@ -268,6 +277,3 @@ impl Installer for FtbModpackInstaller {
         Ok(miss_files)
     }
 }
-
-
-

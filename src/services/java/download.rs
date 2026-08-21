@@ -109,7 +109,9 @@ impl JavaDownloader {
         architecture: JavaArchitecture,
         package_type: JavaPackageType,
     ) -> Result<Option<JavaPackageInfo>, Error> {
-        let body = self.get_string(&Self::build_adoptium_url(major_version)).await?;
+        let body = self
+            .get_string(&Self::build_adoptium_url(major_version))
+            .await?;
         let root: Value = serde_json::from_str(&body).map_err(|e| Error::Http {
             message: "解析 Adoptium 响应失败".to_string(),
             status: None,
@@ -184,7 +186,8 @@ impl JavaDownloader {
         architecture: JavaArchitecture,
         package_type: JavaPackageType,
     ) -> Result<Option<JavaPackageInfo>, Error> {
-        let url = Self::build_zulu_metadata_url(major_version, platform, architecture, package_type);
+        let url =
+            Self::build_zulu_metadata_url(major_version, platform, architecture, package_type);
         let body = self.get_string(&url).await?;
         Ok(parse_zulu_response(
             &body,
@@ -320,7 +323,9 @@ fn is_matching_adoptium_binary(
         && node_string(asset.pointer("/binary/image_type"))
             .eq_ignore_ascii_case(map_adoptium_image_type(package_type))
         && is_portable_package(
-            asset.pointer("/binary/package/name").and_then(Value::as_str),
+            asset
+                .pointer("/binary/package/name")
+                .and_then(Value::as_str),
             platform,
         )
 }
@@ -349,7 +354,9 @@ fn to_adoptium_package_info(
         file_name: node_string(asset.pointer("/binary/package/name")),
         download_url: node_string(asset.pointer("/binary/package/link")),
         sha256: node_string(asset.pointer("/binary/package/checksum")),
-        size: asset.pointer("/binary/package/size").and_then(Value::as_i64),
+        size: asset
+            .pointer("/binary/package/size")
+            .and_then(Value::as_i64),
     }
 }
 
@@ -526,7 +533,3 @@ fn to_comparable_version(value: Option<&Value>) -> Result<String, ()> {
     }
     Ok(out)
 }
-
-
-
-

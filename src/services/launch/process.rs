@@ -192,7 +192,10 @@ async fn collect_descendants(root_pid: i32) -> Vec<i32> {
     let mut children: std::collections::HashMap<i32, Vec<i32>> = std::collections::HashMap::new();
     for line in out.lines() {
         let mut it = line.split_whitespace();
-        if let (Some(pid), Some(ppid)) = (it.next().and_then(|v| v.parse::<i32>().ok()), it.next().and_then(|v| v.parse::<i32>().ok())) {
+        if let (Some(pid), Some(ppid)) = (
+            it.next().and_then(|v| v.parse::<i32>().ok()),
+            it.next().and_then(|v| v.parse::<i32>().ok()),
+        ) {
             children.entry(ppid).or_default().push(pid);
         }
     }
@@ -245,9 +248,7 @@ impl LaunchExecutor {
 
         // 源：WorkingDirectory = VersionIsolation ? gameDir/versions/version : gameDir
         let working_dir = if options.version_isolation {
-            Path::new(&game_dir)
-                .join("versions")
-                .join(&options.version)
+            Path::new(&game_dir).join("versions").join(&options.version)
         } else {
             Path::new(&game_dir).to_path_buf()
         };
@@ -270,12 +271,10 @@ impl LaunchExecutor {
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| Error::Params {
-                message: format!("启动失败,{e}"),
-                source: Some(Box::new(e)),
-            })?;
+        let mut child = cmd.spawn().map_err(|e| Error::Params {
+            message: format!("启动失败,{e}"),
+            source: Some(Box::new(e)),
+        })?;
 
         // 源：LaunchResult.ProcessId = process.Id
         let process_id = child.id().map(|id| id as i32).unwrap_or(0);
@@ -286,8 +285,10 @@ impl LaunchExecutor {
         let stdout_pipe = child.stdout.take();
         let stderr_pipe = child.stderr.take();
         tokio::spawn(async move {
-            let out_fut = OptionFuture::from(stdout_pipe.map(|p| forward_pipe(p, true, process_id)));
-            let err_fut = OptionFuture::from(stderr_pipe.map(|p| forward_pipe(p, false, process_id)));
+            let out_fut =
+                OptionFuture::from(stdout_pipe.map(|p| forward_pipe(p, true, process_id)));
+            let err_fut =
+                OptionFuture::from(stderr_pipe.map(|p| forward_pipe(p, false, process_id)));
             let _ = futures::future::join(out_fut, err_fut).await;
             // 源：process.Exited → result.OnExit?.Invoke(process.ExitCode)（写 stderr）+ Dispose
             let mut child = child;
@@ -354,8 +355,9 @@ impl LaunchExecutor {
         if !natives.is_empty() {
             // 逐个解压 natives JAR 到 natives 目录（保留 JAR 内部目录结构）
             for native in &natives {
-                let zip_file_path =
-                    Path::new(&game_dir).join("libraries").join(self.get_native_path(native));
+                let zip_file_path = Path::new(&game_dir)
+                    .join("libraries")
+                    .join(self.get_native_path(native));
                 if zip_file_path.is_file() {
                     unzip(zip_file_path.to_str().unwrap_or_default(), &natives_dir);
                     eprintln!("已解压Natives: {}", native.name);
@@ -379,8 +381,9 @@ impl LaunchExecutor {
             // 源：Directory.CreateDirectory（失败抛异常向上传播）
             fs::create_dir_all(java_lib_path).map_err(io_err)?;
             for native in &natives {
-                let zip_file_path =
-                    Path::new(&game_dir).join("libraries").join(self.get_native_path(native));
+                let zip_file_path = Path::new(&game_dir)
+                    .join("libraries")
+                    .join(self.get_native_path(native));
                 if zip_file_path.is_file() {
                     unzip(zip_file_path.to_str().unwrap_or_default(), &java_lib_dir);
                 }
@@ -414,8 +417,8 @@ impl LaunchExecutor {
         };
         // 所有已知架构目录名
         const KNOWN_ARCH: [&str; 11] = [
-            "x64", "x86_64", "x86-64", "amd64", "arm64", "aarch64", "x86", "i386", "i686",
-            "arm", "arm32",
+            "x64", "x86_64", "x86-64", "amd64", "arm64", "aarch64", "x86", "i386", "i686", "arm",
+            "arm32",
         ];
         let is_known = KNOWN_ARCH.iter().any(|a| a.eq_ignore_ascii_case(name));
         let is_host = host_aliases.iter().any(|a| a.eq_ignore_ascii_case(name));
@@ -461,8 +464,7 @@ impl LaunchExecutor {
                     .map(|e| format!(".{}", e.to_string_lossy()))
                     .unwrap_or_default();
                 if ext.eq_ignore_ascii_case(keep_ext) {
-                    let dest_path =
-                        dir_path.join(file_path.file_name().unwrap_or_default());
+                    let dest_path = dir_path.join(file_path.file_name().unwrap_or_default());
                     // 源：File.Move（目标已存在则不移动，不覆盖）
                     if !dest_path.exists() {
                         fs::rename(&file_path, &dest_path).map_err(io_err)?;
@@ -675,7 +677,11 @@ fn log_launch_error(err: &Error) {
     let log_dir = Path::new(&get_data_dir()).join("logs");
     let _ = fs::create_dir_all(&log_dir);
     let log_file = log_dir.join("launch-errors.log");
-    let mut file = match fs::OpenOptions::new().create(true).append(true).open(log_file) {
+    let mut file = match fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_file)
+    {
         Ok(f) => f,
         Err(_) => return,
     };
@@ -785,7 +791,6 @@ fn io_err(e: std::io::Error) -> Error {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -802,7 +807,11 @@ mod tests {
     fn split_command_line_quoted_spaces() {
         assert_eq!(
             split_command_line(r#""C:\Program Files\Java\jdk-17\bin\java.exe" -jar x.jar"#),
-            vec![r#"C:\Program Files\Java\jdk-17\bin\java.exe"#, "-jar", "x.jar"]
+            vec![
+                r#"C:\Program Files\Java\jdk-17\bin\java.exe"#,
+                "-jar",
+                "x.jar"
+            ]
         );
     }
 
@@ -829,6 +838,3 @@ mod tests {
         assert!(s.contains('.'));
     }
 }
-
-
-

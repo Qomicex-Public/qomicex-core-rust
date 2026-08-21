@@ -4,12 +4,12 @@
 //! （接口名 `ILocalResourcesFactory`，声明于该文件内，
 //! namespace Qomicex.Core.AOT.Services.Expansion.Local）
 
-use async_trait::async_trait;
 use crate::api::server::ServerManager;
 use crate::error::Error;
 use crate::models::expansion::local::{
     DataPackInfo, LevelDatSettings, ModInfo, ResourcePackInfo, SaveInfo, ScreenshotInfo, ShaderInfo,
 };
+use async_trait::async_trait;
 
 // 方法映射表：
 // - `CreateMods(string gameDir, string version, bool versionSegmented, string apiKey) -> Mods`
@@ -165,9 +165,7 @@ pub trait SavesManager: Send + Sync {
 #[async_trait]
 pub trait ResourcepackManager: Send + Sync {
     /// 扫描资源包列表（源：GetResourcePackList，含 pack.mcmeta 解析）
-    async fn get_resource_pack_list(
-        &self,
-    ) -> Result<Vec<ResourcePackInfo>, Error>;
+    async fn get_resource_pack_list(&self) -> Result<Vec<ResourcePackInfo>, Error>;
 }
 
 /// 光影管理器（源：concrete class `Shaders`，Services/Expansion/Local/Shaders.cs）。
@@ -175,9 +173,7 @@ pub trait ResourcepackManager: Send + Sync {
 #[async_trait]
 pub trait ShadersManager: Send + Sync {
     /// 扫描光影列表（源：GetShaderList）
-    async fn get_shader_list(
-        &self,
-    ) -> Result<Vec<ShaderInfo>, Error>;
+    async fn get_shader_list(&self) -> Result<Vec<ShaderInfo>, Error>;
 }
 
 /// 截图管理器（源：concrete class `Screenshots`，Services/Expansion/Local/Screenshots.cs）。
@@ -191,12 +187,5 @@ pub trait ScreenshotsManager: Send + Sync {
 #[async_trait]
 pub trait DataPacksManager: Send + Sync {
     /// 扫描数据包列表（源：GetDataPackList）
-    async fn get_data_pack_list(
-        &self,
-    ) -> Result<Vec<DataPackInfo>, Error>;
+    async fn get_data_pack_list(&self) -> Result<Vec<DataPackInfo>, Error>;
 }
-
-
-
-
-

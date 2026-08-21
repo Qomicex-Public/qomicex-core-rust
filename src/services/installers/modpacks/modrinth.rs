@@ -71,14 +71,13 @@ impl ModrinthModpackInstaller {
     fn release_files(&self, version_id: &str) -> Result<(), Error> {
         // 源：var versionDir = _versionIsolation ? Path.Combine(_gameDir, "versions", versionId) : _gameDir;
         let version_dir = if self.version_isolation {
-            Path::new(&self.game_dir)
-                .join("versions")
-                .join(version_id)
+            Path::new(&self.game_dir).join("versions").join(version_id)
         } else {
             PathBuf::from(&self.game_dir)
         };
         // 源：if (!Directory.Exists(versionDir)) Directory.CreateDirectory(versionDir)
-std::fs::create_dir_all(&version_dir).map_err(|e| file_io_err(&self.modpack_file_path, e))?;
+        std::fs::create_dir_all(&version_dir)
+            .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
 
         let file = std::fs::File::open(&self.modpack_file_path)
             .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
@@ -108,13 +107,13 @@ std::fs::create_dir_all(&version_dir).map_err(|e| file_io_err(&self.modpack_file
             let last_segment = full_name.rsplit('/').next().unwrap_or("");
             if last_segment.is_empty() {
                 // 源：Directory.CreateDirectory(destinationPath)
-std::fs::create_dir_all(&destination_path)
+                std::fs::create_dir_all(&destination_path)
                     .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
             } else {
                 // 源：Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!) 后
                 //      entry.ExtractToFile(destinationPath, overwrite: true)
                 if let Some(parent) = destination_path.parent() {
-std::fs::create_dir_all(parent)
+                    std::fs::create_dir_all(parent)
                         .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
                 }
                 let mut out = std::fs::File::create(&destination_path)
@@ -190,13 +189,3 @@ fn file_io_err(path: &str, e: std::io::Error) -> Error {
         source: Some(Box::new(e)),
     }
 }
-
-
-
-
-
-
-
-
-
-

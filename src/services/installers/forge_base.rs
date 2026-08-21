@@ -105,7 +105,11 @@ impl ForgeInstallerBase {
         java_path: &str,
     ) -> Result<(), Error> {
         // 源：`string separator = OperatingSystem.IsWindows() ? ";" : ":";`
-        let separator = if cfg!(target_os = "windows") { ";" } else { ":" };
+        let separator = if cfg!(target_os = "windows") {
+            ";"
+        } else {
+            ":"
+        };
 
         // 源：输出文件已存在且 SHA1 匹配 → 处理器已执行过，提前返回
         let output_paths = self.replace_outputs(ip_obj, processor, game_dir)?;
@@ -200,7 +204,9 @@ impl ForgeInstallerBase {
         let exit_code = InstallerBase::run_install_process(&command, Some(java_path));
         if exit_code != 0 {
             return Err(Error::Params {
-                message: format!("Processor执行失败，命令: {java_path} {command}\nExit code:{exit_code}"),
+                message: format!(
+                    "Processor执行失败，命令: {java_path} {command}\nExit code:{exit_code}"
+                ),
                 source: None,
             });
         }
@@ -269,10 +275,8 @@ impl ForgeInstallerBase {
         if !(parsed.scheme() == "http" || parsed.scheme() == "https") {
             return false;
         }
-        let builder =
-            NetworkConfig::global().apply(reqwest::Client::builder().timeout(Duration::from_secs(
-                timeout_seconds,
-            )));
+        let builder = NetworkConfig::global()
+            .apply(reqwest::Client::builder().timeout(Duration::from_secs(timeout_seconds)));
         let Ok(client) = builder.build() else {
             return false;
         };
@@ -301,7 +305,8 @@ impl ForgeInstallerBase {
                 source: None,
             });
         }
-        let normalized_relative_path = relative_path.replace('/', &std::path::MAIN_SEPARATOR.to_string());
+        let normalized_relative_path =
+            relative_path.replace('/', &std::path::MAIN_SEPARATOR.to_string());
         Ok(join_path(
             &join_path(game_dir, "libraries"),
             &normalized_relative_path,
@@ -364,7 +369,8 @@ impl ForgeInstallerBase {
             return Ok(outputs);
         };
         for (key, value) in outputs_obj {
-            let replaced_str = self.replace_arguments(ip_obj, &format!("{key}={}", node_to_string(value)))?;
+            let replaced_str =
+                self.replace_arguments(ip_obj, &format!("{key}={}", node_to_string(value)))?;
             let split_arr: Vec<&str> = replaced_str.split('=').collect();
             if split_arr.len() != 2 {
                 continue;
@@ -492,15 +498,9 @@ impl ForgeInstallerBase {
         let mut result = value.to_string();
         let bracket_re = bracket_regex();
         for capture in bracket_re.captures_iter(value) {
-            let coordinate = capture
-                .get(1)
-                .map(|g| g.as_str())
-                .unwrap_or_default();
+            let coordinate = capture.get(1).map(|g| g.as_str()).unwrap_or_default();
             let replacement = Self::resolve_library_path(&self.game_dir, coordinate)?;
-            let matched = capture
-                .get(0)
-                .map(|g| g.as_str())
-                .unwrap_or_default();
+            let matched = capture.get(0).map(|g| g.as_str()).unwrap_or_default();
             result = result.replace(matched, &replacement);
         }
         Ok(result)
@@ -548,17 +548,16 @@ impl ForgeInstallerBase {
     /// `sides` 缺失或为空数组 → true（源 `sides == null || sides.Count == 0`）；否则
     /// 任一元素与 side 忽略大小写相等（源 `string.Equals(v, side, OrdinalIgnoreCase)`）→ true。
     /// 源为实例方法但未用实例状态 → 移植为关联函数。
-    pub(crate) fn should_run_processor(
-        processor: &Map<String, Value>,
-        side: &str,
-    ) -> bool {
+    pub(crate) fn should_run_processor(processor: &Map<String, Value>, side: &str) -> bool {
         let Some(sides) = processor.get("sides").and_then(|v| v.as_array()) else {
             return true;
         };
         if sides.is_empty() {
             return true;
         }
-        sides.iter().any(|t| node_to_string(t).eq_ignore_ascii_case(side))
+        sides
+            .iter()
+            .any(|t| node_to_string(t).eq_ignore_ascii_case(side))
     }
 }
 
@@ -654,9 +653,9 @@ mod tests {
         let ip_obj = install_profile_with_data();
         let ip_map = ip_obj.as_object().expect("object");
 
-        let resolved =
-            base.replace_arguments(ip_map, &format!("{{PATCHED}}={{PATCHED_SHA}}"))
-                .expect("replace_arguments 不应失败");
+        let resolved = base
+            .replace_arguments(ip_map, &format!("{{PATCHED}}={{PATCHED_SHA}}"))
+            .expect("replace_arguments 不应失败");
 
         let expected_abs = join_path(
             &join_path(r"C:\Games\.minecraft", "libraries"),
@@ -722,7 +721,9 @@ mod tests {
             "--apply 应指向 client.lzma: {args}"
         );
         assert!(
-            !args.contains("{BINPATCH}") && !args.contains("{PATCHED}") && !args.contains("{MINECRAFT_JAR}"),
+            !args.contains("{BINPATCH}")
+                && !args.contains("{PATCHED}")
+                && !args.contains("{MINECRAFT_JAR}"),
             "未替换的占位符残留: {args}"
         );
         eprintln!("[binarypatcher client args] {args}");
@@ -735,13 +736,12 @@ mod tests {
         // 日志 `无效的Maven坐标格式：libraries\net\…client.jar，至少需要3个部分`，
         // 且 --output 指向无盘符的坏路径。修复后 game_dir 非空 → 输出键为绝对路径，
         // resolve_processor_output_path 走 rooted 分支、不再触发该报错。
-        let processed_key =
-            base_with("")
-                .replace_arguments(
-                    install_profile_with_data().as_object().expect("object"),
-                    "{PATCHED}".into(),
-                )
-                .expect("resolve");
+        let processed_key = base_with("")
+            .replace_arguments(
+                install_profile_with_data().as_object().expect("object"),
+                "{PATCHED}".into(),
+            )
+            .expect("resolve");
         // 修复前形态：空 game_dir 得到相对 `libraries\net\…`
         assert!(
             processed_key.starts_with("libraries\\net\\minecraftforge\\forge\\"),
@@ -754,7 +754,10 @@ mod tests {
                 "{PATCHED}".into(),
             )
             .expect("resolve");
-        assert!(Path::new(&populated_key).is_absolute(), "应为绝对路径：{populated_key}");
+        assert!(
+            Path::new(&populated_key).is_absolute(),
+            "应为绝对路径：{populated_key}"
+        );
         assert!(
             populated_key
                 .get(..r"C:\Games\.minecraft".len())
@@ -787,4 +790,3 @@ mod tests {
         );
     }
 }
-

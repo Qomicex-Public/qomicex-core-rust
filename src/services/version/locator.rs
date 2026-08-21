@@ -23,7 +23,9 @@ use crate::error::Error;
 use crate::models::download::DownloadMirror;
 use crate::models::installer::MissFileInfo;
 use crate::models::local::{LocalVersionInfo, ModloaderInfo, ModloaderType};
-use crate::models::version_metadata::{ArgumentItem, CompleteVersionMetadata, Library, VersionArguments};
+use crate::models::version_metadata::{
+    ArgumentItem, CompleteVersionMetadata, Library, VersionArguments,
+};
 use crate::net::NetworkConfig;
 use crate::services::version::locator_miss::AssetIndexData;
 use crate::util::file_helper::validate_file_hash;
@@ -319,7 +321,7 @@ impl DefaultVersionLocator {
         let mut is_babric_found = false;
         // 源 isLegacyFabricFound：仅置位、从未读取（源同）——
         // 保留状态以对齐行为，赋值处抑制 unused_assignments 告警
-                let mut _is_legacy_fabric_found = false;
+        let mut _is_legacy_fabric_found = false;
 
         // 源 `if (meta != null)`：Rust 引用非空，恒成立，直接执行
 
@@ -507,7 +509,8 @@ impl DefaultVersionLocator {
                 version: "Unknown".to_string(),
             });
         }
-        if !(is_neo_forge_found || is_forge_found) && main_class == "cpw.mods.bootstraplauncher.bootstraplauncher"
+        if !(is_neo_forge_found || is_forge_found)
+            && main_class == "cpw.mods.bootstraplauncher.bootstraplauncher"
         {
             is_neo_forge_found = true;
             types.push(ModloaderInfo {
@@ -569,8 +572,8 @@ impl DefaultVersionLocator {
     /// 获取主客户端 jar 路径（源：GetJarPath）。
     /// 本版本 jar 存在 → 本版本；否则 InheritsFrom 非空 → 父版本 jar；否则空串
     fn get_jar_path(&self, version_id: &str, metadata: &CompleteVersionMetadata) -> String {
-        let client_path = Path::new(&self.get_version_path(version_id))
-            .join(format!("{version_id}.jar"));
+        let client_path =
+            Path::new(&self.get_version_path(version_id)).join(format!("{version_id}.jar"));
         if !client_path.is_file() {
             match &metadata.inherits_from {
                 Some(parent) if !parent.is_empty() => {
@@ -621,7 +624,12 @@ impl VersionLocator for DefaultVersionLocator {
         // 元数据按 id 直读版本 JSON，缓存 miss 时直接读文件（下方已有逻辑），
         // 无需求助全量缓存；launch 完整性检查（InheritsFrom 链会经过本方法）
         // 因此不再被每次 locator 重建触发的扫描阻塞（见 p28a 修复记录）。
-        if let Some(metadata) = self.cache.lock().expect("版本缓存锁被毒化").metadata_cache.get(version_id)
+        if let Some(metadata) = self
+            .cache
+            .lock()
+            .expect("版本缓存锁被毒化")
+            .metadata_cache
+            .get(version_id)
         {
             return Some(metadata.clone());
         }
@@ -634,9 +642,11 @@ impl VersionLocator for DefaultVersionLocator {
         }
 
         // 源 try/catch → null：读取/解析失败均返回 None
-        let metadata = std::fs::read_to_string(&json_path)
-            .ok()
-            .and_then(|json| json_helper::deserialize_version_metadata(&json).ok().flatten());
+        let metadata = std::fs::read_to_string(&json_path).ok().and_then(|json| {
+            json_helper::deserialize_version_metadata(&json)
+                .ok()
+                .flatten()
+        });
         if let Some(metadata) = &metadata {
             self.cache
                 .lock()
@@ -685,10 +695,7 @@ impl VersionLocator for DefaultVersionLocator {
 
     /// 获取缺失文件列表（源：GetMissFilesAsync(string jsonData)，第 284-285 行）
     /// 先解析 JSON（失败按源 ArgumentException 语义报错），再委托 meta 重载。
-    async fn get_miss_files_from_json(
-        &self,
-        json_data: &str,
-    ) -> Result<Vec<MissFileInfo>, Error> {
+    async fn get_miss_files_from_json(&self, json_data: &str) -> Result<Vec<MissFileInfo>, Error> {
         let meta = self.get_meta_from_json(json_data)?;
         self.get_miss_files(&meta).await
     }
@@ -809,23 +816,22 @@ impl VersionLocator for DefaultVersionLocator {
 
         // 源：!File.Exists(indexPath) || !ValidateFileHash(indexPath, assetIndex.Sha1) → 下载索引
         if !index_path.is_file() || !validate_file_hash(&index_path_str, &asset_index.sha1) {
-            self.download_asset_index(asset_index, &index_path_str).await?;
+            self.download_asset_index(asset_index, &index_path_str)
+                .await?;
         }
 
         // 源：File.ReadAllTextAsync + JsonSerializer.Deserialize（解析失败向上传播）
-        let index_json =
-            tokio::fs::read_to_string(&index_path_str)
-                .await
-                .map_err(|e| Error::DownloadFailed {
-                    message: format!("读取资源索引失败: {index_path_str}"),
-                    source: Some(Box::new(e)),
-                })?;
-        let index_data: AssetIndexData = serde_json::from_str(&index_json).map_err(|e| {
-            Error::DownloadFailed {
+        let index_json = tokio::fs::read_to_string(&index_path_str)
+            .await
+            .map_err(|e| Error::DownloadFailed {
+                message: format!("读取资源索引失败: {index_path_str}"),
+                source: Some(Box::new(e)),
+            })?;
+        let index_data: AssetIndexData =
+            serde_json::from_str(&index_json).map_err(|e| Error::DownloadFailed {
                 message: format!("解析资源索引失败: {index_path_str}"),
                 source: Some(Box::new(e)),
-            }
-        })?;
+            })?;
         // 源：indexData?.Objects == null → 返回空列表
         let Some(objects) = index_data.objects else {
             return Ok(Vec::new());
@@ -865,10 +871,7 @@ impl VersionLocator for DefaultVersionLocator {
     }
 
     /// 获取缺失资源文件列表（源：GetMissAssetsAsync(string jsonData)，第 233-234 行）
-    async fn get_miss_assets_from_json(
-        &self,
-        json_data: &str,
-    ) -> Result<Vec<MissFileInfo>, Error> {
+    async fn get_miss_assets_from_json(&self, json_data: &str) -> Result<Vec<MissFileInfo>, Error> {
         let meta = self.get_meta_from_json(json_data)?;
         self.get_miss_assets(&meta).await
     }
@@ -914,9 +917,3 @@ fn calculate_version_size(version_path: &Path) -> i64 {
     }
     total
 }
-
-
-
-
-
-

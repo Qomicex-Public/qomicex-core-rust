@@ -274,7 +274,10 @@ fn read_long_array_payload<R: Read>(reader: &mut R) -> Result<Vec<i64>, NbtError
 }
 
 /// 对应源 WriteCompoundPayload：逐条目写命名标签，最后写 End
-fn write_compound_payload<W: Write>(writer: &mut W, compound: &NbtCompound) -> Result<(), NbtError> {
+fn write_compound_payload<W: Write>(
+    writer: &mut W,
+    compound: &NbtCompound,
+) -> Result<(), NbtError> {
     for (name, value) in compound.iter() {
         write_named_tag(writer, name, value)?;
     }

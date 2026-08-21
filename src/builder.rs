@@ -364,7 +364,9 @@ impl GameCoreBuilder {
         // 源：var downloadSource = _source ?? new DefaultDownloadSourceManager(_options.DownloadMirror)
         let download_source = match &self.source {
             Some(source) => source.clone(),
-            None => Arc::new(DefaultDownloadSourceManager::new(self.options.download_mirror)),
+            None => Arc::new(DefaultDownloadSourceManager::new(
+                self.options.download_mirror,
+            )),
         };
 
         // 源：var version = _version ?? new VersionManagementService(_options.GameRoot, http, downloadSource)
@@ -410,10 +412,12 @@ impl GameCoreBuilder {
         //   未移植）→ 未注入时 panic 并提示；注入后正常工作
         let installer_provider = match &self.installer_provider {
             Some(provider) => provider.clone(),
-            None => Arc::new(crate::services::installers::provider::InstallerProviderService::new(
-                http.clone(),
-                self.options.download_mirror,
-            )),
+            None => Arc::new(
+                crate::services::installers::provider::InstallerProviderService::new(
+                    http.clone(),
+                    self.options.download_mirror,
+                ),
+            ),
         };
 
         // 源：var locator = new DefaultVersionLocator(_options.GameRoot, _options.DownloadMirror, http)
@@ -458,22 +462,27 @@ impl GameCoreBuilder {
                 .minecraft_manifest_path
                 .as_deref()
                 .expect("三路径齐备分支必然存在 minecraft_manifest_path");
-            let manifest = std::fs::read_to_string(minecraft_manifest_path).unwrap_or_else(|e| {
-                panic!("读取版本清单失败（{minecraft_manifest_path}）: {e}")
-            });
+            let manifest = std::fs::read_to_string(minecraft_manifest_path)
+                .unwrap_or_else(|e| panic!("读取版本清单失败（{minecraft_manifest_path}）: {e}"));
             match &self.options_provider {
                 Some(provider) => Some(provider.clone()),
-                None => Some(Arc::new(crate::services::options::options_txt::OptionsProvider::new(
-                    self.options.options_json_path.as_deref().unwrap_or_default(),
-                    self.options
-                        .descriptions_json_path
-                        .as_deref()
-                        .unwrap_or_default(),
-                    &manifest,
-                    self.options.game_root.clone(),
-                    String::new(),
-                    false,
-                )) as Arc<dyn crate::api::options::OptionsProvider + Send + Sync>),
+                None => Some(
+                    Arc::new(crate::services::options::options_txt::OptionsProvider::new(
+                        self.options
+                            .options_json_path
+                            .as_deref()
+                            .unwrap_or_default(),
+                        self.options
+                            .descriptions_json_path
+                            .as_deref()
+                            .unwrap_or_default(),
+                        &manifest,
+                        self.options.game_root.clone(),
+                        String::new(),
+                        false,
+                    ))
+                        as Arc<dyn crate::api::options::OptionsProvider + Send + Sync>,
+                ),
             }
         } else {
             self.options_provider.clone()
@@ -482,11 +491,13 @@ impl GameCoreBuilder {
         // 源：_serverManager ??= new ServerManager(_options.GameRoot, string.Empty, false)
         let server_manager = match &self.server_manager {
             Some(manager) => Some(manager.clone()),
-            None => Some(Arc::new(crate::services::server::servers_dat::ServerManager::new(
-                self.options.game_root.clone(),
-                String::new(),
-                false,
-            )) as Arc<dyn crate::api::server::ServerManager + Send + Sync>),
+            None => Some(
+                Arc::new(crate::services::server::servers_dat::ServerManager::new(
+                    self.options.game_root.clone(),
+                    String::new(),
+                    false,
+                )) as Arc<dyn crate::api::server::ServerManager + Send + Sync>,
+            ),
         };
 
         // 源：return new DefaultGameCore(version, auth, launch, javaProvider, installerProvider,
@@ -556,5 +567,3 @@ fn build_http_client(user_agent: &str, net: &NetworkConfig) -> reqwest::Client {
         net.ignore_ssl_certs,
     )
 }
-
-

@@ -38,8 +38,8 @@
 //!   → 省略（同 forge_base.rs U1 先例）。
 
 use std::path::Path;
-use tokio::io::AsyncBufReadExt;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::io::AsyncBufReadExt;
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
@@ -209,8 +209,13 @@ impl OptiFineInstaller {
         }
 
         // 源：`await DownloadFileAsync(CreateHttpClient(), url, savePath);`
-        InstallerBase::download_file_async(&InstallerBase::create_http_client(), &url, &save_path, 5)
-            .await?;
+        InstallerBase::download_file_async(
+            &InstallerBase::create_http_client(),
+            &url,
+            &save_path,
+            5,
+        )
+        .await?;
         Ok(save_path)
     }
 
@@ -232,7 +237,10 @@ impl OptiFineInstaller {
         // 源：`var baseJsonPath = Path.Combine(_gameDir, "versions", _gameVersion, $"{_gameVersion}.json");
         //      if (!File.Exists(baseJsonPath)) throw new FileNotFoundException(...);`
         let base_json_path = path_combine(
-            &path_combine(&path_combine(&self.game_dir, "versions"), &self.game_version),
+            &path_combine(
+                &path_combine(&self.game_dir, "versions"),
+                &self.game_version,
+            ),
             &format!("{}.json", self.game_version),
         );
         if !Path::new(&base_json_path).is_file() {
@@ -243,15 +251,17 @@ impl OptiFineInstaller {
         }
 
         // 源：`var baseJsonContent = await File.ReadAllTextAsync(baseJsonPath);`
-        let base_json_content = std::fs::read_to_string(&base_json_path).map_err(|e| Error::Params {
-            message: format!("读取基础版本 JSON 失败: {e}"),
-            source: Some(Box::new(e)),
-        })?;
+        let base_json_content =
+            std::fs::read_to_string(&base_json_path).map_err(|e| Error::Params {
+                message: format!("读取基础版本 JSON 失败: {e}"),
+                source: Some(Box::new(e)),
+            })?;
         // 源：`var baseJson = JsonNode.Parse(baseJsonContent)!.AsObject();`
-        let base_json: Value = serde_json::from_str(&base_json_content).map_err(|e| Error::Params {
-            message: format!("基础版本 JSON 解析失败（源 JsonException）: {e}"),
-            source: None,
-        })?;
+        let base_json: Value =
+            serde_json::from_str(&base_json_content).map_err(|e| Error::Params {
+                message: format!("基础版本 JSON 解析失败（源 JsonException）: {e}"),
+                source: None,
+            })?;
         let base_libraries = base_json.get("libraries").and_then(|v| v.as_array());
 
         // 源：`["time"] = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ssZ")`（time/releaseTime 同值）
@@ -281,7 +291,10 @@ impl OptiFineInstaller {
 
         let mut new_json = Map::new();
         new_json.insert("id".to_string(), Value::String(version_id.to_string()));
-        new_json.insert("inheritsFrom".to_string(), Value::String(self.game_version.clone()));
+        new_json.insert(
+            "inheritsFrom".to_string(),
+            Value::String(self.game_version.clone()),
+        );
         new_json.insert("type".to_string(), Value::String("release".to_string()));
         new_json.insert("time".to_string(), Value::String(utc_now.clone()));
         new_json.insert("releaseTime".to_string(), Value::String(utc_now));
@@ -330,7 +343,10 @@ impl OptiFineInstaller {
         // 源：`var sourceJar = ...; var targetJar = ...; if (!File.Exists(sourceJar)) throw ...;
         //      File.Copy(sourceJar, targetJar, true);`
         let source_jar = path_combine(
-            &path_combine(&path_combine(&self.game_dir, "versions"), &self.game_version),
+            &path_combine(
+                &path_combine(&self.game_dir, "versions"),
+                &self.game_version,
+            ),
             &format!("{}.jar", self.game_version),
         );
         if !Path::new(&source_jar).is_file() {
@@ -367,7 +383,10 @@ impl OptiFineInstaller {
     ) -> Result<bool, Error> {
         // 源：`var clientJarPath = Path.Combine(_gameDir, "versions", _gameVersion, $"{_gameVersion}.jar");`
         let client_jar_path = path_combine(
-            &path_combine(&path_combine(&self.game_dir, "versions"), &self.game_version),
+            &path_combine(
+                &path_combine(&self.game_dir, "versions"),
+                &self.game_version,
+            ),
             &format!("{}.jar", self.game_version),
         );
         // ⚠️ U1：源 `var outputJarPath = ...` 计算后从未使用（dead code）→ 省略
@@ -605,6 +624,3 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
     }
 }
-
-
-

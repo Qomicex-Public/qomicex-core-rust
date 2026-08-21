@@ -136,16 +136,25 @@ impl ResourceCompleter for DefaultResourceCompleter {
                     .join(format!("{}.jar", metadata.id))
                     .to_string_lossy()
                     .into_owned();
-                let dest_dir = Path::new(&client_dest).parent().unwrap_or(Path::new("")).to_path_buf();
+                let dest_dir = Path::new(&client_dest)
+                    .parent()
+                    .unwrap_or(Path::new(""))
+                    .to_path_buf();
                 let permit = semaphore.clone();
                 handles.push(Box::pin(async move {
-                    let _permit = permit.acquire_owned().await.map_err(|_| Error::DownloadFailed {
-                        message: "并发信号量不可用".to_string(),
-                        source: None,
-                    })?;
-                    tokio::fs::create_dir_all(dest_dir).await.map_err(|e| Error::DownloadFailed {
-                        message: "创建客户端 jar 目录失败".to_string(),
-                        source: Some(Box::new(e)),
+                    let _permit =
+                        permit
+                            .acquire_owned()
+                            .await
+                            .map_err(|_| Error::DownloadFailed {
+                                message: "并发信号量不可用".to_string(),
+                                source: None,
+                            })?;
+                    tokio::fs::create_dir_all(dest_dir).await.map_err(|e| {
+                        Error::DownloadFailed {
+                            message: "创建客户端 jar 目录失败".to_string(),
+                            source: Some(Box::new(e)),
+                        }
                     })?;
                     self.download_file_with_retry(&client_url, &client_dest, &client_sha1, progress)
                         .await
@@ -156,26 +165,30 @@ impl ResourceCompleter for DefaultResourceCompleter {
             for artifact in &library_artifacts {
                 let permit = semaphore.clone();
                 handles.push(Box::pin(async move {
-                    let _permit = permit.acquire_owned().await.map_err(|_| Error::DownloadFailed {
-                        message: "并发信号量不可用".to_string(),
-                        source: None,
-                    })?;
+                    let _permit =
+                        permit
+                            .acquire_owned()
+                            .await
+                            .map_err(|_| Error::DownloadFailed {
+                                message: "并发信号量不可用".to_string(),
+                                source: None,
+                            })?;
                     self.download_artifact(artifact, progress).await
                 }));
             }
 
             // 资产索引（源：metadata.AssetIndex != null && !string.IsNullOrEmpty(Url)）
-            if let Some(asset_index) = metadata
-                .asset_index
-                .as_ref()
-                .filter(|a| !a.url.is_empty())
-            {
+            if let Some(asset_index) = metadata.asset_index.as_ref().filter(|a| !a.url.is_empty()) {
                 let permit = semaphore.clone();
                 handles.push(Box::pin(async move {
-                    let _permit = permit.acquire_owned().await.map_err(|_| Error::DownloadFailed {
-                        message: "并发信号量不可用".to_string(),
-                        source: None,
-                    })?;
+                    let _permit =
+                        permit
+                            .acquire_owned()
+                            .await
+                            .map_err(|_| Error::DownloadFailed {
+                                message: "并发信号量不可用".to_string(),
+                                source: None,
+                            })?;
                     self.download_asset_index(asset_index, progress).await
                 }));
             }
@@ -247,10 +260,12 @@ impl DefaultResourceCompleter {
         // 源：Path.GetDirectoryName 非空时 Directory.CreateDirectory
         if let Some(dir) = local_path.parent() {
             if !dir.as_os_str().is_empty() {
-                tokio::fs::create_dir_all(dir).await.map_err(|e| Error::DownloadFailed {
-                    message: format!("创建目录失败: {}", dir.display()),
-                    source: Some(Box::new(e)),
-                })?;
+                tokio::fs::create_dir_all(dir)
+                    .await
+                    .map_err(|e| Error::DownloadFailed {
+                        message: format!("创建目录失败: {}", dir.display()),
+                        source: Some(Box::new(e)),
+                    })?;
             }
         }
 
@@ -337,11 +352,16 @@ impl DefaultResourceCompleter {
         retry: usize,
         progress: Option<&dyn ProgressReporter>,
     ) -> Result<(), Error> {
-        let response = self.http_client.get(url).send().await.map_err(|e| Error::Http {
-            message: format!("HTTP 请求失败: {url}"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
+        let response = self
+            .http_client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| Error::Http {
+                message: format!("HTTP 请求失败: {url}"),
+                status: None,
+                source: Some(Box::new(e)),
+            })?;
         // 源：response.EnsureSuccessStatusCode()（非 2xx 抛 HttpRequestException）
         let status = response.status();
         if !status.is_success() {
@@ -361,28 +381,27 @@ impl DefaultResourceCompleter {
 
         // 源：File.Create(localPath)（直接写目标路径；重试时自动截断上次残留）
         let mut response = response;
-        let mut file = tokio::fs::File::create(local_path)
-            .await
-            .map_err(|e| Error::DownloadFailed {
-                message: format!("创建文件失败: {local_path}"),
-                source: Some(Box::new(e)),
-            })?;
+        let mut file =
+            tokio::fs::File::create(local_path)
+                .await
+                .map_err(|e| Error::DownloadFailed {
+                    message: format!("创建文件失败: {local_path}"),
+                    source: Some(Box::new(e)),
+                })?;
 
         // 源：8192 字节缓冲循环读取 → 流式写入（reqwest chunk 流等价；
         // 进度上报仍按源的时间窗口与字节计数语义）
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|e| Error::Http {
-                message: format!("读取响应流失败: {url}"),
-                status: None,
-                source: Some(Box::new(e)),
-            })?
-        {
-            file.write_all(&chunk).await.map_err(|e| Error::DownloadFailed {
-                message: format!("写入文件失败: {local_path}"),
-                source: Some(Box::new(e)),
-            })?;
+        while let Some(chunk) = response.chunk().await.map_err(|e| Error::Http {
+            message: format!("读取响应流失败: {url}"),
+            status: None,
+            source: Some(Box::new(e)),
+        })? {
+            file.write_all(&chunk)
+                .await
+                .map_err(|e| Error::DownloadFailed {
+                    message: format!("写入文件失败: {local_path}"),
+                    source: Some(Box::new(e)),
+                })?;
             downloaded_bytes += chunk.len() as i64;
             bytes_since_update += chunk.len() as i64;
 
@@ -461,10 +480,12 @@ impl DefaultResourceCompleter {
         // 源：Path.GetDirectoryName 非空时 Directory.CreateDirectory
         if let Some(dir) = local_path.parent() {
             if !dir.as_os_str().is_empty() {
-                tokio::fs::create_dir_all(dir).await.map_err(|e| Error::DownloadFailed {
-                    message: format!("创建目录失败: {}", dir.display()),
-                    source: Some(Box::new(e)),
-                })?;
+                tokio::fs::create_dir_all(dir)
+                    .await
+                    .map_err(|e| Error::DownloadFailed {
+                        message: format!("创建目录失败: {}", dir.display()),
+                        source: Some(Box::new(e)),
+                    })?;
             }
         }
 
@@ -484,7 +505,11 @@ impl DefaultResourceCompleter {
             if !downloaded {
                 continue;
             }
-            if self.process_asset_index(&local_path_str, progress).await.is_ok() {
+            if self
+                .process_asset_index(&local_path_str, progress)
+                .await
+                .is_ok()
+            {
                 return Ok(());
             }
         }
@@ -508,12 +533,11 @@ impl DefaultResourceCompleter {
                     message: format!("读取资源索引失败: {index_path}"),
                     source: Some(Box::new(e)),
                 })?;
-        let index_data: AssetIndexData = serde_json::from_str(&json).map_err(|e| {
-            Error::DownloadFailed {
+        let index_data: AssetIndexData =
+            serde_json::from_str(&json).map_err(|e| Error::DownloadFailed {
                 message: format!("解析资源索引失败: {index_path}"),
                 source: Some(Box::new(e)),
-            }
-        })?;
+            })?;
 
         // 源：indexData?.Objects == null → return
         let Some(objects) = index_data.objects else {
@@ -588,7 +612,8 @@ impl DefaultResourceCompleter {
         }
 
         // 源：Natives != null && Downloads.Classifiers != null → 按当前 OS 取分类器
-        if let (Some(natives), Some(classifiers)) = (&library.natives, &library.downloads.classifiers)
+        if let (Some(natives), Some(classifiers)) =
+            (&library.natives, &library.downloads.classifiers)
         {
             let os_name = get_current_os_name();
             if let Some(native_classifier) = natives.get(os_name) {
@@ -630,6 +655,3 @@ fn file_name_of(path: &str) -> String {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string())
 }
-
-
-

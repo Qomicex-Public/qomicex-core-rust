@@ -45,10 +45,9 @@ use serde_json::Value;
 
 use crate::api::options::OptionsProvider as OptionsProviderApi;
 use crate::models::local::{
-    GameOption, GameOptionsSnapshot, GameVersion, MinecraftOption, OptionDefinition,
-    OptionViewItem,
+    GameOption, GameOptionsSnapshot, GameVersion, MinecraftOption, OptionDefinition, OptionViewItem,
 };
-use crate::util::json_helper::{parse_minecraft_datetime, MinecraftDateTime};
+use crate::util::json_helper::{MinecraftDateTime, parse_minecraft_datetime};
 
 /// 选项提供方（源：OptionsProvider 具体类，OptionsProvider.cs）。
 /// 持有选项定义（options.json）、多语言描述（descriptions.json）与版本清单（manifest），
@@ -93,10 +92,8 @@ impl OptionsProvider {
         // C#: File.ReadAllText + JsonSerializer.Deserialize(...) ?? new List<MinecraftOption>()
         let options_json = fs::read_to_string(options_json_path)
             .unwrap_or_else(|e| panic!("读取 options.json 失败（{options_json_path}）: {e}"));
-        let options: Vec<MinecraftOption> =
-            serde_json::from_str(&options_json).unwrap_or_else(|e| {
-                panic!("解析 options.json 失败（源 JsonException）: {e}")
-            });
+        let options: Vec<MinecraftOption> = serde_json::from_str(&options_json)
+            .unwrap_or_else(|e| panic!("解析 options.json 失败（源 JsonException）: {e}"));
 
         // C#: ?? new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase)
         // 注：OrdinalIgnoreCase 仅作用于 null 回退分支的空字典 → 行为等价于默认（大小写敏感）
@@ -104,9 +101,8 @@ impl OptionsProvider {
             panic!("读取 descriptions.json 失败（{descriptions_json_path}）: {e}")
         });
         let descriptions: HashMap<String, HashMap<String, String>> =
-            serde_json::from_str(&desc_json).unwrap_or_else(|e| {
-                panic!("解析 descriptions.json 失败（源 JsonException）: {e}")
-            });
+            serde_json::from_str(&desc_json)
+                .unwrap_or_else(|e| panic!("解析 descriptions.json 失败（源 JsonException）: {e}"));
 
         Self {
             versions: Self::parse_version_manifest(minecraft_manifest),
@@ -406,7 +402,10 @@ impl OptionsProviderApi for OptionsProvider {
     /// 写入顺序：加载现有配置（有序）→ upsert 新值 → 整体写回
     fn set_option(&self, name: &str, value: &str) {
         if !self.is_option_available_in_version(name) {
-            panic!("Option '{name}' is not available in version '{}'.", self.version);
+            panic!(
+                "Option '{name}' is not available in version '{}'.",
+                self.version
+            );
         }
 
         let mut config = self.load_internal();
@@ -435,12 +434,16 @@ impl OptionsProviderApi for OptionsProvider {
 
     /// 获取全部选项定义（源：GetDefinitions；逐选项加载配置 + en-US 语言）
     fn get_definitions(&self) -> Vec<OptionDefinition> {
-        self.options.iter().map(|option| self.to_definition(option)).collect()
+        self.options
+            .iter()
+            .map(|option| self.to_definition(option))
+            .collect()
     }
 
     /// 按名称获取选项定义（源：GetDefinition，`OptionDefinition?` → Option）
     fn get_definition(&self, name: &str) -> Option<OptionDefinition> {
-        self.find_option(name).map(|option| self.to_definition(option))
+        self.find_option(name)
+            .map(|option| self.to_definition(option))
     }
 
     /// 获取指定语言的选项展示条目（源：GetOptionViewItems(string language)）：

@@ -20,16 +20,18 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::pin::Pin;
 
+use jni::JNIEnv;
 use jni::objects::{JClass, JString};
 use jni::sys::jstring;
-use jni::JNIEnv;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::api::auth::AuthProvider;
 use crate::api::expansion::{CurseForgeSource, FtbSource, ModrinthSource};
 use crate::api::local::LocalResourcesFactory;
 use crate::models::auth::{AuthRequest, AuthResult};
-use crate::models::expansion::curseforge::{CurseForgeFilePageItem, CurseForgeInfo, CurseForgeSearchResult};
+use crate::models::expansion::curseforge::{
+    CurseForgeFilePageItem, CurseForgeInfo, CurseForgeSearchResult,
+};
 use crate::models::expansion::ftb::{ModpackInfo, VersionInfo as FtbVersionInfo};
 use crate::models::expansion::modrinth::{DependenciesInfo, ProjectVersionInfo, SearchResultInfo};
 use crate::services::auth::microsoft::MicrosoftAuthProvider;
@@ -42,7 +44,7 @@ use crate::services::local::factory::DefaultLocalResourcesFactory;
 /// Android logcat 日志（tag QomicexCore），宿主编译时为空实现。
 #[cfg(target_os = "android")]
 mod android_log {
-    use std::ffi::{c_char, c_int, CString};
+    use std::ffi::{CString, c_char, c_int};
 
     const ANDROID_LOG_INFO: c_int = 4;
     const ANDROID_LOG_ERROR: c_int = 6;
@@ -89,10 +91,23 @@ fn to_jstring(env: &mut JNIEnv, s: String) -> jstring {
 }
 
 /// 解析版本 JSON，返回 (id, inheritsFrom, minecraftVersion, clientVersion, mainClass)。
-fn parse_version_json(path: &Path, fallback_name: &str) -> Option<(String, Option<String>, Option<String>, Option<String>, String)> {
+fn parse_version_json(
+    path: &Path,
+    fallback_name: &str,
+) -> Option<(
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    String,
+)> {
     let text = std::fs::read_to_string(path).ok()?;
     let root: Value = serde_json::from_str(&text).ok()?;
-    let get_str = |key: &str| root.get(key).and_then(|v| v.as_str()).map(|s| s.to_string());
+    let get_str = |key: &str| {
+        root.get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    };
     let id = get_str("id").unwrap_or_else(|| fallback_name.to_string());
     let inherits_from = get_str("inheritsFrom");
     let mc_version = get_str("minecraftVersion");
@@ -324,7 +339,11 @@ fn scan_versions_impl(game_root: &str) -> Value {
     let mut versions: Vec<Value> = Vec::new();
     let mut no_json_dirs: Vec<String> = Vec::new();
 
-    android_log::info(&format!("scanVersions: game_root={game_root} versionsDir={} exists={}", versions_dir.display(), versions_dir.is_dir()));
+    android_log::info(&format!(
+        "scanVersions: game_root={game_root} versionsDir={} exists={}",
+        versions_dir.display(),
+        versions_dir.is_dir()
+    ));
 
     if versions_dir.is_dir() {
         match std::fs::read_dir(&versions_dir) {
@@ -370,12 +389,16 @@ fn scan_versions_impl(game_root: &str) -> Value {
                             client_version.as_deref(),
                             mc_version.as_deref(),
                         );
-                        let loaders = detect_loaders(&root, &main_class, &id, inherits_from.as_deref());
+                        let loaders =
+                            detect_loaders(&root, &main_class, &id, inherits_from.as_deref());
                         let loaders_json: Vec<Value> = loaders
                             .iter()
                             .map(|(t, v)| json!({"type": t, "version": v}))
                             .collect();
-                        android_log::info(&format!("scanVersions: found {name} gameVersion={game_version} loaders={}", loaders.len()));
+                        android_log::info(&format!(
+                            "scanVersions: found {name} gameVersion={game_version} loaders={}",
+                            loaders.len()
+                        ));
 
                         versions.push(json!({
                             "name": id,
@@ -393,10 +416,17 @@ fn scan_versions_impl(game_root: &str) -> Value {
             }
         }
     } else {
-        android_log::error(&format!("scanVersions: versions dir does not exist: {}", versions_dir.display()));
+        android_log::error(&format!(
+            "scanVersions: versions dir does not exist: {}",
+            versions_dir.display()
+        ));
     }
 
-    android_log::info(&format!("scanVersions: returning {} versions, {} noJsonDirs", versions.len(), no_json_dirs.len()));
+    android_log::info(&format!(
+        "scanVersions: returning {} versions, {} noJsonDirs",
+        versions.len(),
+        no_json_dirs.len()
+    ));
     json!({
         "path": game_root,
         "versions": versions,
@@ -712,7 +742,10 @@ fn extract_cf_loaders(game_versions: Option<&[String]>, mod_loader: i32) -> Vec<
     if let Some(gvs) = game_versions {
         for gv in gvs {
             let s = gv.to_lowercase();
-            if matches!(s.as_str(), "forge" | "fabric" | "quilt" | "neoforge" | "liteloader") {
+            if matches!(
+                s.as_str(),
+                "forge" | "fabric" | "quilt" | "neoforge" | "liteloader"
+            ) {
                 loaders.push(s);
             }
         }
@@ -866,7 +899,10 @@ fn ftb_version_json(v: &FtbVersionInfo) -> Value {
             t.iter()
                 .filter(|t| {
                     t.r#type.as_deref() == Some("modloader")
-                        || matches!(t.name.as_deref(), Some("forge") | Some("fabric") | Some("neoforge"))
+                        || matches!(
+                            t.name.as_deref(),
+                            Some("forge") | Some("fabric") | Some("neoforge")
+                        )
                 })
                 .filter_map(|t| t.version.clone().or_else(|| t.name.clone()))
                 .filter(|s| !s.is_empty())
@@ -904,11 +940,20 @@ async fn cf_fetch_all_files(
 }
 
 /// CurseForge 版本列表 JSON（拉全量后按 gameVersion/loader 客户端过滤，对齐桌面端点）。
-async fn cf_versions_json(cf: &CurseForgeBase, id: &str, game_version: &str, loader: &str) -> Value {
+async fn cf_versions_json(
+    cf: &CurseForgeBase,
+    id: &str,
+    game_version: &str,
+    loader: &str,
+) -> Value {
     let files = match cf_fetch_all_files(
         cf,
         id,
-        if game_version.is_empty() { None } else { Some(game_version) },
+        if game_version.is_empty() {
+            None
+        } else {
+            Some(game_version)
+        },
     )
     .await
     {
@@ -927,7 +972,10 @@ async fn cf_versions_json(cf: &CurseForgeBase, id: &str, game_version: &str, loa
         let norm = loader.trim().to_lowercase();
         dtos.retain(|v| {
             let ls = v["loaders"].as_array().cloned().unwrap_or_default();
-            ls.is_empty() || ls.iter().any(|l| l.as_str().is_some_and(|s| s.eq_ignore_ascii_case(&norm)))
+            ls.is_empty()
+                || ls
+                    .iter()
+                    .any(|l| l.as_str().is_some_and(|s| s.eq_ignore_ascii_case(&norm)))
         });
     }
     json!(dtos)
@@ -952,8 +1000,11 @@ async fn ftb_versions_json(ftb: &FtbBase, id: &str, game_version: &str, loader: 
     if !loader.is_empty() {
         versions.retain(|v| {
             v.targets.as_ref().is_some_and(|t| {
-                t.iter()
-                    .any(|t| t.version.as_deref().is_some_and(|tv| tv.eq_ignore_ascii_case(loader)))
+                t.iter().any(|t| {
+                    t.version
+                        .as_deref()
+                        .is_some_and(|tv| tv.eq_ignore_ascii_case(loader))
+                })
             })
         });
     }
@@ -1075,13 +1126,25 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceSearch(
 ) -> jstring {
     let request_json = get_string(&mut env, request_json);
     let req: Value = serde_json::from_str(&request_json).unwrap_or(Value::Null);
-    let source = req.get("source").and_then(|s| s.as_str()).unwrap_or("modrinth");
-    let category = req.get("category").and_then(|s| s.as_str()).unwrap_or("mod");
+    let source = req
+        .get("source")
+        .and_then(|s| s.as_str())
+        .unwrap_or("modrinth");
+    let category = req
+        .get("category")
+        .and_then(|s| s.as_str())
+        .unwrap_or("mod");
     let keyword = req.get("keyword").and_then(|s| s.as_str()).unwrap_or("");
     let page = req.get("page").and_then(|p| p.as_i64()).unwrap_or(1) as i32;
     let page_size = req.get("pageSize").and_then(|p| p.as_i64()).unwrap_or(20) as i32;
-    let sort = req.get("sort").and_then(|s| s.as_str()).unwrap_or("relevance");
-    let game_version = req.get("gameVersion").and_then(|s| s.as_str()).unwrap_or("");
+    let sort = req
+        .get("sort")
+        .and_then(|s| s.as_str())
+        .unwrap_or("relevance");
+    let game_version = req
+        .get("gameVersion")
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
     let loader = req.get("loader").and_then(|s| s.as_str()).unwrap_or("");
 
     let result: Value = match source {
@@ -1092,8 +1155,16 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceSearch(
             } else {
                 vec![loader.to_string()]
             };
-            let loader_slice: Option<Vec<String>> = if loader_arr.is_empty() { None } else { Some(loader_arr.clone()) };
-            let gv_opt: Option<String> = if game_version.is_empty() { None } else { Some(game_version.to_string()) };
+            let loader_slice: Option<Vec<String>> = if loader_arr.is_empty() {
+                None
+            } else {
+                Some(loader_arr.clone())
+            };
+            let gv_opt: Option<String> = if game_version.is_empty() {
+                None
+            } else {
+                Some(game_version.to_string())
+            };
 
             match block_on(mr.search(
                 keyword,
@@ -1131,7 +1202,11 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceSearch(
                 let loader_arr: Vec<String> = cf_loader(loader)
                     .map(|l| vec![l.to_string()])
                     .unwrap_or_default();
-                let loader_slice: Option<&[String]> = if loader_arr.is_empty() { None } else { Some(&loader_arr) };
+                let loader_slice: Option<&[String]> = if loader_arr.is_empty() {
+                    None
+                } else {
+                    Some(&loader_arr)
+                };
                 match block_on(cf.search(
                     keyword,
                     gv_opt.as_deref(),
@@ -1160,9 +1235,21 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceSearch(
                 json!({ "items": [], "total": 0, "page": page, "pageSize": page_size })
             } else {
                 let ftb = FtbBase::new(reqwest::Client::new(), None, None);
-                let query_opt = if keyword.is_empty() { None } else { Some(keyword) };
-                let gv_opt = if game_version.is_empty() { None } else { Some(game_version) };
-                let loader_opt = if loader.is_empty() { None } else { Some(loader) };
+                let query_opt = if keyword.is_empty() {
+                    None
+                } else {
+                    Some(keyword)
+                };
+                let gv_opt = if game_version.is_empty() {
+                    None
+                } else {
+                    Some(game_version)
+                };
+                let loader_opt = if loader.is_empty() {
+                    None
+                } else {
+                    Some(loader)
+                };
                 match block_on(ftb.search(
                     query_opt,
                     None,
@@ -1341,25 +1428,27 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceVersion
         "ftb" => {
             let ftb = FtbBase::new(reqwest::Client::new(), None, None);
             match (id.parse::<i32>(), version_id.parse::<i32>()) {
-                (Ok(pack_id), Ok(ver_id)) => match block_on(ftb.get_version_detail(pack_id, ver_id)) {
-                    Ok(Some(detail)) => {
-                        let files: Vec<Value> = detail
-                            .files
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter(|f| f.name.to_lowercase().ends_with(".zip"))
-                            .map(|f| {
-                                json!({
-                                    "url": f.url,
-                                    "fileName": f.name,
-                                    "size": f.size
+                (Ok(pack_id), Ok(ver_id)) => {
+                    match block_on(ftb.get_version_detail(pack_id, ver_id)) {
+                        Ok(Some(detail)) => {
+                            let files: Vec<Value> = detail
+                                .files
+                                .unwrap_or_default()
+                                .into_iter()
+                                .filter(|f| f.name.to_lowercase().ends_with(".zip"))
+                                .map(|f| {
+                                    json!({
+                                        "url": f.url,
+                                        "fileName": f.name,
+                                        "size": f.size
+                                    })
                                 })
-                            })
-                            .collect();
-                        json!(files)
+                                .collect();
+                            json!(files)
+                        }
+                        _ => json!([]),
                     }
-                    _ => json!([]),
-                },
+                }
                 _ => json!([]),
             }
         }
@@ -1403,15 +1492,23 @@ fn resolve_mr_deps<'a>(
                 .iter()
                 .filter(|v| {
                     let gv_ok = game_version.as_ref().map_or(true, |gv| {
-                        v.game_version_ids.as_ref().is_none_or(|gvs| gvs.contains(gv))
+                        v.game_version_ids
+                            .as_ref()
+                            .is_none_or(|gvs| gvs.contains(gv))
                     });
                     let ld_ok = loader.as_ref().map_or(true, |ld| {
-                        v.loaders.as_ref().is_none_or(|ls| ls.is_empty() || ls.contains(ld))
+                        v.loaders
+                            .as_ref()
+                            .is_none_or(|ls| ls.is_empty() || ls.contains(ld))
                     });
                     gv_ok && ld_ok
                 })
                 .max_by(|a, b| a.published_at.cmp(&b.published_at))
-                .or_else(|| versions.iter().max_by(|a, b| a.published_at.cmp(&b.published_at)))
+                .or_else(|| {
+                    versions
+                        .iter()
+                        .max_by(|a, b| a.published_at.cmp(&b.published_at))
+                })
         };
 
         let Some(best) = best else { return Vec::new() };
@@ -1607,9 +1704,21 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceDepende
             json!(block_on(resolve_mr_deps(
                 &mr,
                 id,
-                if version_id.is_empty() { None } else { Some(version_id) },
-                if game_version.is_empty() { None } else { Some(game_version) },
-                if loader.is_empty() { None } else { Some(loader) },
+                if version_id.is_empty() {
+                    None
+                } else {
+                    Some(version_id)
+                },
+                if game_version.is_empty() {
+                    None
+                } else {
+                    Some(game_version)
+                },
+                if loader.is_empty() {
+                    None
+                } else {
+                    Some(loader)
+                },
                 &mut visited,
                 0,
             )))
@@ -1623,8 +1732,16 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceDepende
                 json!(block_on(resolve_cf_deps(
                     &cf,
                     id,
-                    if version_id.is_empty() { None } else { Some(version_id) },
-                    if game_version.is_empty() { None } else { Some(game_version) },
+                    if version_id.is_empty() {
+                        None
+                    } else {
+                        Some(version_id)
+                    },
+                    if game_version.is_empty() {
+                        None
+                    } else {
+                        Some(game_version)
+                    },
                     &mut visited,
                     0,
                 )))
@@ -1743,70 +1860,102 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_instanceFilesMe
 
     let factory = DefaultLocalResourcesFactory::new(reqwest::Client::new(), None);
     let result: Value = match category.as_str() {
-        "mods" => match block_on(factory.create_mods(&game_dir, &version_name, version_segmented, "").get_mod_list(None)) {
-            Ok(list) => json!(list.iter().map(|m| {
-                let mut j = local_meta_json(
-                    &m.file_path,
-                    &m.name,
-                    &m.description,
-                    &m.version,
-                    m.authors.clone(),
-                    m.curse_forge_id,
-                    &m.modrinth_id,
-                    0,
-                );
-                j["active"] = json!(m.is_active());
-                j["mcmodId"] = Value::Null;
-                j["chineseName"] = Value::Null;
-                j["fileSize"] = Value::Null;
-                j["lastModified"] = Value::Null;
-                j
-            }).collect::<Vec<Value>>()),
+        "mods" => match block_on(
+            factory
+                .create_mods(&game_dir, &version_name, version_segmented, "")
+                .get_mod_list(None),
+        ) {
+            Ok(list) => json!(
+                list.iter()
+                    .map(|m| {
+                        let mut j = local_meta_json(
+                            &m.file_path,
+                            &m.name,
+                            &m.description,
+                            &m.version,
+                            m.authors.clone(),
+                            m.curse_forge_id,
+                            &m.modrinth_id,
+                            0,
+                        );
+                        j["active"] = json!(m.is_active());
+                        j["mcmodId"] = Value::Null;
+                        j["chineseName"] = Value::Null;
+                        j["fileSize"] = Value::Null;
+                        j["lastModified"] = Value::Null;
+                        j
+                    })
+                    .collect::<Vec<Value>>()
+            ),
             Err(e) => err_json(format!("{e}")),
         },
-        "resourcepacks" => match block_on(factory.create_resourcepack(&game_dir, &version_name, version_segmented, "").get_resource_pack_list()) {
-            Ok(list) => json!(list.iter().map(|r| {
-                local_meta_json(
-                    &r.file_path,
-                    &r.name,
-                    &r.description,
-                    &r.version,
-                    Vec::new(),
-                    r.curse_forge_id,
-                    &r.modrinth_id,
-                    r.pack_format,
-                )
-            }).collect::<Vec<Value>>()),
+        "resourcepacks" => match block_on(
+            factory
+                .create_resourcepack(&game_dir, &version_name, version_segmented, "")
+                .get_resource_pack_list(),
+        ) {
+            Ok(list) => json!(
+                list.iter()
+                    .map(|r| {
+                        local_meta_json(
+                            &r.file_path,
+                            &r.name,
+                            &r.description,
+                            &r.version,
+                            Vec::new(),
+                            r.curse_forge_id,
+                            &r.modrinth_id,
+                            r.pack_format,
+                        )
+                    })
+                    .collect::<Vec<Value>>()
+            ),
             Err(e) => err_json(format!("{e}")),
         },
-        "shaders" => match block_on(factory.create_shaders(&game_dir, &version_name, version_segmented, "").get_shader_list()) {
-            Ok(list) => json!(list.iter().map(|s| {
-                local_meta_json(
-                    &s.file_path,
-                    &s.name,
-                    &s.description,
-                    &s.version,
-                    Vec::new(),
-                    s.curse_forge_id,
-                    &s.modrinth_id,
-                    0,
-                )
-            }).collect::<Vec<Value>>()),
+        "shaders" => match block_on(
+            factory
+                .create_shaders(&game_dir, &version_name, version_segmented, "")
+                .get_shader_list(),
+        ) {
+            Ok(list) => json!(
+                list.iter()
+                    .map(|s| {
+                        local_meta_json(
+                            &s.file_path,
+                            &s.name,
+                            &s.description,
+                            &s.version,
+                            Vec::new(),
+                            s.curse_forge_id,
+                            &s.modrinth_id,
+                            0,
+                        )
+                    })
+                    .collect::<Vec<Value>>()
+            ),
             Err(e) => err_json(format!("{e}")),
         },
-        "datapacks" => match block_on(factory.create_data_packs(&game_dir, &version_name, version_segmented, "").get_data_pack_list()) {
-            Ok(list) => json!(list.iter().map(|d| {
-                local_meta_json(
-                    &d.file_path,
-                    &d.name,
-                    &d.description,
-                    &d.version,
-                    Vec::new(),
-                    d.curse_forge_id,
-                    &d.modrinth_id,
-                    d.pack_format,
-                )
-            }).collect::<Vec<Value>>()),
+        "datapacks" => match block_on(
+            factory
+                .create_data_packs(&game_dir, &version_name, version_segmented, "")
+                .get_data_pack_list(),
+        ) {
+            Ok(list) => json!(
+                list.iter()
+                    .map(|d| {
+                        local_meta_json(
+                            &d.file_path,
+                            &d.name,
+                            &d.description,
+                            &d.version,
+                            Vec::new(),
+                            d.curse_forge_id,
+                            &d.modrinth_id,
+                            d.pack_format,
+                        )
+                    })
+                    .collect::<Vec<Value>>()
+            ),
             Err(e) => err_json(format!("{e}")),
         },
         _ => err_json(format!("未知资源分类 {category}")),

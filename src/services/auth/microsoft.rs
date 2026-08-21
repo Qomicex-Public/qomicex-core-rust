@@ -87,7 +87,8 @@ impl MicrosoftAuthProvider {
         ensure_success(resp.status())?;
         let body = resp.text().await.map_err(|e| e.to_string())?;
 
-        let data: Value = parse_object(&body).ok_or_else(|| "无法解析 Xbox Live 响应".to_string())?;
+        let data: Value =
+            parse_object(&body).ok_or_else(|| "无法解析 Xbox Live 响应".to_string())?;
         let token = data
             .get("Token")
             .and_then(|v| v.as_str())
@@ -134,11 +135,7 @@ impl MicrosoftAuthProvider {
     }
 
     /// Minecraft 登录（源：AuthenticateMinecraftAsync），返回 Minecraft access_token。
-    async fn authenticate_minecraft(
-        &self,
-        xsts_token: &str,
-        uhs: &str,
-    ) -> Result<String, String> {
+    async fn authenticate_minecraft(&self, xsts_token: &str, uhs: &str) -> Result<String, String> {
         let payload = serde_json::json!({
             "identityToken": format!("XBL3.0 x={uhs};{xsts_token}")
         });
@@ -236,7 +233,10 @@ impl AuthProvider for MicrosoftAuthProvider {
             .post("https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode")
             .form(&[
                 ("client_id", self.client_id.as_str()),
-                ("scope", "offline_access XboxLive.signin XboxLive.offline_access"),
+                (
+                    "scope",
+                    "offline_access XboxLive.signin XboxLive.offline_access",
+                ),
             ])
             .send()
             .await
@@ -261,7 +261,10 @@ impl AuthProvider for MicrosoftAuthProvider {
             .unwrap_or("");
         // 源默认值：interval ?? 5，expires_in ?? 900
         let interval = data.get("interval").and_then(|v| v.as_i64()).unwrap_or(5) as i32;
-        let expires_in = data.get("expires_in").and_then(|v| v.as_i64()).unwrap_or(900) as i32;
+        let expires_in = data
+            .get("expires_in")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(900) as i32;
 
         let (Some(device_code), Some(user_code)) = (device_code, user_code) else {
             return Ok(None);
@@ -367,10 +370,12 @@ impl AuthProvider for MicrosoftAuthProvider {
         access_token: &str,
         refresh_token: &str,
     ) -> Result<AuthResult, Error> {
-        Ok(match self.complete_login_inner(access_token, refresh_token).await {
-            Ok(result) => result,
-            Err(message) => failed_auth_result(&message),
-        })
+        Ok(
+            match self.complete_login_inner(access_token, refresh_token).await {
+                Ok(result) => result,
+                Err(message) => failed_auth_result(&message),
+            },
+        )
     }
 
     /// 用刷新令牌续期访问令牌（源：RefreshLoginAsync）。
@@ -410,7 +415,8 @@ impl AuthProvider for MicrosoftAuthProvider {
             .map(str::to_string)
             .unwrap_or_else(|| refresh_token.to_string());
 
-        self.complete_login(&new_access_token, &new_refresh_token).await
+        self.complete_login(&new_access_token, &new_refresh_token)
+            .await
     }
 }
 
@@ -500,4 +506,3 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
-

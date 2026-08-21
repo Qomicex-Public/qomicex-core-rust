@@ -84,7 +84,10 @@ impl Screenshots {
         }
 
         let mut files: Vec<PathBuf> = Vec::new();
-        for entry in std::fs::read_dir(&screenshot_directory).into_iter().flatten() {
+        for entry in std::fs::read_dir(&screenshot_directory)
+            .into_iter()
+            .flatten()
+        {
             match entry {
                 Ok(entry) => {
                     let path = entry.path();
@@ -182,8 +185,5 @@ fn format_unix_seconds(secs: i64) -> String {
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if month <= 2 { y + 1 } else { y };
 
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{sec:02}"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{sec:02}")
 }
-

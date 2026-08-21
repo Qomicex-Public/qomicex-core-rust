@@ -47,7 +47,9 @@ pub fn is_natives(library: &Library) -> bool {
 /// action=disallow：恒为 false（os 匹配 → false，os 缺失 → false，其他情形落到最终 false）
 /// 说明：C# 要求 Os.Name 非 null；Rust 模型中 name 为必填 String、os 为 Option，等价于 os 非空判断
 pub fn is_rule_suitable(rule: Option<&Rule>) -> bool {
-    let Some(rule) = rule else { return true; };
+    let Some(rule) = rule else {
+        return true;
+    };
 
     if rule.action == "allow" {
         if let Some(os) = &rule.os {
@@ -134,11 +136,15 @@ pub fn remove_conflicting_libraries(libs: Vec<Library>) -> Vec<Library> {
         let prefix = format!("{base_coord}:");
 
         let individual_lib = libs.iter().find(|l| {
-            l.name.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(&prefix))
+            l.name
+                .get(..prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(&prefix))
                 && !l.name.eq_ignore_ascii_case(&lib.name)
         });
 
-        let Some(individual_lib) = individual_lib else { continue };
+        let Some(individual_lib) = individual_lib else {
+            continue;
+        };
 
         let fat_version = parts[2];
         let ind_version = get_lib_version(individual_lib);

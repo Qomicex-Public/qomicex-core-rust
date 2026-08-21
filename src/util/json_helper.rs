@@ -30,7 +30,9 @@ pub fn deserialize_version_manifest(
 }
 
 /// 序列化版本元数据对象（对应源 Serialize(CompleteVersionMetadata)）
-pub fn serialize_version_metadata(obj: &CompleteVersionMetadata) -> Result<String, serde_json::Error> {
+pub fn serialize_version_metadata(
+    obj: &CompleteVersionMetadata,
+) -> Result<String, serde_json::Error> {
     serde_json::to_string(obj)
 }
 
@@ -255,4 +257,3 @@ fn parse_int(s: &str) -> Option<i32> {
 // TD-5 定案：parse_minecraft_datetime 仅覆盖 Minecraft 实际数据形态（RFC3339/ISO-8601 子集）。
 // 源 DateTimeOffset.TryParse 的全格式矩阵（英文月份/宽松分隔）在真实版本清单中不出现，
 // 保持子集解析（范围外输入报错 = 显式失败）；如需完整矩阵引入 chrono 全量解析。
-

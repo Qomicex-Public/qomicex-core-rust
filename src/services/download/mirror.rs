@@ -73,7 +73,10 @@ impl DefaultDownloadSourceManager {
             },
         ];
 
-        let mut manager = Self { sources, http_client };
+        let mut manager = Self {
+            sources,
+            http_client,
+        };
         if preferred_mirror == DownloadMirror::Official {
             manager.set_preferred_source(DownloadSourceType::Official);
         }
@@ -120,15 +123,24 @@ impl DefaultDownloadSourceManager {
         let base_url = source.base_url.trim_end_matches('/');
 
         if original_url.contains("launcher.mojang.com/maven") {
-            let tail = original_url.rsplit_once("maven/").map(|(_, t)| t).unwrap_or(original_url);
+            let tail = original_url
+                .rsplit_once("maven/")
+                .map(|(_, t)| t)
+                .unwrap_or(original_url);
             return Some(format!("{base_url}/maven/{tail}"));
         }
         if original_url.contains("resources.download.minecraft.net") {
-            let tail = original_url.rsplit_once("assets/").map(|(_, t)| t).unwrap_or(original_url);
+            let tail = original_url
+                .rsplit_once("assets/")
+                .map(|(_, t)| t)
+                .unwrap_or(original_url);
             return Some(format!("{base_url}/assets/{tail}"));
         }
         if original_url.contains("piston-meta.mojang.com") {
-            let tail = original_url.rsplit_once("meta/").map(|(_, t)| t).unwrap_or(original_url);
+            let tail = original_url
+                .rsplit_once("meta/")
+                .map(|(_, t)| t)
+                .unwrap_or(original_url);
             return Some(format!("{base_url}/meta/{tail}"));
         }
 
@@ -142,17 +154,26 @@ impl DownloadSourceManager for DefaultDownloadSourceManager {
     ///
     /// `resource_type` 参数源实现未使用，原样忽略。
     fn get_available_sources(&self, _resource_type: ResourceType) -> Vec<DownloadSource> {
-        self.sources.iter().filter(|s| s.is_enabled).cloned().collect()
+        self.sources
+            .iter()
+            .filter(|s| s.is_enabled)
+            .cloned()
+            .collect()
     }
 
     /// 生成镜像 URL 列表（源：`GenerateMirrorUrls`，惰性枚举 → Vec）。
     ///
     /// 顺序：先原始 URL，再按优先级升序（C# `OrderBy(Priority)` 稳定排序）
     /// 遍历启用源，转换结果非 None 且 != 原始 URL 时追加。
-    fn generate_mirror_urls(&self, original_url: &str, _resource_type: ResourceType) -> Vec<String> {
+    fn generate_mirror_urls(
+        &self,
+        original_url: &str,
+        _resource_type: ResourceType,
+    ) -> Vec<String> {
         let mut urls = vec![original_url.to_string()];
 
-        let mut enabled: Vec<&DownloadSource> = self.sources.iter().filter(|s| s.is_enabled).collect();
+        let mut enabled: Vec<&DownloadSource> =
+            self.sources.iter().filter(|s| s.is_enabled).collect();
         enabled.sort_by_key(|s| s.priority);
 
         for source in enabled {
@@ -176,7 +197,9 @@ impl DownloadSourceManager for DefaultDownloadSourceManager {
     /// 对 HEAD 支持不佳，GET 更可靠；行为（true/false）语义不变。
     async fn test_source(&self, source: &DownloadSource) -> Result<bool, Error> {
         let test_url = format!("{}/", source.base_url.trim_end_matches('/'));
-        match tokio::time::timeout(TEST_SOURCE_TIMEOUT, self.http_client.get(&test_url).send()).await {
+        match tokio::time::timeout(TEST_SOURCE_TIMEOUT, self.http_client.get(&test_url).send())
+            .await
+        {
             Ok(Ok(response)) => Ok(response.status().is_success()),
             Ok(Err(_)) | Err(_) => Ok(false),
         }
@@ -198,7 +221,10 @@ impl DownloadSourceManager for DefaultDownloadSourceManager {
     ///
     /// `MinBy` 平局取首个 → Rust `min_by_key` 同样返回首个（文档保证），语义一致。
     /// C# `MinBy` 对空序列抛异常；本实现返回 `Ok(None)`（源内置双源，实际不可达）。
-    fn get_preferred_source(&self, _resource_type: ResourceType) -> Result<Option<DownloadSource>, Error> {
+    fn get_preferred_source(
+        &self,
+        _resource_type: ResourceType,
+    ) -> Result<Option<DownloadSource>, Error> {
         Ok(self
             .sources
             .iter()
@@ -207,7 +233,6 @@ impl DownloadSourceManager for DefaultDownloadSourceManager {
             .cloned())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -284,8 +309,8 @@ mod tests {
     #[test]
     fn unmatched_url_no_mirror() {
         let mgr = DefaultDownloadSourceManager::default();
-        let urls = mgr.generate_mirror_urls("https://example.com/other/file.jar", ResourceType::Library);
+        let urls =
+            mgr.generate_mirror_urls("https://example.com/other/file.jar", ResourceType::Library);
         assert_eq!(urls, vec!["https://example.com/other/file.jar"]);
     }
 }
-

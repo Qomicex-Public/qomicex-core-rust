@@ -51,13 +51,17 @@ pub(crate) fn read_settings(save_directory: &Path) -> Result<LevelDatSettings, E
         level_name: get_string(data, "LevelName").unwrap_or_default(),
         game_type: get_int(data, "GameType").unwrap_or(0),
         difficulty,
-        allow_commands: get_byte(data, "allowCommands").map(|v| v != 0).unwrap_or(false),
+        allow_commands: get_byte(data, "allowCommands")
+            .map(|v| v != 0)
+            .unwrap_or(false),
         hardcore,
         difficulty_locked,
         time: get_long(data, "Time").unwrap_or(0),
         day_time: get_long(data, "DayTime").unwrap_or(0),
         raining: get_byte(data, "raining").map(|v| v != 0).unwrap_or(false),
-        thundering: get_byte(data, "thundering").map(|v| v != 0).unwrap_or(false),
+        thundering: get_byte(data, "thundering")
+            .map(|v| v != 0)
+            .unwrap_or(false),
         clear_weather_time: get_int(data, "clearWeatherTime").unwrap_or(0),
         rain_time: get_int(data, "rainTime").unwrap_or(0),
         thunder_time: get_int(data, "thunderTime").unwrap_or(0),
@@ -84,8 +88,8 @@ pub(crate) fn update_settings(
     settings: &LevelDatSettings,
 ) -> Result<(), Error> {
     let level_dat_path = save_directory.join("level.dat");
-    let original_bytes = std::fs::read(&level_dat_path)
-        .map_err(|e| io_err(&level_dat_path, "读取", e))?;
+    let original_bytes =
+        std::fs::read(&level_dat_path).map_err(|e| io_err(&level_dat_path, "读取", e))?;
 
     let result = (|| -> Result<(), Error> {
         let mut root = nbt_full::read(&original_bytes).map_err(parse_err)?;
@@ -99,7 +103,7 @@ pub(crate) fn update_settings(
                 return Err(Error::Params {
                     message: "level.dat Data 复合无法访问".to_string(),
                     source: None,
-                })
+                });
             }
         };
         apply_settings(data, settings);
@@ -137,12 +141,11 @@ pub(crate) fn restore_from_old(save_directory: &Path) -> Result<(), Error> {
     // 校验 _old 是合法 NBT（同 read 的 gzip 探测语义）
     nbt_full::read(&old_bytes).map_err(parse_err)?;
     if level_dat_path.is_file() {
-        let original_bytes = std::fs::read(&level_dat_path)
-            .map_err(|e| io_err(&level_dat_path, "读取", e))?;
+        let original_bytes =
+            std::fs::read(&level_dat_path).map_err(|e| io_err(&level_dat_path, "读取", e))?;
         backup_current(&level_dat_path, &original_bytes)?;
     }
-    std::fs::write(&level_dat_path, &old_bytes)
-        .map_err(|e| io_err(&level_dat_path, "写入", e))?;
+    std::fs::write(&level_dat_path, &old_bytes).map_err(|e| io_err(&level_dat_path, "写入", e))?;
     Ok(())
 }
 
@@ -227,7 +230,9 @@ fn read_difficulty_block(data: &NbtCompound) -> (u8, bool, bool) {
         _ => (
             get_byte(data, "Difficulty").unwrap_or(2),
             get_byte(data, "hardcore").map(|v| v != 0).unwrap_or(false),
-            get_byte(data, "DifficultyLocked").map(|v| v != 0).unwrap_or(false),
+            get_byte(data, "DifficultyLocked")
+                .map(|v| v != 0)
+                .unwrap_or(false),
         ),
     }
 }
@@ -277,7 +282,8 @@ fn read_game_rules(data: &NbtCompound) -> LevelGameRules {
         command_block_output: rule_bool(rules, "commandBlockOutput").unwrap_or(true),
         send_command_feedback: rule_bool(rules, "sendCommandFeedback").unwrap_or(true),
         reduced_debug_info: rule_bool(rules, "reducedDebugInfo").unwrap_or(false),
-        disable_elytra_movement_check: rule_bool(rules, "disableElytraMovementCheck").unwrap_or(false),
+        disable_elytra_movement_check: rule_bool(rules, "disableElytraMovementCheck")
+            .unwrap_or(false),
         spectators_generate_chunks: rule_bool(rules, "spectatorsGenerateChunks").unwrap_or(true),
         do_limited_crafting: rule_bool(rules, "doLimitedCrafting").unwrap_or(false),
         random_tick_speed: rule_int(rules, "randomTickSpeed").unwrap_or(3),
@@ -290,15 +296,24 @@ fn read_game_rules(data: &NbtCompound) -> LevelGameRules {
 /// 难度块/出生点按当前存档结构写：`difficulty_settings`/`spawn` 存在 → 新结构，
 /// 否则经典键；另一结构的残留键不动（未知键保留）。
 fn apply_settings(data: &mut NbtCompound, s: &LevelDatSettings) {
-    data.insert("LevelName".to_string(), NbtValue::String(s.level_name.clone()));
+    data.insert(
+        "LevelName".to_string(),
+        NbtValue::String(s.level_name.clone()),
+    );
     data.insert("GameType".to_string(), NbtValue::Int(s.game_type));
     apply_difficulty_block(data, s);
-    data.insert("allowCommands".to_string(), NbtValue::Byte(s.allow_commands as u8));
+    data.insert(
+        "allowCommands".to_string(),
+        NbtValue::Byte(s.allow_commands as u8),
+    );
     data.insert("Time".to_string(), NbtValue::Long(s.time));
     data.insert("DayTime".to_string(), NbtValue::Long(s.day_time));
     data.insert("raining".to_string(), NbtValue::Byte(s.raining as u8));
     data.insert("thundering".to_string(), NbtValue::Byte(s.thundering as u8));
-    data.insert("clearWeatherTime".to_string(), NbtValue::Int(s.clear_weather_time));
+    data.insert(
+        "clearWeatherTime".to_string(),
+        NbtValue::Int(s.clear_weather_time),
+    );
     data.insert("rainTime".to_string(), NbtValue::Int(s.rain_time));
     data.insert("thunderTime".to_string(), NbtValue::Int(s.thunder_time));
     apply_spawn_block(data, s);
@@ -311,10 +326,19 @@ fn apply_settings(data: &mut NbtCompound, s: &LevelDatSettings) {
         "WanderingTraderSpawnDelay".to_string(),
         NbtValue::Int(s.wandering_trader_spawn_delay),
     );
-    data.insert("BorderCenterX".to_string(), NbtValue::Double(s.border_center_x));
-    data.insert("BorderCenterZ".to_string(), NbtValue::Double(s.border_center_z));
+    data.insert(
+        "BorderCenterX".to_string(),
+        NbtValue::Double(s.border_center_x),
+    );
+    data.insert(
+        "BorderCenterZ".to_string(),
+        NbtValue::Double(s.border_center_z),
+    );
     data.insert("BorderSize".to_string(), NbtValue::Double(s.border_size));
-    data.insert("BorderSafeZone".to_string(), NbtValue::Double(s.border_safe_zone));
+    data.insert(
+        "BorderSafeZone".to_string(),
+        NbtValue::Double(s.border_safe_zone),
+    );
     data.insert(
         "BorderDamagePerBlock".to_string(),
         NbtValue::Double(s.border_damage_per_block),
@@ -329,7 +353,10 @@ fn apply_settings(data: &mut NbtCompound, s: &LevelDatSettings) {
     );
     // GameRules：已知规则写回，未知规则保留
     if !matches!(data.get("GameRules"), Some(NbtValue::Compound(_))) {
-        data.insert("GameRules".to_string(), NbtValue::Compound(NbtCompound::new()));
+        data.insert(
+            "GameRules".to_string(),
+            NbtValue::Compound(NbtCompound::new()),
+        );
     }
     if let Some(NbtValue::Compound(rules)) = data.get_mut("GameRules") {
         apply_game_rules(rules, &s.game_rules);
@@ -345,12 +372,18 @@ fn apply_difficulty_block(data: &mut NbtCompound, s: &LevelDatSettings) {
                 NbtValue::String(difficulty_string(s.difficulty)),
             );
             ds.insert("hardcore".to_string(), NbtValue::Byte(s.hardcore as u8));
-            ds.insert("locked".to_string(), NbtValue::Byte(s.difficulty_locked as u8));
+            ds.insert(
+                "locked".to_string(),
+                NbtValue::Byte(s.difficulty_locked as u8),
+            );
         }
     } else {
         data.insert("Difficulty".to_string(), NbtValue::Byte(s.difficulty));
         data.insert("hardcore".to_string(), NbtValue::Byte(s.hardcore as u8));
-        data.insert("DifficultyLocked".to_string(), NbtValue::Byte(s.difficulty_locked as u8));
+        data.insert(
+            "DifficultyLocked".to_string(),
+            NbtValue::Byte(s.difficulty_locked as u8),
+        );
     }
 }
 
@@ -372,15 +405,42 @@ fn apply_spawn_block(data: &mut NbtCompound, s: &LevelDatSettings) {
 
 /// 游戏规则写入（布尔 → "true"/"false"，数值 → 十进制字符串）
 fn apply_game_rules(rules: &mut NbtCompound, g: &LevelGameRules) {
-    rules.insert("keepInventory".to_string(), NbtValue::String(bool_str(g.keep_inventory)));
-    rules.insert("doDaylightCycle".to_string(), NbtValue::String(bool_str(g.do_daylight_cycle)));
-    rules.insert("doFireTick".to_string(), NbtValue::String(bool_str(g.do_fire_tick)));
-    rules.insert("mobGriefing".to_string(), NbtValue::String(bool_str(g.mob_griefing)));
-    rules.insert("doMobSpawning".to_string(), NbtValue::String(bool_str(g.do_mob_spawning)));
-    rules.insert("doWeatherCycle".to_string(), NbtValue::String(bool_str(g.do_weather_cycle)));
-    rules.insert("doMobLoot".to_string(), NbtValue::String(bool_str(g.do_mob_loot)));
-    rules.insert("doTileDrops".to_string(), NbtValue::String(bool_str(g.do_tile_drops)));
-    rules.insert("doEntityDrops".to_string(), NbtValue::String(bool_str(g.do_entity_drops)));
+    rules.insert(
+        "keepInventory".to_string(),
+        NbtValue::String(bool_str(g.keep_inventory)),
+    );
+    rules.insert(
+        "doDaylightCycle".to_string(),
+        NbtValue::String(bool_str(g.do_daylight_cycle)),
+    );
+    rules.insert(
+        "doFireTick".to_string(),
+        NbtValue::String(bool_str(g.do_fire_tick)),
+    );
+    rules.insert(
+        "mobGriefing".to_string(),
+        NbtValue::String(bool_str(g.mob_griefing)),
+    );
+    rules.insert(
+        "doMobSpawning".to_string(),
+        NbtValue::String(bool_str(g.do_mob_spawning)),
+    );
+    rules.insert(
+        "doWeatherCycle".to_string(),
+        NbtValue::String(bool_str(g.do_weather_cycle)),
+    );
+    rules.insert(
+        "doMobLoot".to_string(),
+        NbtValue::String(bool_str(g.do_mob_loot)),
+    );
+    rules.insert(
+        "doTileDrops".to_string(),
+        NbtValue::String(bool_str(g.do_tile_drops)),
+    );
+    rules.insert(
+        "doEntityDrops".to_string(),
+        NbtValue::String(bool_str(g.do_entity_drops)),
+    );
     rules.insert(
         "doNaturalRegeneration".to_string(),
         NbtValue::String(bool_str(g.do_natural_regeneration)),
@@ -389,7 +449,10 @@ fn apply_game_rules(rules: &mut NbtCompound, g: &LevelGameRules) {
         "doImmediateRespawn".to_string(),
         NbtValue::String(bool_str(g.do_immediate_respawn)),
     );
-    rules.insert("doInsomnia".to_string(), NbtValue::String(bool_str(g.do_insomnia)));
+    rules.insert(
+        "doInsomnia".to_string(),
+        NbtValue::String(bool_str(g.do_insomnia)),
+    );
     rules.insert(
         "doPatrolSpawning".to_string(),
         NbtValue::String(bool_str(g.do_patrol_spawning)),
@@ -398,10 +461,22 @@ fn apply_game_rules(rules: &mut NbtCompound, g: &LevelGameRules) {
         "doTraderSpawning".to_string(),
         NbtValue::String(bool_str(g.do_trader_spawning)),
     );
-    rules.insert("drowningDamage".to_string(), NbtValue::String(bool_str(g.drowning_damage)));
-    rules.insert("fallDamage".to_string(), NbtValue::String(bool_str(g.fall_damage)));
-    rules.insert("fireDamage".to_string(), NbtValue::String(bool_str(g.fire_damage)));
-    rules.insert("freezeDamage".to_string(), NbtValue::String(bool_str(g.freeze_damage)));
+    rules.insert(
+        "drowningDamage".to_string(),
+        NbtValue::String(bool_str(g.drowning_damage)),
+    );
+    rules.insert(
+        "fallDamage".to_string(),
+        NbtValue::String(bool_str(g.fall_damage)),
+    );
+    rules.insert(
+        "fireDamage".to_string(),
+        NbtValue::String(bool_str(g.fire_damage)),
+    );
+    rules.insert(
+        "freezeDamage".to_string(),
+        NbtValue::String(bool_str(g.freeze_damage)),
+    );
     rules.insert(
         "showDeathMessages".to_string(),
         NbtValue::String(bool_str(g.show_death_messages)),
@@ -434,8 +509,14 @@ fn apply_game_rules(rules: &mut NbtCompound, g: &LevelGameRules) {
         "doLimitedCrafting".to_string(),
         NbtValue::String(bool_str(g.do_limited_crafting)),
     );
-    rules.insert("randomTickSpeed".to_string(), NbtValue::String(g.random_tick_speed.to_string()));
-    rules.insert("spawnRadius".to_string(), NbtValue::String(g.spawn_radius.to_string()));
+    rules.insert(
+        "randomTickSpeed".to_string(),
+        NbtValue::String(g.random_tick_speed.to_string()),
+    );
+    rules.insert(
+        "spawnRadius".to_string(),
+        NbtValue::String(g.spawn_radius.to_string()),
+    );
     rules.insert(
         "maxEntityCramming".to_string(),
         NbtValue::String(g.max_entity_cramming.to_string()),
@@ -537,7 +618,11 @@ fn rule_int(rules: &NbtCompound, name: &str) -> Option<i32> {
 }
 
 fn bool_str(b: bool) -> String {
-    if b { "true".to_string() } else { "false".to_string() }
+    if b {
+        "true".to_string()
+    } else {
+        "false".to_string()
+    }
 }
 
 fn io_err(path: &Path, op: &str, e: std::io::Error) -> Error {
@@ -574,7 +659,10 @@ mod tests {
     /// 构造一份含全字段 + 未知键（BorderCenterX / unknownRule）的经典格式 gzip level.dat
     fn make_level_dat() -> Vec<u8> {
         let mut data = NbtCompound::new();
-        data.insert("LevelName".to_string(), NbtValue::String("Test World".to_string()));
+        data.insert(
+            "LevelName".to_string(),
+            NbtValue::String("Test World".to_string()),
+        );
         data.insert("GameType".to_string(), NbtValue::Int(1));
         data.insert("Difficulty".to_string(), NbtValue::Byte(3));
         data.insert("allowCommands".to_string(), NbtValue::Byte(1));
@@ -590,8 +678,14 @@ mod tests {
         // 未知键：写回后必须原样保留
         data.insert("BorderCenterX".to_string(), NbtValue::Double(0.0));
         let mut rules = NbtCompound::new();
-        rules.insert("keepInventory".to_string(), NbtValue::String("true".to_string()));
-        rules.insert("unknownRule".to_string(), NbtValue::String("false".to_string()));
+        rules.insert(
+            "keepInventory".to_string(),
+            NbtValue::String("true".to_string()),
+        );
+        rules.insert(
+            "unknownRule".to_string(),
+            NbtValue::String("false".to_string()),
+        );
         data.insert("GameRules".to_string(), NbtValue::Compound(rules));
         let mut root = NbtCompound::new();
         root.insert("Data".to_string(), NbtValue::Compound(data));
@@ -601,17 +695,26 @@ mod tests {
     /// 构造过渡格式（difficulty_settings + spawn.pos）的 gzip level.dat
     fn make_level_dat_v2() -> Vec<u8> {
         let mut data = NbtCompound::new();
-        data.insert("LevelName".to_string(), NbtValue::String("V2 World".to_string()));
+        data.insert(
+            "LevelName".to_string(),
+            NbtValue::String("V2 World".to_string()),
+        );
         data.insert("GameType".to_string(), NbtValue::Int(1));
         data.insert("allowCommands".to_string(), NbtValue::Byte(1));
         data.insert("Time".to_string(), NbtValue::Long(10_000));
         let mut ds = NbtCompound::new();
-        ds.insert("difficulty".to_string(), NbtValue::String("hard".to_string()));
+        ds.insert(
+            "difficulty".to_string(),
+            NbtValue::String("hard".to_string()),
+        );
         ds.insert("hardcore".to_string(), NbtValue::Byte(1));
         ds.insert("locked".to_string(), NbtValue::Byte(1));
         data.insert("difficulty_settings".to_string(), NbtValue::Compound(ds));
         let mut spawn = NbtCompound::new();
-        spawn.insert("dimension".to_string(), NbtValue::String("minecraft:overworld".to_string()));
+        spawn.insert(
+            "dimension".to_string(),
+            NbtValue::String("minecraft:overworld".to_string()),
+        );
         spawn.insert("pos".to_string(), NbtValue::IntArray(vec![100, 65, -200]));
         spawn.insert("pitch".to_string(), NbtValue::Float(0.0));
         data.insert("spawn".to_string(), NbtValue::Compound(spawn));
@@ -650,7 +753,10 @@ mod tests {
     fn read_defaults_for_missing_fields() {
         let dir = temp_save_dir("defaults");
         let mut data = NbtCompound::new();
-        data.insert("LevelName".to_string(), NbtValue::String("Only Name".to_string()));
+        data.insert(
+            "LevelName".to_string(),
+            NbtValue::String("Only Name".to_string()),
+        );
         let mut root = NbtCompound::new();
         root.insert("Data".to_string(), NbtValue::Compound(data));
         std::fs::write(dir.join("level.dat"), nbt::write_gzip(&root).unwrap()).unwrap();
@@ -718,7 +824,10 @@ mod tests {
             Some(NbtValue::Compound(d)) => d,
             _ => panic!("Data 复合缺失"),
         };
-        assert!(matches!(data.get("BorderCenterX"), Some(NbtValue::Double(0.0))));
+        assert!(matches!(
+            data.get("BorderCenterX"),
+            Some(NbtValue::Double(0.0))
+        ));
         let rules = match data.get("GameRules") {
             Some(NbtValue::Compound(r)) => r,
             _ => panic!("GameRules 复合缺失"),
@@ -805,7 +914,10 @@ mod tests {
         std::fs::write(dir.join("level.dat"), &current).unwrap();
         // 构造一份不同的 _old（模拟上一会话）
         let mut data = NbtCompound::new();
-        data.insert("LevelName".to_string(), NbtValue::String("Old World".to_string()));
+        data.insert(
+            "LevelName".to_string(),
+            NbtValue::String("Old World".to_string()),
+        );
         data.insert("GameType".to_string(), NbtValue::Int(0));
         let mut root = NbtCompound::new();
         root.insert("Data".to_string(), NbtValue::Compound(data));
@@ -815,7 +927,10 @@ mod tests {
         restore_from_old(&dir).expect("恢复失败");
         // 恢复后 level.dat == _old 内容，且当前内容已备份
         assert_eq!(std::fs::read(dir.join("level.dat")).unwrap(), old_bytes);
-        assert_eq!(std::fs::read(dir.join("level.dat.qomicex.bak")).unwrap(), current);
+        assert_eq!(
+            std::fs::read(dir.join("level.dat.qomicex.bak")).unwrap(),
+            current
+        );
         let s = read_settings(&dir).unwrap();
         assert_eq!(s.level_name, "Old World");
         cleanup(&dir);

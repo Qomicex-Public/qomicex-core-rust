@@ -113,10 +113,7 @@ impl ShadersService {
             message: format!("读取文件失败（{}）：{e}", file_path.display()),
             source: Some(Box::new(e)),
         })?;
-        Ok((
-            sha1_hex(&file_bytes),
-            curse_forge_fingerprint(&file_bytes),
-        ))
+        Ok((sha1_hex(&file_bytes), curse_forge_fingerprint(&file_bytes)))
     }
 
     /// 兜底名称（源：`Path.GetFileNameWithoutExtension(file)`：

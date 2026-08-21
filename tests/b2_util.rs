@@ -4,9 +4,11 @@
 use qomicex_core_rust::models::version_metadata::{Library, LibraryDownloads};
 use qomicex_core_rust::util::file_helper::normalize_separators;
 use qomicex_core_rust::util::json_helper::{format_minecraft_datetime, parse_minecraft_datetime};
-use qomicex_core_rust::util::lib_helper::{check_libs_ver, is_class_path, is_natives, maven_to_path};
+use qomicex_core_rust::util::lib_helper::{
+    check_libs_ver, is_class_path, is_natives, maven_to_path,
+};
 use qomicex_core_rust::util::murmurhash2::{curse_forge_fingerprint, murmur_hash2};
-use qomicex_core_rust::util::nbt::{read, write, NbtCompound, NbtValue};
+use qomicex_core_rust::util::nbt::{NbtCompound, NbtValue, read, write};
 
 // ── MurmurHash2（C# 参考向量）────────────────────
 
@@ -56,7 +58,10 @@ fn nbt_write_read_roundtrip() {
     let mut buf = Vec::new();
     write(&mut buf, &root).unwrap();
     let parsed = read(&mut buf.as_slice()).unwrap();
-    assert_eq!(parsed.get("name"), Some(&NbtValue::String("Player1".to_string())));
+    assert_eq!(
+        parsed.get("name"),
+        Some(&NbtValue::String("Player1".to_string()))
+    );
     match parsed.get("nested") {
         Some(NbtValue::Compound(c)) => assert_eq!(c.get("onFire"), Some(&NbtValue::Byte(true))),
         other => panic!("expected compound, got {other:?}"),
@@ -67,10 +72,17 @@ fn nbt_write_read_roundtrip() {
 
 #[test]
 fn datetime_parse_format_roundtrip() {
-    for raw in ["2024-06-13T11:07:26Z", "2024-06-13T11:07:26+08:00", "2024-06-13T11:07:26.123+00:00"] {
+    for raw in [
+        "2024-06-13T11:07:26Z",
+        "2024-06-13T11:07:26+08:00",
+        "2024-06-13T11:07:26.123+00:00",
+    ] {
         let parsed = parse_minecraft_datetime(raw).unwrap();
         let formatted = format_minecraft_datetime(&parsed);
-        assert!(formatted.starts_with("2024-06-13T11:07:26"), "got {formatted}");
+        assert!(
+            formatted.starts_with("2024-06-13T11:07:26"),
+            "got {formatted}"
+        );
     }
     let parsed = parse_minecraft_datetime("2024-06-13T11:07:26+0800").unwrap();
     assert_eq!(parsed.offset_minutes, 480);
@@ -82,13 +94,19 @@ fn datetime_parse_format_roundtrip() {
 
 #[test]
 fn maven_to_path_basic() {
-    assert_eq!(maven_to_path("org.lwjgl:lwjgl:3.3.1"), "org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1.jar");
+    assert_eq!(
+        maven_to_path("org.lwjgl:lwjgl:3.3.1"),
+        "org/lwjgl/lwjgl/3.3.1/lwjgl-3.3.1.jar"
+    );
 }
 
 fn lib(name: &str) -> Library {
     Library {
         name: name.to_string(),
-        downloads: LibraryDownloads { artifact: None, classifiers: None },
+        downloads: LibraryDownloads {
+            artifact: None,
+            classifiers: None,
+        },
         rules: None,
         natives: None,
         extract: None,
@@ -100,7 +118,10 @@ fn lib_classpath_natives_classification() {
     assert!(is_class_path(&lib("org.example:mod:1.0")));
     let natives = Library {
         name: "org.example:native:1.0".to_string(),
-        downloads: LibraryDownloads { artifact: None, classifiers: None },
+        downloads: LibraryDownloads {
+            artifact: None,
+            classifiers: None,
+        },
         rules: None,
         natives: Some(
             [("windows".to_string(), "natives-windows".to_string())]
@@ -127,9 +148,14 @@ fn normalize_separators_converts_maven_slashes_for_local_paths() {
     let verbatim_maven_path = r"\\?\D:\Test\.minecraft\libraries\net/minecraftforge/forge/1.12.2-14.23.5.2864/forge-1.12.2-14.23.5.2864.jar";
     let normalized = normalize_separators(verbatim_maven_path);
     if cfg!(windows) {
-        assert!(!normalized.contains('/'), "Windows 上应无 '/'：{normalized}");
         assert!(
-            normalized.contains("net\\minecraftforge\\forge\\1.12.2-14.23.5.2864\\forge-1.12.2-14.23.5.2864.jar"),
+            !normalized.contains('/'),
+            "Windows 上应无 '/'：{normalized}"
+        );
+        assert!(
+            normalized.contains(
+                "net\\minecraftforge\\forge\\1.12.2-14.23.5.2864\\forge-1.12.2-14.23.5.2864.jar"
+            ),
             "Maven 段应转为 '\\'：{normalized}"
         );
         assert!(normalized.starts_with(r"\\?\D:\Test\.minecraft\libraries\"));

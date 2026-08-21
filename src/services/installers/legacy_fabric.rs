@@ -17,13 +17,13 @@
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::error::Error;
 use crate::models::download::DownloadMirror;
+use crate::services::installers::fabric::install::verify_file_sha1;
 use crate::services::installers::installer::MissFileData;
 use crate::services::installers::installer::{Installer, InstallerBase};
-use crate::services::installers::fabric::install::verify_file_sha1;
 use crate::util::lib_helper::maven_to_path;
 use crate::util::platform::{get_current_arch, get_current_os_name};
 
@@ -131,20 +131,16 @@ impl LegacyFabricInstaller {
             });
         }
 
-        let meta_str = response
-            .text()
-            .await
-            .map_err(|e| Error::Http {
-                message: format!("读取响应体失败: {url}"),
-                status: None,
-                source: Some(Box::new(e)),
-            })?;
-        let mut meta: Value =
-            serde_json::from_str(&meta_str).map_err(|e| Error::Http {
-                message: "解析 Launcher Meta JSON 失败".to_string(),
-                status: None,
-                source: Some(Box::new(e)),
-            })?;
+        let meta_str = response.text().await.map_err(|e| Error::Http {
+            message: format!("读取响应体失败: {url}"),
+            status: None,
+            source: Some(Box::new(e)),
+        })?;
+        let mut meta: Value = serde_json::from_str(&meta_str).map_err(|e| Error::Http {
+            message: "解析 Launcher Meta JSON 失败".to_string(),
+            status: None,
+            source: Some(Box::new(e)),
+        })?;
 
         // 源：foreach (var lib in libs) —— 逐库下载，不做已存在跳过（与 Babric 不同，源即如此）
         {
@@ -167,7 +163,10 @@ impl LegacyFabricInstaller {
                     InstallerBase::download_file_async(
                         &client,
                         &format!("{url_domain}{maven_path}"),
-                        &game_dir.join("libraries").join(&maven_path).to_string_lossy(),
+                        &game_dir
+                            .join("libraries")
+                            .join(&maven_path)
+                            .to_string_lossy(),
                         50,
                     )
                     .await?;
@@ -207,14 +206,11 @@ impl LegacyFabricInstaller {
             });
         }
 
-        let meta_str = response
-            .text()
-            .await
-            .map_err(|e| Error::Http {
-                message: format!("读取响应体失败: {url}"),
-                status: None,
-                source: Some(Box::new(e)),
-            })?;
+        let meta_str = response.text().await.map_err(|e| Error::Http {
+            message: format!("读取响应体失败: {url}"),
+            status: None,
+            source: Some(Box::new(e)),
+        })?;
         let meta: Value = serde_json::from_str(&meta_str).map_err(|e| Error::Http {
             message: "解析 Launcher Meta JSON 失败".to_string(),
             status: None,
@@ -240,11 +236,10 @@ impl LegacyFabricInstaller {
 
                     // 源：if (File.Exists(libPath)) { if (!string.IsNullOrEmpty(lib["sha1"]?.ToString()) && VerifyFileSha1(...)) continue; }
                     if lib_path.is_file() {
-                        let sha1 = lib
-                            .get("sha1")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default();
-                        if !sha1.is_empty() && verify_file_sha1(lib_path.to_str().unwrap_or_default(), sha1) {
+                        let sha1 = lib.get("sha1").and_then(|v| v.as_str()).unwrap_or_default();
+                        if !sha1.is_empty()
+                            && verify_file_sha1(lib_path.to_str().unwrap_or_default(), sha1)
+                        {
                             continue;
                         }
                     }
@@ -312,8 +307,8 @@ impl Installer for LegacyFabricInstaller {
         inherits_from_json: &str,
         para1: Option<&str>,
         para2: Option<&str>,
-    _para3: Option<&str>,
-    _para4: Option<&str>,
+        _para3: Option<&str>,
+        _para4: Option<&str>,
     ) -> Result<(), Error> {
         // 源：if (lfVersion == null) throw new ArgumentNullException(nameof(lfVersion));
         let Some(lf_version) = para1 else {
@@ -330,8 +325,13 @@ impl Installer for LegacyFabricInstaller {
             });
         };
         // 源：await InstallLegacyFabricAsync(versionId, lfVersion, gameVersion, inheritsFromJson);
-        self.install_legacy_fabric_async(version_id, lf_version, game_version, Some(inherits_from_json))
-            .await?;
+        self.install_legacy_fabric_async(
+            version_id,
+            lf_version,
+            game_version,
+            Some(inherits_from_json),
+        )
+        .await?;
         Ok(())
     }
 
@@ -351,15 +351,3 @@ impl Installer for LegacyFabricInstaller {
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-

@@ -12,9 +12,9 @@
 //! 模型 AuthRequest / AuthResult / DeviceCodeResult / PollTokenResult 已由 B1 落位
 //! src/models/auth.rs，本文件只移植接口本身。
 
-use async_trait::async_trait;
 use crate::error::Error;
 use crate::models::auth::{AuthRequest, AuthResult, DeviceCodeResult, PollTokenResult};
+use async_trait::async_trait;
 
 /// 认证提供方（源：IAuthProvider）。
 /// 实现账号密码/令牌认证、校验与作废；设备码登录流（微软）为可选能力，默认不支持。
@@ -77,4 +77,3 @@ pub trait AuthProvider: Send + Sync {
         })
     }
 }
-

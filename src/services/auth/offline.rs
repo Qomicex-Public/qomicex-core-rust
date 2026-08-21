@@ -114,4 +114,3 @@ mod tests {
         assert!(provider.invalidate("any-token").await.is_ok());
     }
 }
-

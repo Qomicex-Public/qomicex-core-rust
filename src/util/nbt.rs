@@ -221,11 +221,7 @@ fn write_compound_payload<W: Write>(
 /// 对应源 WriteNamedTag 的 switch：bool → Byte；String → String；
 /// List(Compound) → List；Compound → Compound。
 /// 源默认分支（不支持的类型抛 InvalidOperationException）在 Rust 类型系统下不可达
-fn write_named_tag<W: Write>(
-    writer: &mut W,
-    name: &str,
-    value: &NbtValue,
-) -> Result<(), NbtError> {
+fn write_named_tag<W: Write>(writer: &mut W, name: &str, value: &NbtValue) -> Result<(), NbtError> {
     match value {
         NbtValue::Byte(boolean) => {
             writer
@@ -332,4 +328,3 @@ fn read_u8<R: Read>(reader: &mut R, value_name: &str) -> Result<u8, NbtError> {
         .map_err(|_| NbtError::UnexpectedEndOfStream(value_name.to_string()))?;
     Ok(byte[0])
 }
-

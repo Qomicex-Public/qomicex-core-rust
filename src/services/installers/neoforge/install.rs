@@ -42,7 +42,7 @@ use serde_json::Value;
 
 use crate::error::Error;
 use crate::services::installers::forge_base::{
-    main_jar_relative_path, ForgeInstallerBase, SourcesList,
+    ForgeInstallerBase, SourcesList, main_jar_relative_path,
 };
 use crate::services::installers::installer::{Installer, InstallerBase, MissFileData};
 
@@ -67,11 +67,13 @@ impl NeoForgeInstaller {
             let base_url = "https://bmclapi2.bangbang93.com/maven".to_string();
             let source_mappings = vec![
                 SourcesList {
-                    original: "https://maven.neoforged.net/releases/net/neoforged/forge".to_string(),
+                    original: "https://maven.neoforged.net/releases/net/neoforged/forge"
+                        .to_string(),
                     default: format!("{base_url}/net/neoforged/forge"),
                 },
                 SourcesList {
-                    original: "https://maven.neoforged.net/releases/net/neoforged/neoforge".to_string(),
+                    original: "https://maven.neoforged.net/releases/net/neoforged/neoforge"
+                        .to_string(),
                     default: format!("{base_url}/net/neoforged/neoforge"),
                 },
             ];
@@ -170,12 +172,11 @@ impl NeoForgeInstaller {
                 )?,
             ))
         };
-        let (mut json_data, install_profile_data, client_lzma) = read_zip().map_err(|e| {
-            Error::DownloadFailed {
+        let (mut json_data, install_profile_data, client_lzma) =
+            read_zip().map_err(|e| Error::DownloadFailed {
                 message: "读取NeoForge安装器内容失败，请检查安装器文件是否正确".to_string(),
                 source: Some(Box::new(e)),
-            }
-        })?;
+            })?;
 
         // 源：`var installProfileJson = JsonNode.Parse(installProfileData!)!.AsObject();`
         let mut profile_value: Value =
@@ -204,18 +205,17 @@ impl NeoForgeInstaller {
 
         // 源：`versionData["id"] = versionId; versionData["inheritsFrom"] = this.gameVersion;
         //      jsonData = versionData.ToJsonString();`
-        let mut version_value: Value = serde_json::from_str(&json_data).map_err(|e| Error::Http {
-            message: format!("version.json 解析失败: {e}"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
-        let version_obj = version_value
-            .as_object_mut()
-            .ok_or_else(|| Error::Http {
-                message: "version.json 顶层非 JSON 对象（源 InvalidOperationException）".to_string(),
+        let mut version_value: Value =
+            serde_json::from_str(&json_data).map_err(|e| Error::Http {
+                message: format!("version.json 解析失败: {e}"),
                 status: None,
-                source: None,
+                source: Some(Box::new(e)),
             })?;
+        let version_obj = version_value.as_object_mut().ok_or_else(|| Error::Http {
+            message: "version.json 顶层非 JSON 对象（源 InvalidOperationException）".to_string(),
+            status: None,
+            source: None,
+        })?;
         version_obj.insert("id".to_string(), Value::String(version_id.to_string()));
         version_obj.insert(
             "inheritsFrom".to_string(),
@@ -229,12 +229,11 @@ impl NeoForgeInstaller {
                 InstallerBase::merge_version_json(inherits_from_json, &json_data, Some(version_id));
             // 源：`var mergedObj = JsonNode.Parse(jsonData)!.AsObject();`
             //（MergeVersionJson 失败返回空串 → 源此处解析抛异常，见 installer.rs D6）
-            let mut merged_obj: Value = serde_json::from_str(&merged).map_err(|_| {
-                Error::DownloadFailed {
+            let mut merged_obj: Value =
+                serde_json::from_str(&merged).map_err(|_| Error::DownloadFailed {
                     message: "版本JSON合并失败".to_string(),
                     source: None,
-                }
-            })?;
+                })?;
             if !merged_obj.is_object() {
                 return Err(Error::DownloadFailed {
                     message: "版本JSON合并失败".to_string(),
@@ -310,8 +309,9 @@ impl NeoForgeInstaller {
             .and_then(|b| b.as_object_mut())
             .and_then(|b| b.get_mut("client"))
             .ok_or_else(|| Error::Params {
-                message: "install_profile.json 缺少 data.BINPATCH.client（源 NullReferenceException）"
-                    .to_string(),
+                message:
+                    "install_profile.json 缺少 data.BINPATCH.client（源 NullReferenceException）"
+                        .to_string(),
                 source: None,
             })?;
         *binpatch_client = Value::String(format!("\"{client_lzma_path}\""));
@@ -341,7 +341,8 @@ impl NeoForgeInstaller {
         // 源 `installProfileJson = JsonNode.Parse(...)!.AsObject()` → 顶层恒为对象；
         // 此处取 &Map 供 P38 的 run_processor / should_run_processor（签名见文件头）
         let profile_obj = profile_value.as_object().ok_or_else(|| Error::Params {
-            message: "install_profile.json 顶层非 JSON 对象（源 InvalidOperationException）".to_string(),
+            message: "install_profile.json 顶层非 JSON 对象（源 InvalidOperationException）"
+                .to_string(),
             source: None,
         })?;
         if let Some(processors) = profile_value.get("processors").and_then(|p| p.as_array()) {
@@ -350,7 +351,8 @@ impl NeoForgeInstaller {
                     // 源：`var processorObject = processor!.AsObject();`（条目非对象 →
                     //      InvalidOperationException）
                     let processor_obj = processor.as_object().ok_or_else(|| Error::Params {
-                        message: "processor 条目非 JSON 对象（源 InvalidOperationException）".to_string(),
+                        message: "processor 条目非 JSON 对象（源 InvalidOperationException）"
+                            .to_string(),
                         source: None,
                     })?;
                     // 源：`if (!ShouldRunProcessor(processorObject, "client")) continue;`
@@ -361,7 +363,13 @@ impl NeoForgeInstaller {
                     //      versionId, gameDir, javaPath); } catch { BackInstall;
                     //      throw "处理NeoForge处理器失败: {processorObject["jar"]}\n{ex.Message}" }
                     if let Err(e) = base
-                        .run_processor(profile_obj, processor_obj, version_id, &base.game_dir, java_path)
+                        .run_processor(
+                            profile_obj,
+                            processor_obj,
+                            version_id,
+                            &base.game_dir,
+                            java_path,
+                        )
                         .await
                     {
                         back_install(&back_files, &back_dirs);
@@ -419,10 +427,11 @@ impl NeoForgeInstaller {
                 .into_owned(),
             ))
         };
-        let (version_data, install_profile_data) = read_zip().map_err(|e| Error::DownloadFailed {
-            message: "读取NeoForge安装器内容失败，请检查安装器文件是否正确".to_string(),
-            source: Some(Box::new(e)),
-        })?;
+        let (version_data, install_profile_data) =
+            read_zip().map_err(|e| Error::DownloadFailed {
+                message: "读取NeoForge安装器内容失败，请检查安装器文件是否正确".to_string(),
+                source: Some(Box::new(e)),
+            })?;
 
         // 源：`var libs = GetLibrariesFromJson(installProfileData!);
         //       libs.AddRange(GetLibrariesFromJson(versionData!));`
@@ -440,11 +449,13 @@ impl NeoForgeInstaller {
             })?;
         // 源 `AsObject()`（顶层非对象 → InvalidOperationException）；P38 关联函数接收 &Map
         let profile_obj = profile_value.as_object().ok_or_else(|| Error::Http {
-            message: "install_profile.json 顶层非 JSON 对象（源 InvalidOperationException）".to_string(),
+            message: "install_profile.json 顶层非 JSON 对象（源 InvalidOperationException）"
+                .to_string(),
             status: None,
             source: None,
         })?;
-        for coordinate in ForgeInstallerBase::extract_maven_coordinates_from_processors(profile_obj) {
+        for coordinate in ForgeInstallerBase::extract_maven_coordinates_from_processors(profile_obj)
+        {
             libs.push(LibInfo::new(coordinate));
         }
 
@@ -520,14 +531,21 @@ impl Installer for NeoForgeInstaller {
                 message: "javaPath 为 null 或空（源 ArgumentNullException）".to_string(),
                 source: None,
             })?;
-        let neo_forge_installer_path = para2
-            .filter(|p| !p.is_empty())
-            .ok_or_else(|| Error::Params {
-                message: "neoForgeInstallerPath 为 null 或空（源 ArgumentNullException）".to_string(),
-                source: None,
-            })?;
-        self.install_neoforge(version_id, inherits_from_json, java_path, neo_forge_installer_path)
-            .await
+        let neo_forge_installer_path =
+            para2
+                .filter(|p| !p.is_empty())
+                .ok_or_else(|| Error::Params {
+                    message: "neoForgeInstallerPath 为 null 或空（源 ArgumentNullException）"
+                        .to_string(),
+                    source: None,
+                })?;
+        self.install_neoforge(
+            version_id,
+            inherits_from_json,
+            java_path,
+            neo_forge_installer_path,
+        )
+        .await
     }
 
     /// 获取缺失库列表（源：`GetMissLibrariesAsync(string? para1, string? para2,
@@ -546,7 +564,8 @@ impl Installer for NeoForgeInstaller {
             return Ok(Vec::new());
         };
         let version_id = para2.ok_or_else(|| Error::Params {
-            message: "versionId 为 null（源 NullReferenceException，para2! 强制解引用）".to_string(),
+            message: "versionId 为 null（源 NullReferenceException，para2! 强制解引用）"
+                .to_string(),
             source: None,
         })?;
         self.get_miss_neoforge_libraries(neo_forge_installer_path, version_id)
@@ -723,11 +742,3 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
     }
 }
-
-
-
-
-
-
-
-

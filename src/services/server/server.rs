@@ -41,7 +41,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::legacy_ping::{query_legacy_server_state, StatusEndpoint};
+use super::legacy_ping::{StatusEndpoint, query_legacy_server_state};
 use super::mc_ping::query_modern_server_state;
 use super::servers_dat::ServerManager;
 use crate::api::server::ServerManager as ServerManagerApi;
@@ -103,7 +103,10 @@ pub(crate) fn parse_server_address(address: &str) -> (String, u16) {
     // 源：firstColonIndex >= 0 && firstColonIndex == lastColonIndex（恰好一个冒号）
     if let Some(first) = first_colon_index {
         if Some(first) == last_colon_index {
-            return (trimmed[..first].to_string(), parse_port(&trimmed[first + 1..]));
+            return (
+                trimmed[..first].to_string(),
+                parse_port(&trimmed[first + 1..]),
+            );
         }
     }
     // 源：无冒号 / 多个冒号 → (trimmed, defaultPort)
@@ -378,7 +381,12 @@ impl ServerManagerApi for ServerManager {
     /// 过滤器 7 类异常）→ 恒 `Ok(Some(state))`。
     /// ct 取消检查点在 query_modern_server_state 内部（P51a：连接 select! 竞速 +
     /// 各阶段 is_cancelled 检查点），本层不重复。
-    async fn ping(&self, host: &str, port: i32, ct: &CancellationToken) -> Result<Option<ServerState>, Error> {
+    async fn ping(
+        &self,
+        host: &str,
+        port: i32,
+        ct: &CancellationToken,
+    ) -> Result<Option<ServerState>, Error> {
         // 源：new ServerState { Address = host, Name = TryGetServerNameByAddress(host) }
         let state = ServerState {
             address: host.to_string(),
@@ -399,7 +407,11 @@ impl ServerManagerApi for ServerManager {
     /// Ping 指定服务器条目（源：PingAsync(ServerEntry entry, CancellationToken ct) 重载，
     /// 重命名 `ping_entry`）：恒以固定端口 25565 委托 ping（源逐字
     /// `return await PingAsync(entry.Address, 25565, ct);`）。
-    async fn ping_entry(&self, entry: &ServerEntry, ct: &CancellationToken) -> Result<Option<ServerState>, Error> {
+    async fn ping_entry(
+        &self,
+        entry: &ServerEntry,
+        ct: &CancellationToken,
+    ) -> Result<Option<ServerState>, Error> {
         self.ping(&entry.address, PING_ENTRY_PORT, ct).await
     }
 
@@ -411,14 +423,19 @@ impl ServerManagerApi for ServerManager {
 
     /// 异步发现局域网服务器（源：DiscoverLanAsync）→ 委托固有实现（lan_discovery.rs；
     /// IAsyncEnumerable → mpsc 通道）
-    async fn discover_lan(&self, ct: &CancellationToken) -> Result<mpsc::Receiver<LanServerEntry>, Error> {
+    async fn discover_lan(
+        &self,
+        ct: &CancellationToken,
+    ) -> Result<mpsc::Receiver<LanServerEntry>, Error> {
         self.discover_lan(ct).await
     }
 
     /// 解析 SRV 记录获取服务器地址（源：ResolveSrvAsync）→ 委托固有实现（lan_discovery.rs）
-    async fn resolve_srv(&self, host: &str, ct: &CancellationToken) -> Result<Option<String>, Error> {
+    async fn resolve_srv(
+        &self,
+        host: &str,
+        ct: &CancellationToken,
+    ) -> Result<Option<String>, Error> {
         self.resolve_srv(host, ct).await
     }
 }
-
-

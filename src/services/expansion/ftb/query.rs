@@ -36,7 +36,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::api::expansion::{get_latest_version, FtbSource};
+use crate::api::expansion::{FtbSource, get_latest_version};
 use crate::error::Error;
 use crate::models::expansion::ftb::{
     CacheData, ChangelogResult, ModpackInfo, ModsDetail, VersionDetail,
@@ -172,7 +172,11 @@ impl FtbBase {
     }
 
     /// 拉取版本详情（源：`GetVersionDetailAsync` 内部，错误吞掉 → null）。
-    async fn get_version_detail_inner(&self, pack_id: i32, version_id: i32) -> Option<VersionDetail> {
+    async fn get_version_detail_inner(
+        &self,
+        pack_id: i32,
+        version_id: i32,
+    ) -> Option<VersionDetail> {
         let json = self
             .get_data_async(&format!("/modpack/{pack_id}/{version_id}"))
             .await
@@ -216,10 +220,7 @@ impl FtbBase {
         // 源：idsDoc["packs"] is JsonArray arr ? arr.Select(n => (int)(n ?? 0)).ToList() : []
         // （空/缺省 → 空列表；null 元素 → 0；非数字元素源会抛异常，此处按 0 处理 ⚠️）
         let ids: Vec<i32> = match ids_doc.get("packs") {
-            Some(Value::Array(arr)) => arr
-                .iter()
-                .map(|n| n.as_i64().unwrap_or(0) as i32)
-                .collect(),
+            Some(Value::Array(arr)) => arr.iter().map(|n| n.as_i64().unwrap_or(0) as i32).collect(),
             _ => Vec::new(),
         };
 
@@ -297,7 +298,8 @@ impl FtbSource for FtbBase {
         if let Some(tags) = tags.filter(|t| !t.is_empty()) {
             result.retain(|p| {
                 p.tags.as_ref().is_some_and(|pt| {
-                    pt.iter().any(|t| tags.iter().any(|f| t.name.eq_ignore_ascii_case(f)))
+                    pt.iter()
+                        .any(|t| tags.iter().any(|f| t.name.eq_ignore_ascii_case(f)))
                 })
             });
         }
@@ -321,7 +323,9 @@ impl FtbSource for FtbBase {
                     latest.targets.is_some_and(|targets| {
                         targets.iter().any(|t| {
                             t.r#type.as_deref() == Some("modloader")
-                                && t.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(loader))
+                                && t.name
+                                    .as_deref()
+                                    .is_some_and(|n| n.eq_ignore_ascii_case(loader))
                         })
                     })
                 })
@@ -337,7 +341,8 @@ impl FtbSource for FtbBase {
             "updated" => result.sort_by_key(|p| std::cmp::Reverse(p.updated)),
             // 默认（featured）：OrderByDescending(Featured == true).ThenByDescending(Plays)
             _ => result.sort_by(|a, b| {
-                (b.featured.is_some_and(|f| f), b.plays).cmp(&(a.featured.is_some_and(|f| f), a.plays))
+                (b.featured.is_some_and(|f| f), b.plays)
+                    .cmp(&(a.featured.is_some_and(|f| f), a.plays))
             }),
         }
 
@@ -432,8 +437,3 @@ fn unix_timestamp_secs() -> i64 {
         .unwrap_or_default()
         .as_secs() as i64
 }
-
-
-
-
-

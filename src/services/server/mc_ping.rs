@@ -190,7 +190,11 @@ async fn run_modern_query(
 /// - packet id = 0（Handshake）、协议版本 = 47、next state = 1（status）
 /// - 源先写 MemoryStream 再 `WritePacket(stream, payload)`（帧 = VarInt(payload.Length) + payload）；
 ///   本实现组装完整包后一次 write_all（线上字节一致，见文件头）
-async fn send_handshake(stream: &mut TcpStream, host: &str, port: u16) -> Result<(), ModernPingError> {
+async fn send_handshake(
+    stream: &mut TcpStream,
+    host: &str,
+    port: u16,
+) -> Result<(), ModernPingError> {
     let mut payload = Vec::with_capacity(host.len() + 12);
     // 源：WriteVarInt(packetStream, 0)
     write_var_int(&mut payload, PACKET_ID_HANDSHAKE);
@@ -391,7 +395,7 @@ async fn read_var_int(stream: &mut TcpStream) -> Result<i32, ModernPingError> {
             None => {
                 return Err(ModernPingError::Protocol(
                     "Unexpected end of stream while reading VarInt.".to_string(),
-                ))
+                ));
             }
             Some(byte) => byte,
         };
@@ -404,7 +408,9 @@ async fn read_var_int(stream: &mut TcpStream) -> Result<i32, ModernPingError> {
         position += 7;
         // 源：if (position >= 35) throw new InvalidDataException("VarInt is too large.");
         if position >= 35 {
-            return Err(ModernPingError::Protocol("VarInt is too large.".to_string()));
+            return Err(ModernPingError::Protocol(
+                "VarInt is too large.".to_string(),
+            ));
         }
     }
 }
@@ -564,4 +570,3 @@ fn check_canceled(ct: &CancellationToken) -> Result<(), ModernPingError> {
         Ok(())
     }
 }
-

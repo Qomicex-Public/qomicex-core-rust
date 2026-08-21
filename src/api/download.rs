@@ -9,9 +9,9 @@
 //! - `AddCustomSource(DownloadSource)`（同步 void）→ `add_custom_source(&mut self, source)`
 //! - `GetPreferredSource(ResourceType) -> DownloadSource?` → `get_preferred_source(&self, resource_type) -> Result<Option<DownloadSource>, Error>`
 
-use async_trait::async_trait;
 use crate::error::Error;
 use crate::models::download::{DownloadSource, ResourceType};
+use async_trait::async_trait;
 
 /// 下载源管理器（源：IDownloadSourceManager 接口）。
 ///
@@ -46,6 +46,8 @@ pub trait DownloadSourceManager: Send + Sync {
     ///
     /// C# 可空返回映射为 `Option<DownloadSource>`；按 B3 签名规则包装为
     /// `Result<Option<DownloadSource>, Error>` 以统一错误通道。
-    fn get_preferred_source(&self, resource_type: ResourceType) -> Result<Option<DownloadSource>, Error>;
+    fn get_preferred_source(
+        &self,
+        resource_type: ResourceType,
+    ) -> Result<Option<DownloadSource>, Error>;
 }
-

@@ -11,9 +11,7 @@
 //! 差异说明（B6 定案）：C# 文件读取失败抛运行时异常；本模块返回
 //! `Err(Error::DownloadFailed)`，由调用方（retry.rs）决定是否重试，语义等价。
 
-
 use sha1::{Digest, Sha1};
-
 
 /// 校验文件 SHA1（源：`FileHelper.ValidateFileHash`）。
 ///
@@ -33,5 +31,3 @@ pub(crate) fn sha1_hex(data: &[u8]) -> String {
     }
     s
 }
-
-

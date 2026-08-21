@@ -74,11 +74,7 @@ pub fn get_current_arch() -> &'static str {
 
 /// 获取环境变量路径分隔符（对应 SystemHelper.GetSeparator）：Windows ";"，其余 ":"
 pub fn get_separator() -> &'static str {
-    if cfg!(windows) {
-        ";"
-    } else {
-        ":"
-    }
+    if cfg!(windows) { ";" } else { ":" }
 }
 
 /// 获取当前架构的运行时名称（对应 SystemHelper.GetArch / RuntimeInformation.OSArchitecture 小写）
@@ -145,7 +141,9 @@ pub fn normalize_path(path: &str) -> String {
             Err(_) => p.to_path_buf(),
         }
     };
-    normalize_lexically(&full).to_string_lossy().replace('\\', "/")
+    normalize_lexically(&full)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 /// 词法折叠路径中的 "." 与 ".." 段（不访问文件系统）
@@ -196,4 +194,3 @@ pub fn generate_uuid(name: &str) -> String {
     }
     out
 }
-

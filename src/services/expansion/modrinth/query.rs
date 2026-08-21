@@ -154,7 +154,9 @@ impl ModrinthBase {
     async fn get_tags(&self, tag_type: &str) -> Result<Vec<ModrinthTag>, Error> {
         if tag_type.is_empty() {
             return Err(Error::Params {
-                message: format!("tagType 不能为空（源 ArgumentException.ThrowIfNullOrEmpty，参数 {tag_type}）"),
+                message: format!(
+                    "tagType 不能为空（源 ArgumentException.ThrowIfNullOrEmpty，参数 {tag_type}）"
+                ),
                 source: None,
             });
         }
@@ -192,7 +194,9 @@ impl ModrinthSource for ModrinthBase {
     ) -> Result<SearchResult, Error> {
         if page_size < 0 {
             return Err(Error::Params {
-                message: format!("pageSize 不能为负数（源 ArgumentOutOfRangeException.ThrowIfNegative，参数 pageSize={page_size}）"),
+                message: format!(
+                    "pageSize 不能为负数（源 ArgumentOutOfRangeException.ThrowIfNegative，参数 pageSize={page_size}）"
+                ),
                 source: None,
             });
         }
@@ -256,7 +260,8 @@ impl ModrinthSource for ModrinthBase {
     async fn get_project_info(&self, project_id: &str) -> Result<ProjectInfo, Error> {
         if project_id.is_empty() {
             return Err(Error::Params {
-                message: "projectId 不能为空（源 ArgumentException.ThrowIfNullOrEmpty）".to_string(),
+                message: "projectId 不能为空（源 ArgumentException.ThrowIfNullOrEmpty）"
+                    .to_string(),
                 source: None,
             });
         }
@@ -285,10 +290,14 @@ impl ModrinthSource for ModrinthBase {
     /// 类型（List<ModrinthFile>）与目标 Files（List<VersionFileInfo>）不匹配——
     /// 属源编译错误；本文件按字段语义保真映射，缺失字段取 None/0（见
     /// `to_project_version_info` 各 ⚠️ 标注）。
-    async fn get_project_version_info(&self, project_id: &str) -> Result<Vec<ProjectVersionInfo>, Error> {
+    async fn get_project_version_info(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ProjectVersionInfo>, Error> {
         if project_id.is_empty() {
             return Err(Error::Params {
-                message: "projectId 不能为空（源 ArgumentException.ThrowIfNullOrEmpty）".to_string(),
+                message: "projectId 不能为空（源 ArgumentException.ThrowIfNullOrEmpty）"
+                    .to_string(),
                 source: None,
             });
         }
@@ -300,7 +309,8 @@ impl ModrinthSource for ModrinthBase {
                 escape_data_string(project_id)
             ))
             .await?;
-        let list: Option<Vec<ModrinthVersionInfo>> = serde_json::from_str(&body).map_err(json_err)?;
+        let list: Option<Vec<ModrinthVersionInfo>> =
+            serde_json::from_str(&body).map_err(json_err)?;
         Ok(list
             .unwrap_or_default()
             .into_iter()
@@ -316,7 +326,8 @@ impl ModrinthSource for ModrinthBase {
     async fn get_version_info(&self, version_id: &str) -> Result<VersionInfo, Error> {
         if version_id.is_empty() {
             return Err(Error::Params {
-                message: "versionId 不能为空（源 ArgumentException.ThrowIfNullOrEmpty）".to_string(),
+                message: "versionId 不能为空（源 ArgumentException.ThrowIfNullOrEmpty）"
+                    .to_string(),
                 source: None,
             });
         }
@@ -340,7 +351,10 @@ impl ModrinthSource for ModrinthBase {
     /// 委托 `get_project_versions_from_hashes_dict` 后取全部值
     /// （源 `dict.Values.ToList()`）。⚠️ 返回顺序不保证——源为 Dictionary 插入序，
     /// Rust HashMap 无序（非 API 契约，不影响语义）。
-    async fn get_project_versions_from_hashes(&self, hashes: &[String]) -> Result<Vec<ProjectVersionInfo>, Error> {
+    async fn get_project_versions_from_hashes(
+        &self,
+        hashes: &[String],
+    ) -> Result<Vec<ProjectVersionInfo>, Error> {
         Ok(self
             .get_project_versions_from_hashes_dict(hashes)
             .await?
@@ -512,9 +526,12 @@ fn to_project_version_info_from_hash(v: ModrinthVersionInfo) -> ProjectVersionIn
         // ⚠️ 源 C# 在此路径显式 Files=null；Rust 保留 files，供 mrpack 导出等
         //    哈希反查场景取下载 URL/大小/哈希（mods.rs 更新检查只取 id/project_id，
         //    不受影响）。
-        files: v
-            .files
-            .map(|files| files.into_iter().map(modrinth_file_to_version_file_info).collect()),
+        files: v.files.map(|files| {
+            files
+                .into_iter()
+                .map(modrinth_file_to_version_file_info)
+                .collect()
+        }),
         dependencies_infos: None,
     }
 }
@@ -572,7 +589,3 @@ fn json_err(e: serde_json::Error) -> Error {
         source: Some(Box::new(e)),
     }
 }
-
-
-
-

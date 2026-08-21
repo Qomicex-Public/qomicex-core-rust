@@ -89,10 +89,9 @@ impl YggdrasilAuthProvider {
             let status = response.status().as_u16();
             let body = response.text().await.map_err(transport_error)?;
             let err: Option<YggdrasilError> = serde_json::from_str(&body).ok();
-            return Ok(Err(
-                err.and_then(|e| e.error_message)
-                    .unwrap_or_else(|| format!("认证失败: {status}")),
-            ));
+            return Ok(Err(err
+                .and_then(|e| e.error_message)
+                .unwrap_or_else(|| format!("认证失败: {status}"))));
         }
 
         let body = response.text().await.map_err(transport_error)?;
@@ -271,9 +270,7 @@ fn utc_now_plus_hours(hours: u64) -> String {
     let rem = secs % 86400;
     let (year, month, day) = civil_from_days(days);
     let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hh:02}:{mm:02}:{ss:02}+00:00"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hh:02}:{mm:02}:{ss:02}+00:00")
 }
 
 /// 天数（1970-01-01 起）→ (年, 月, 日)。Howard Hinnant civil_from_days 算法。

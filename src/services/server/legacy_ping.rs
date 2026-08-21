@@ -434,4 +434,3 @@ fn decode_utf16be(bytes: &[u8]) -> String {
         .collect();
     String::from_utf16_lossy(&units)
 }
-

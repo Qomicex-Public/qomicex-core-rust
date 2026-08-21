@@ -8,10 +8,10 @@
 //! B9 追加：InstallerFactory trait（源 IInstallerFactory.cs，12 种安装器创建，
 //! 同步方法返回 Box<dyn Installer + Send + Sync>，详见下方定义）。
 
-use async_trait::async_trait;
 use crate::error::Error;
 use crate::models::installer::{ModLoaderResult, ModLoaderType};
 use crate::services::installers::installer::Installer;
+use async_trait::async_trait;
 
 /// 安装器提供商（源：IInstallerProvider 接口）。
 ///
@@ -56,10 +56,18 @@ pub trait InstallerProvider: Send + Sync {
 /// 声明在同文件而采用 `pub` 的先例）。
 pub trait InstallerFactory: Send + Sync {
     /// 创建 Fabric 安装器（源：`CreateFabric(int downloadSource, string gameDir)`）
-    fn create_fabric(&self, download_source: i32, game_dir: &str) -> Box<dyn Installer + Send + Sync>;
+    fn create_fabric(
+        &self,
+        download_source: i32,
+        game_dir: &str,
+    ) -> Box<dyn Installer + Send + Sync>;
 
     /// 创建 Quilt 安装器（源：`CreateQuilt(int downloadSource, string gameDir)`）
-    fn create_quilt(&self, download_source: i32, game_dir: &str) -> Box<dyn Installer + Send + Sync>;
+    fn create_quilt(
+        &self,
+        download_source: i32,
+        game_dir: &str,
+    ) -> Box<dyn Installer + Send + Sync>;
 
     /// 创建 Forge 安装器（源：`CreateForge(int downloadSource, string gameDir, string gameVersion)`）
     fn create_forge(
@@ -94,7 +102,11 @@ pub trait InstallerFactory: Send + Sync {
     ) -> Box<dyn Installer + Send + Sync>;
 
     /// 创建 Cleanroom 安装器（源：`CreateCleanroom(int downloadSource, string gameDir)`）
-    fn create_cleanroom(&self, download_source: i32, game_dir: &str) -> Box<dyn Installer + Send + Sync>;
+    fn create_cleanroom(
+        &self,
+        download_source: i32,
+        game_dir: &str,
+    ) -> Box<dyn Installer + Send + Sync>;
 
     /// 创建 LegacyFabric 安装器（源：`CreateLegacyFabric(int downloadSource, string gameDir)`）
     fn create_legacy_fabric(
@@ -104,7 +116,11 @@ pub trait InstallerFactory: Send + Sync {
     ) -> Box<dyn Installer + Send + Sync>;
 
     /// 创建 Babric 安装器（源：`CreateBabric(int downloadSource, string gameDir)`）
-    fn create_babric(&self, download_source: i32, game_dir: &str) -> Box<dyn Installer + Send + Sync>;
+    fn create_babric(
+        &self,
+        download_source: i32,
+        game_dir: &str,
+    ) -> Box<dyn Installer + Send + Sync>;
 
     /// 创建 CurseForge 整合包安装器（源：`CreateCurseForgeModpack(string gameDir, bool versionIsolation, string modpackFilePath)`）
     fn create_curseforge_modpack(
@@ -132,5 +148,3 @@ pub trait InstallerFactory: Send + Sync {
         cf_api_key: &str,
     ) -> Box<dyn Installer + Send + Sync>;
 }
-
-

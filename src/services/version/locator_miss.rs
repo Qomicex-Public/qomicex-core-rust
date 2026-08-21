@@ -42,10 +42,10 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::services::version::locator::DefaultVersionLocator;
 use crate::error::Error;
 use crate::models::installer::MissFileInfo;
 use crate::models::version_metadata::{AssetIndex, Library};
+use crate::services::version::locator::DefaultVersionLocator;
 use crate::util::lib_helper::maven_to_path;
 use crate::util::platform::{get_current_arch, get_current_os_name};
 
@@ -229,14 +229,11 @@ impl DefaultVersionLocator {
 
         // 分支2：Natives != null && Downloads?.Classifiers != null
         if lib.natives.is_some() && lib.downloads.classifiers.is_some() {
-            if let (Some(natives), Some(classifiers)) =
-                (&lib.natives, &lib.downloads.classifiers)
-            {
+            if let (Some(natives), Some(classifiers)) = (&lib.natives, &lib.downloads.classifiers) {
                 let os_name = get_current_os_name();
                 if let Some(native_classifier) = natives.get(os_name) {
                     // 源：nativeClassifier.Replace("${arch}", SystemHelper.GetCurrentArch())
-                    let classifier_key =
-                        native_classifier.replace("${arch}", get_current_arch());
+                    let classifier_key = native_classifier.replace("${arch}", get_current_arch());
                     if let Some(native_artifact) = classifiers.get(&classifier_key) {
                         items.push(MissFileInfo {
                             name: format!("{}:{}", lib.name, classifier_key),
@@ -283,15 +280,3 @@ impl DefaultVersionLocator {
         )
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-

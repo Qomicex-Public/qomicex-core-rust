@@ -33,10 +33,10 @@ use async_trait::async_trait;
 use crate::api::expansion::CurseForgeSource;
 use crate::error::Error;
 use crate::models::expansion::curseforge::{
-    AuthorMeta, CategoryMeta, CurseForgeBatchFileInfo, CurseForgeFileInfo,
-    CurseForgeFilePageItem, CurseForgeFilePageResponse, CurseForgeFingerprintFile,
-    CurseForgeFingerprintMatch, CurseForgeInfo, CurseForgeSearchResponse, CurseForgeSearchResult,
-    FingerprintsFilesMeta, FingerprintsRequest, ScreenshotsMeta,
+    AuthorMeta, CategoryMeta, CurseForgeBatchFileInfo, CurseForgeFileInfo, CurseForgeFilePageItem,
+    CurseForgeFilePageResponse, CurseForgeFingerprintFile, CurseForgeFingerprintMatch,
+    CurseForgeInfo, CurseForgeSearchResponse, CurseForgeSearchResult, FingerprintsFilesMeta,
+    FingerprintsRequest, ScreenshotsMeta,
 };
 use serde_json::Value;
 
@@ -97,7 +97,7 @@ impl CurseForgeBase {
                     message: format!("[CurseForge] GET {full_url} 请求超时（30s）"),
                     status: None,
                     source: None,
-                })
+                });
             }
         };
         let status = response.status();
@@ -211,7 +211,9 @@ impl CurseForgeBase {
                 .collect();
             let skipped = batch.len() - valid_batch.len();
             if skipped > 0 {
-                println!("[CurseForge] 批次 {batch_num} 过滤掉 {skipped} 个无效 fileId（≤0 或超出 int32 范围）");
+                println!(
+                    "[CurseForge] 批次 {batch_num} 过滤掉 {skipped} 个无效 fileId（≤0 或超出 int32 范围）"
+                );
             }
             if valid_batch.is_empty() {
                 println!("[CurseForge] 批次 {batch_num} 无有效 fileId，跳过");
@@ -222,21 +224,40 @@ impl CurseForgeBase {
 
             println!(
                 "[CurseForge] 批次 {batch_num} 有效 fileId 前5个: [{}] 总数={}",
-                valid_batch.iter().take(5).map(|id| id.to_string()).collect::<Vec<_>>().join(","),
+                valid_batch
+                    .iter()
+                    .take(5)
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(","),
                 valid_batch.len()
             );
 
             // 源：$"{{\"fileIds\":[{string.Join(",", validBatch)}]}}"
             let json_data = format!(
                 "{{\"fileIds\":[{}]}}",
-                valid_batch.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
+                valid_batch
+                    .iter()
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
             );
 
             let response_text = match self.post_data("/v1/mods/files", &json_data).await {
                 Ok(text) => text,
                 Err(e) if is_bad_request(&e) => {
-                    println!("[CurseForge] 批次 {batch_num} 返回 400 Bad Request，跳过此批（{} 个 fileId）", valid_batch.len());
-                    println!("[CurseForge] 失败批次 fileIds: {}", valid_batch.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","));
+                    println!(
+                        "[CurseForge] 批次 {batch_num} 返回 400 Bad Request，跳过此批（{} 个 fileId）",
+                        valid_batch.len()
+                    );
+                    println!(
+                        "[CurseForge] 失败批次 fileIds: {}",
+                        valid_batch
+                            .iter()
+                            .map(|id| id.to_string())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    );
                     i = end;
                     batch_num += 1;
                     continue;
@@ -359,7 +380,8 @@ impl CurseForgeBase {
             // JsonException 并传播（源未捕获）
             let meta: FingerprintsFilesMeta =
                 serde_json::from_value(file_data.clone()).map_err(|e| Error::Http {
-                    message: "解析 FingerprintsFilesMeta 失败（源 ToObject → JsonException）".to_string(),
+                    message: "解析 FingerprintsFilesMeta 失败（源 ToObject → JsonException）"
+                        .to_string(),
                     status: None,
                     source: Some(Box::new(e)),
                 })?;
@@ -440,7 +462,9 @@ impl CurseForgeSource for CurseForgeBase {
             .collect::<Vec<_>>()
             .join(",");
         // 源：cls = classId.HasValue ? $"&classId={classId.Value}" : ""
-        let cls = class_id.map(|v| format!("&classId={v}")).unwrap_or_default();
+        let cls = class_id
+            .map(|v| format!("&classId={v}"))
+            .unwrap_or_default();
         // 源：$"{sortField}" —— int? 为 null 时插值为空串
         let sort = sort_field.map(|v| v.to_string()).unwrap_or_default();
 
@@ -466,7 +490,8 @@ impl CurseForgeSource for CurseForgeBase {
             // 源：mod!.AsObject() —— 非对象时 InvalidOperationException → Error::Http
             let Some(mod_obj) = mod_data.as_object() else {
                 return Err(Error::Http {
-                    message: "搜索结果为非对象（源 AsObject() → InvalidOperationException）".to_string(),
+                    message: "搜索结果为非对象（源 AsObject() → InvalidOperationException）"
+                        .to_string(),
                     status: None,
                     source: None,
                 });
@@ -504,7 +529,10 @@ impl CurseForgeSource for CurseForgeBase {
                     .map(|logo| str_field(logo.get("url")))
                     .unwrap_or_default(),
                 // 源：modData["isFeatured"]?.GetValue<bool>() ?? false
-                is_featured: mod_obj.get("isFeatured").and_then(|v| v.as_bool()).unwrap_or(false),
+                is_featured: mod_obj
+                    .get("isFeatured")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 // 源：ParseJsonArray(authors, n => new AuthorMeta(n?["id"]?.GetValue<int>() ?? 0,
                 //      n?["name"]?.ToString() ?? "", n?["url"]?.ToString()))
                 authors: mod_obj
@@ -590,7 +618,11 @@ impl CurseForgeSource for CurseForgeBase {
     /// 空参数 → Error::Params（源 ArgumentException.ThrowIfNullOrEmpty）；响应无 `data` →
     /// Error::Http（源 InvalidOperationException("CurseForge 文件信息响应为空")）；
     /// `data` 反序列化为 B1 模型 CurseForgeFileInfo。
-    async fn get_file_info(&self, mod_id: &str, file_id: &str) -> Result<CurseForgeFileInfo, Error> {
+    async fn get_file_info(
+        &self,
+        mod_id: &str,
+        file_id: &str,
+    ) -> Result<CurseForgeFileInfo, Error> {
         if mod_id.is_empty() {
             return Err(Error::Params {
                 message: "modId 不能为空（源 ArgumentException.ThrowIfNullOrEmpty）".to_string(),
@@ -604,7 +636,10 @@ impl CurseForgeSource for CurseForgeBase {
             });
         }
         let data = self
-            .get_data(&format!("{}/v1/mods/{}/files/{}", self.base_url, mod_id, file_id))
+            .get_data(&format!(
+                "{}/v1/mods/{}/files/{}",
+                self.base_url, mod_id, file_id
+            ))
             .await?;
         let root = parse_json(&data, "文件信息响应")?;
         let Some(result) = root.get("data").filter(|v| !v.is_null()) else {
@@ -660,7 +695,10 @@ impl CurseForgeSource for CurseForgeBase {
     /// GetInfoFromHashesDictAsync 后取 `dict.Values.ToList()`）。
     /// 顺序保持 exactMatches 数组序（C# Dictionary 插入序 → .Values 序；HashMap 无序，
     /// 故内部以保序 Vec 承载，见 get_info_from_hashes_inner）。
-    async fn get_info_from_hashes(&self, hashes: &[i64]) -> Result<Vec<FingerprintsFilesMeta>, Error> {
+    async fn get_info_from_hashes(
+        &self,
+        hashes: &[i64],
+    ) -> Result<Vec<FingerprintsFilesMeta>, Error> {
         Ok(self
             .get_info_from_hashes_inner(hashes)
             .await?
@@ -677,7 +715,11 @@ impl CurseForgeSource for CurseForgeBase {
         &self,
         hashes: &[i64],
     ) -> Result<HashMap<i64, FingerprintsFilesMeta>, Error> {
-        Ok(self.get_info_from_hashes_inner(hashes).await?.into_iter().collect())
+        Ok(self
+            .get_info_from_hashes_inner(hashes)
+            .await?
+            .into_iter()
+            .collect())
     }
 
     /// 通过指纹反查完整命中（file + latestFiles，用于批次更新检查）。
@@ -714,13 +756,11 @@ impl CurseForgeSource for CurseForgeBase {
         for match_node in exact_matches {
             let file_raw = match_node.get("file").filter(|v| !v.is_null());
             let file: Option<CurseForgeFingerprintFile> = match file_raw {
-                Some(v) => Some(
-                    serde_json::from_value(v.clone()).map_err(|e| Error::Http {
-                        message: "解析 CurseForgeFingerprintFile 失败".to_string(),
-                        status: None,
-                        source: Some(Box::new(e)),
-                    })?,
-                ),
+                Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| Error::Http {
+                    message: "解析 CurseForgeFingerprintFile 失败".to_string(),
+                    status: None,
+                    source: Some(Box::new(e)),
+                })?),
                 None => None,
             };
             let fingerprint = match file_raw {
@@ -787,7 +827,13 @@ fn ensure_success_message(status: reqwest::StatusCode) -> String {
 /// 通过本模块 ensure_success_message 生成的固定消息文本匹配（见 p56 翻译日志）。
 fn is_bad_request(e: &Error) -> bool {
     // TD-1：Error::Http 已结构化承载状态码（源 HttpRequestException.StatusCode 语义）
-    matches!(e, Error::Http { status: Some(400), .. })
+    matches!(
+        e,
+        Error::Http {
+            status: Some(400),
+            ..
+        }
+    )
 }
 
 /// 解析 JSON 文本（源：`JsonNode.Parse` —— 非法 JSON → JsonException → Error::Http，B6 语义）
@@ -844,9 +890,3 @@ fn find_sha1_from_hashes(hashes: Option<&Vec<Value>>) -> Option<String> {
     }
     None
 }
-
-
-
-
-
-

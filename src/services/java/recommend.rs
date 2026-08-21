@@ -94,11 +94,7 @@ impl JavaRecommender {
     /// require == 8 时大版本必须精确等于 8（否则 false）。
     /// 源对 `GetRequireMajroVersion(metadata)` 调用两次（纯函数），
     /// 此处缓存到局部变量 `require`，语义一致。
-    pub(crate) fn check(
-        &self,
-        java: &JavaResult,
-        metadata: &CompleteVersionMetadata,
-    ) -> bool {
+    pub(crate) fn check(&self, java: &JavaResult, metadata: &CompleteVersionMetadata) -> bool {
         if java.state != JavaState::Valid {
             return false;
         }
@@ -131,7 +127,7 @@ impl JavaRecommender {
 mod tests {
     use super::*;
     use crate::models::java::{JavaResult, JavaState, JavaType};
-    use crate::models::version_metadata::{JavaVersion, CompleteVersionMetadata};
+    use crate::models::version_metadata::{CompleteVersionMetadata, JavaVersion};
 
     fn java_result(major: i32) -> JavaResult {
         JavaResult {
@@ -184,7 +180,11 @@ mod tests {
         let recommender = JavaRecommender;
         let list = vec![java_result(8), java_result(17)];
         // require=21：候选全部 diff<0（源逻辑：循环结束抛错）
-        assert!(recommender.recommend(&list, &metadata_with_required(21)).is_err());
+        assert!(
+            recommender
+                .recommend(&list, &metadata_with_required(21))
+                .is_err()
+        );
         // require=17：17 精确匹配
         let picked = recommender
             .recommend(&list, &metadata_with_required(17))
@@ -197,7 +197,11 @@ mod tests {
         let recommender = JavaRecommender;
         // require=8：diff>0 直接抛错（8 必须精确匹配）
         let list = vec![java_result(17)];
-        assert!(recommender.recommend(&list, &metadata_with_required(8)).is_err());
+        assert!(
+            recommender
+                .recommend(&list, &metadata_with_required(8))
+                .is_err()
+        );
         let ok = recommender
             .recommend(&vec![java_result(8)], &metadata_with_required(8))
             .unwrap();
@@ -207,7 +211,11 @@ mod tests {
     #[test]
     fn recommend_empty_list_errors() {
         let recommender = JavaRecommender;
-        assert!(recommender.recommend(&vec![], &metadata_with_required(17)).is_err());
+        assert!(
+            recommender
+                .recommend(&vec![], &metadata_with_required(17))
+                .is_err()
+        );
     }
 
     #[test]
@@ -223,5 +231,3 @@ mod tests {
         assert!(!recommender.check(&java_result(17), &metadata_with_required(8)));
     }
 }
-
-

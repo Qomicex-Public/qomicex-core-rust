@@ -9,9 +9,9 @@
 //! 备注：MAPPING_TABLE.yaml 记录为 `ExecuteAsync -> execute`，与源文件实际
 //! 签名（LaunchAsync）不符，以源文件为准采用 `launch`（详见 B3 翻译日志）。
 
-use async_trait::async_trait;
 use crate::error::Error;
 use crate::models::launch::{LaunchOptions, LaunchResult};
+use async_trait::async_trait;
 
 /// 启动执行器（源：ILaunchExecutor 接口）。
 ///
@@ -24,4 +24,3 @@ pub trait LaunchExecutor: Send + Sync {
     /// 按进程 ID 结束进程，返回是否成功结束（源：`KillAsync`）。
     async fn kill(&self, process_id: i32) -> Result<bool, Error>;
 }
-

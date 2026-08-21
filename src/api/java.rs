@@ -8,13 +8,13 @@
 //! - `bool Check(JavaResult java, CompleteVersionMetadata metadata)`（同步）→ `check(&self, java: &JavaResult, metadata: &CompleteVersionMetadata) -> bool`
 //! - `Task<List<JavaPackageInfo>> GetPackages(int majorVersion, JavaPlatform platform, JavaArchitecture architecture, JavaPackageType packageType, JavaDownloadSource source = JavaDownloadSource.Adoptium)` → `get_packages(&self, major_version: i32, platform: JavaPlatform, architecture: JavaArchitecture, package_type: JavaPackageType, source: JavaDownloadSource) -> Result<Vec<JavaPackageInfo>, Error>`
 
-use async_trait::async_trait;
 use crate::error::Error;
 use crate::models::java::{
     JavaArchitecture, JavaDownloadSource, JavaPackageInfo, JavaPackageType, JavaPlatform,
     JavaResult, JavaSearchOptions,
 };
 use crate::models::version_metadata::CompleteVersionMetadata;
+use async_trait::async_trait;
 
 /// Java 提供商（源：IJavaProvider 接口）。
 ///
@@ -54,4 +54,3 @@ pub trait JavaProvider: Send + Sync {
         source: JavaDownloadSource,
     ) -> Result<Vec<JavaPackageInfo>, Error>;
 }
-

@@ -54,7 +54,7 @@ use serde_json::{Map, Value};
 use crate::error::Error;
 use crate::models::download::DownloadMirror;
 use crate::services::installers::forge_base::{
-    main_jar_relative_path, ForgeInstallerBase, SourcesList,
+    ForgeInstallerBase, SourcesList, main_jar_relative_path,
 };
 use crate::services::installers::installer::MissFileData;
 use crate::services::installers::installer::{Installer, InstallerBase};
@@ -95,9 +95,18 @@ impl ForgeInstaller {
                 mirror_url.to_string(),
                 vec![
                     // 源 SourcesList 三组映射，逐字
-                    ("https://maven.minecraftforge.net".to_string(), mirror_url.to_string()),
-                    ("https://files.minecraftforge.net/maven".to_string(), mirror_url.to_string()),
-                    ("https://libraries.minecraft.net".to_string(), mirror_url.to_string()),
+                    (
+                        "https://maven.minecraftforge.net".to_string(),
+                        mirror_url.to_string(),
+                    ),
+                    (
+                        "https://files.minecraftforge.net/maven".to_string(),
+                        mirror_url.to_string(),
+                    ),
+                    (
+                        "https://libraries.minecraft.net".to_string(),
+                        mirror_url.to_string(),
+                    ),
                 ],
             )
         } else {
@@ -120,7 +129,13 @@ impl ForgeInstaller {
                 game_version: game_version.clone(),
                 installer_path: String::new(),
                 main_jar_path: String::new(),
-                source_mappings: source_mappings.iter().map(|(o, d)| SourcesList { original: o.clone(), default: d.clone() }).collect(),
+                source_mappings: source_mappings
+                    .iter()
+                    .map(|(o, d)| SourcesList {
+                        original: o.clone(),
+                        default: d.clone(),
+                    })
+                    .collect(),
             },
         }
     }
@@ -148,9 +163,18 @@ impl ForgeInstaller {
         //      catch { throw new Exception("读取Forge安装器内容失败，请检查安装器文件是否正确"); }
         let (mut json_data, install_profile_data, client_lzma) =
             (|| -> Result<(String, String, Vec<u8>), Error> {
-                let version_bytes = InstallerBase::read_specify_file_from_zip(forge_installer_path, "version.json")?;
-                let profile_bytes = InstallerBase::read_specify_file_from_zip(forge_installer_path, "install_profile.json")?;
-                let lzma = InstallerBase::read_specify_file_from_zip(forge_installer_path, "data/client.lzma")?;
+                let version_bytes = InstallerBase::read_specify_file_from_zip(
+                    forge_installer_path,
+                    "version.json",
+                )?;
+                let profile_bytes = InstallerBase::read_specify_file_from_zip(
+                    forge_installer_path,
+                    "install_profile.json",
+                )?;
+                let lzma = InstallerBase::read_specify_file_from_zip(
+                    forge_installer_path,
+                    "data/client.lzma",
+                )?;
                 Ok((
                     // 源 Encoding.UTF8.GetString：无效序列替换（有损）
                     String::from_utf8_lossy(&version_bytes).into_owned(),
@@ -164,10 +188,11 @@ impl ForgeInstaller {
             })?;
 
         // 源：var installProfileJson = JsonNode.Parse(installProfileData!)!.AsObject();
-        let mut install_profile_json: Value = serde_json::from_str(&install_profile_data).map_err(|e| Error::Params {
-            message: format!("install_profile.json 解析失败（源 JsonException）: {e}"),
-            source: None,
-        })?;
+        let mut install_profile_json: Value =
+            serde_json::from_str(&install_profile_data).map_err(|e| Error::Params {
+                message: format!("install_profile.json 解析失败（源 JsonException）: {e}"),
+                source: None,
+            })?;
 
         // 源：profileName 提取（IsNullOrEmpty(profile) ? install?.profileName ?? "" : profile）
         let profile_name = get_profile_name(&install_profile_json);
@@ -183,13 +208,17 @@ impl ForgeInstaller {
 
         // 源：var versionData = JsonNode.Parse(jsonData!)!.AsObject();
         //      versionData["id"] = versionId; versionData["inheritsFrom"] = this.gameVersion;
-        let mut version_data: Value = serde_json::from_str(&json_data).map_err(|e| Error::Params {
-            message: format!("version.json 解析失败（源 JsonException）: {e}"),
-            source: None,
-        })?;
+        let mut version_data: Value =
+            serde_json::from_str(&json_data).map_err(|e| Error::Params {
+                message: format!("version.json 解析失败（源 JsonException）: {e}"),
+                source: None,
+            })?;
         if let Some(obj) = version_data.as_object_mut() {
             obj.insert("id".to_string(), Value::String(version_id.to_string()));
-            obj.insert("inheritsFrom".to_string(), Value::String(self.game_version.clone()));
+            obj.insert(
+                "inheritsFrom".to_string(),
+                Value::String(self.game_version.clone()),
+            );
         }
         // 源：jsonData = versionData.ToString();
         json_data = serde_json::to_string(&version_data).map_err(|e| Error::Params {
@@ -200,13 +229,18 @@ impl ForgeInstaller {
         // 源：if (!string.IsNullOrEmpty(inheritsFromJson)) { MergeVersionJson + clientVersion 补写 }
         if !inherits_from_json.is_empty() {
             // MergeVersionJson 会删除 inheritsFrom，补写 clientVersion 以保留原版版本信息（源注释）
-            json_data = InstallerBase::merge_version_json(inherits_from_json, &json_data, Some(version_id));
-            let mut merged_obj: Value = serde_json::from_str(&json_data).map_err(|e| Error::Params {
-                message: format!("合并后版本 JSON 解析失败（源 JsonException）: {e}"),
-                source: None,
-            })?;
+            json_data =
+                InstallerBase::merge_version_json(inherits_from_json, &json_data, Some(version_id));
+            let mut merged_obj: Value =
+                serde_json::from_str(&json_data).map_err(|e| Error::Params {
+                    message: format!("合并后版本 JSON 解析失败（源 JsonException）: {e}"),
+                    source: None,
+                })?;
             if let Some(obj) = merged_obj.as_object_mut() {
-                obj.insert("clientVersion".to_string(), Value::String(self.game_version.clone()));
+                obj.insert(
+                    "clientVersion".to_string(),
+                    Value::String(self.game_version.clone()),
+                );
             }
             json_data = serde_json::to_string(&merged_obj).map_err(|e| Error::Params {
                 message: format!("序列化版本 JSON 失败: {e}"),
@@ -236,7 +270,10 @@ impl ForgeInstaller {
         //      $"{gameVersion}-{versionId}")
         let lzma_dir = path_combine(
             &path_combine(
-                &path_combine(&path_combine(&path_combine(&self.game_dir, "libraries"), "net"), "minecraftforge"),
+                &path_combine(
+                    &path_combine(&path_combine(&self.game_dir, "libraries"), "net"),
+                    "minecraftforge",
+                ),
                 "forge",
             ),
             &format!("{}-{}", self.game_version, version_id),
@@ -265,12 +302,15 @@ impl ForgeInstaller {
         //      installProfileJson["data"]!["BINPATCH"]!["client"] = binPatchPath;
         let bin_patch_path = format!("\"{}\"", path_combine(&lzma_dir, "client.lzma"));
         // 源 `!`（null-forgiving）：data/BINPATCH 缺失 → NullReferenceException；非对象 → InvalidOperationException
-        let data_obj = install_profile_json.get_mut("data").ok_or_else(|| Error::Params {
-            message: "install_profile.json 缺少 data（源 NullReferenceException）".to_string(),
-            source: None,
-        })?;
+        let data_obj = install_profile_json
+            .get_mut("data")
+            .ok_or_else(|| Error::Params {
+                message: "install_profile.json 缺少 data（源 NullReferenceException）".to_string(),
+                source: None,
+            })?;
         let binpatch = data_obj.get_mut("BINPATCH").ok_or_else(|| Error::Params {
-            message: "install_profile.json 缺少 data.BINPATCH（源 NullReferenceException）".to_string(),
+            message: "install_profile.json 缺少 data.BINPATCH（源 NullReferenceException）"
+                .to_string(),
             source: None,
         })?;
         let binpatch_obj = binpatch.as_object_mut().ok_or_else(|| Error::Params {
@@ -280,15 +320,22 @@ impl ForgeInstaller {
         binpatch_obj.insert("client".to_string(), Value::String(bin_patch_path));
 
         // 源：var path = installProfileJson["path"]?.ToString()!; （null → 空串，后续 IsNullOrEmpty 分支）
-        let path = install_profile_json.get("path").map(json_node_to_string).unwrap_or_default();
+        let path = install_profile_json
+            .get("path")
+            .map(json_node_to_string)
+            .unwrap_or_default();
         let mut jar_maven_path = String::new();
         if !path.is_empty() {
             jar_maven_path = InstallerBase::maven_to_path(&path);
         }
         if !jar_maven_path.is_empty() {
             // 源：var forgeJar = ReadSpecifyFileFromZip(installer, $@"maven/{jarMavenPath}");
-            let forge_jar = InstallerBase::read_specify_file_from_zip(forge_installer_path, &format!("maven/{jar_maven_path}"))?;
-            let jar_full_path = path_combine(&path_combine(&self.game_dir, "libraries"), &jar_maven_path);
+            let forge_jar = InstallerBase::read_specify_file_from_zip(
+                forge_installer_path,
+                &format!("maven/{jar_maven_path}"),
+            )?;
+            let jar_full_path =
+                path_combine(&path_combine(&self.game_dir, "libraries"), &jar_maven_path);
             // Windows verbatim 路径（\\?\ 前缀）下 '/' 非分隔符，需换成 '\'
             // （详见 file_helper::normalize_separators），否则 std::fs::write 报 os error 123。
             let jar_full_path = normalize_separators(&jar_full_path);
@@ -318,9 +365,18 @@ impl ForgeInstaller {
         // 源：var libs = GetMissForgeLibraries(forgeInstallerPath, versionId);
         //      foreach: await DownloadFileAsync(CreateHttpClient(), lib.Url, lib.Path);
         //      catch (Exception e) { BackInstall; throw new Exception($"下载缺失的库文件失败: {lib.Path}\n{e.Message}"); }
-        let libs = self.get_miss_forge_libraries(forge_installer_path, version_id).await?;
+        let libs = self
+            .get_miss_forge_libraries(forge_installer_path, version_id)
+            .await?;
         for lib in &libs {
-            if let Err(e) = InstallerBase::download_file_async(&InstallerBase::create_http_client(), &lib.url, &lib.path, 5).await {
+            if let Err(e) = InstallerBase::download_file_async(
+                &InstallerBase::create_http_client(),
+                &lib.url,
+                &lib.path,
+                5,
+            )
+            .await
+            {
                 back_install(&back_files, &back_dirs);
                 return Err(Error::DownloadFailed {
                     message: format!("下载缺失的库文件失败: {}\n{}", lib.path, e),
@@ -354,12 +410,18 @@ impl ForgeInstaller {
                 })
                 .collect(),
         };
-        if let Some(processors) = install_profile_json.get("processors").and_then(|v| v.as_array()) {
+        if let Some(processors) = install_profile_json
+            .get("processors")
+            .and_then(|v| v.as_array())
+        {
             if !processors.is_empty() {
                 eprintln!("开始执行Processor后处理，共 {} 个处理器", processors.len());
                 for processor in processors {
                     // 源：string processorJar = processorObj["jar"]?.ToString() ?? "未知";
-                    let processor_jar = processor.get("jar").map(json_node_to_string).unwrap_or_else(|| "未知".to_string());
+                    let processor_jar = processor
+                        .get("jar")
+                        .map(json_node_to_string)
+                        .unwrap_or_else(|| "未知".to_string());
                     eprintln!("处理Processor: {processor_jar}");
                     // 源：if (!ShouldRunProcessor(processorObj, "client")) continue;
                     //      Trace.WriteLine("该Processor不适用于当前side=client，跳过执行");
@@ -416,12 +478,21 @@ impl ForgeInstaller {
         //      catch { throw new Exception("读取Forge安装器内容失败，请检查安装器文件是否正确"); }
         //      —— 内层 version.json 读取失败被吞（置空），仅外层失败报错
         let (install_profile_data, mut json_data) = (|| -> Result<(String, String), Error> {
-            let profile_bytes = InstallerBase::read_specify_file_from_zip(forge_installer_path, "install_profile.json")?;
-            let version = match InstallerBase::read_specify_file_from_zip(forge_installer_path, "version.json") {
+            let profile_bytes = InstallerBase::read_specify_file_from_zip(
+                forge_installer_path,
+                "install_profile.json",
+            )?;
+            let version = match InstallerBase::read_specify_file_from_zip(
+                forge_installer_path,
+                "version.json",
+            ) {
                 Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
                 Err(_) => String::new(),
             };
-            Ok((String::from_utf8_lossy(&profile_bytes).into_owned(), version))
+            Ok((
+                String::from_utf8_lossy(&profile_bytes).into_owned(),
+                version,
+            ))
         })()
         .map_err(|_| Error::Params {
             message: "读取Forge安装器内容失败，请检查安装器文件是否正确".to_string(),
@@ -429,18 +500,24 @@ impl ForgeInstaller {
         })?;
 
         // 源：var installProfileJson = JsonNode.Parse(installProfileData!)!.AsObject();
-        let install_profile_json: Value = serde_json::from_str(&install_profile_data).map_err(|e| Error::Params {
-            message: format!("install_profile.json 解析失败（源 JsonException）: {e}"),
-            source: None,
-        })?;
+        let install_profile_json: Value =
+            serde_json::from_str(&install_profile_data).map_err(|e| Error::Params {
+                message: format!("install_profile.json 解析失败（源 JsonException）: {e}"),
+                source: None,
+            })?;
 
         // 源：jsonData 为空 → 用 versionInfo（缺失报"无法找到版本Json信息"）；否则用安装包内 version.json
         if json_data.is_empty() {
-            eprintln!("[ForgeInstaller] InstallLegacyForge 未找到 version.json，使用 install_profile.json 中的 versionInfo");
-            json_data = install_profile_json.get("versionInfo").map(json_node_to_string).ok_or_else(|| Error::Params {
-                message: "无法找到版本Json信息".to_string(),
-                source: None,
-            })?;
+            eprintln!(
+                "[ForgeInstaller] InstallLegacyForge 未找到 version.json，使用 install_profile.json 中的 versionInfo"
+            );
+            json_data = install_profile_json
+                .get("versionInfo")
+                .map(json_node_to_string)
+                .ok_or_else(|| Error::Params {
+                    message: "无法找到版本Json信息".to_string(),
+                    source: None,
+                })?;
         } else {
             eprintln!("[ForgeInstaller] InstallLegacyForge 使用安装包内的 version.json");
         }
@@ -456,13 +533,17 @@ impl ForgeInstaller {
         }
 
         // 源：版本 JSON 覆写 + 合并（同 InstallForge）
-        let mut version_data: Value = serde_json::from_str(&json_data).map_err(|e| Error::Params {
-            message: format!("版本 JSON 解析失败（源 JsonException）: {e}"),
-            source: None,
-        })?;
+        let mut version_data: Value =
+            serde_json::from_str(&json_data).map_err(|e| Error::Params {
+                message: format!("版本 JSON 解析失败（源 JsonException）: {e}"),
+                source: None,
+            })?;
         if let Some(obj) = version_data.as_object_mut() {
             obj.insert("id".to_string(), Value::String(version_id.to_string()));
-            obj.insert("inheritsFrom".to_string(), Value::String(self.game_version.clone()));
+            obj.insert(
+                "inheritsFrom".to_string(),
+                Value::String(self.game_version.clone()),
+            );
         }
         let mut json_data = serde_json::to_string(&version_data).map_err(|e| Error::Params {
             message: format!("序列化版本 JSON 失败: {e}"),
@@ -470,13 +551,18 @@ impl ForgeInstaller {
         })?;
 
         if !inherits_from_json.is_empty() {
-            json_data = InstallerBase::merge_version_json(inherits_from_json, &json_data, Some(version_id));
-            let mut merged_obj: Value = serde_json::from_str(&json_data).map_err(|e| Error::Params {
-                message: format!("合并后版本 JSON 解析失败（源 JsonException）: {e}"),
-                source: None,
-            })?;
+            json_data =
+                InstallerBase::merge_version_json(inherits_from_json, &json_data, Some(version_id));
+            let mut merged_obj: Value =
+                serde_json::from_str(&json_data).map_err(|e| Error::Params {
+                    message: format!("合并后版本 JSON 解析失败（源 JsonException）: {e}"),
+                    source: None,
+                })?;
             if let Some(obj) = merged_obj.as_object_mut() {
-                obj.insert("clientVersion".to_string(), Value::String(self.game_version.clone()));
+                obj.insert(
+                    "clientVersion".to_string(),
+                    Value::String(self.game_version.clone()),
+                );
             }
             json_data = serde_json::to_string(&merged_obj).map_err(|e| Error::Params {
                 message: format!("序列化版本 JSON 失败: {e}"),
@@ -507,16 +593,33 @@ impl ForgeInstaller {
             &install
                 .and_then(|i| i.get("path"))
                 .map(json_node_to_string)
-                .unwrap_or_else(|| install_profile_json.get("path").map(json_node_to_string).unwrap_or_default()),
+                .unwrap_or_else(|| {
+                    install_profile_json
+                        .get("path")
+                        .map(json_node_to_string)
+                        .unwrap_or_default()
+                }),
         );
         let file_path = install
             .and_then(|i| i.get("filePath"))
             .map(json_node_to_string)
-            .unwrap_or_else(|| format!("maven/{}", InstallerBase::maven_to_path(&install_profile_json.get("path").map(json_node_to_string).unwrap_or_default())));
+            .unwrap_or_else(|| {
+                format!(
+                    "maven/{}",
+                    InstallerBase::maven_to_path(
+                        &install_profile_json
+                            .get("path")
+                            .map(json_node_to_string)
+                            .unwrap_or_default()
+                    )
+                )
+            });
         // 源：var forgeJar = ReadSpecifyFileFromZip(installer, filePath!);
         //      （zip 内文件名与落盘名可能不同：filePath 取自 install.filePath，落盘为 MavenToPath(install.path ?? path)）
-        let forge_jar = InstallerBase::read_specify_file_from_zip(forge_installer_path, &file_path)?;
-        let jar_full_path = path_combine(&path_combine(&self.game_dir, "libraries"), &jar_maven_path);
+        let forge_jar =
+            InstallerBase::read_specify_file_from_zip(forge_installer_path, &file_path)?;
+        let jar_full_path =
+            path_combine(&path_combine(&self.game_dir, "libraries"), &jar_maven_path);
         // Windows verbatim 路径（\\?\ 前缀）下 '/' 非分隔符，需换成 '\'
         // （详见 file_helper::normalize_separators），否则 std::fs::write 报 os error 123。
         let jar_full_path = normalize_separators(&jar_full_path);
@@ -542,9 +645,18 @@ impl ForgeInstaller {
         })?;
 
         // 源：缺失库下载（失败回滚，同 InstallForge）
-        let libs = self.get_miss_forge_libraries(forge_installer_path, version_id).await?;
+        let libs = self
+            .get_miss_forge_libraries(forge_installer_path, version_id)
+            .await?;
         for lib in &libs {
-            if let Err(e) = InstallerBase::download_file_async(&InstallerBase::create_http_client(), &lib.url, &lib.path, 5).await {
+            if let Err(e) = InstallerBase::download_file_async(
+                &InstallerBase::create_http_client(),
+                &lib.url,
+                &lib.path,
+                5,
+            )
+            .await
+            {
                 back_install(&back_files, &back_dirs);
                 return Err(Error::DownloadFailed {
                     message: format!("下载缺失的库文件失败: {}\n{}", lib.path, e),
@@ -559,15 +671,21 @@ impl ForgeInstaller {
     ///
     /// 读 install_profile.json，profileName 非 "forge"（OrdinalIgnoreCase）→ 报"安装器版本不正确"；
     /// 无 processors 或 processors 为空数组 → Legacy。
-    pub(crate) fn is_legacy_forge_installer(&self, forge_installer_path: &str) -> Result<bool, Error> {
-        let install_profile_data = String::from_utf8_lossy(
-            &InstallerBase::read_specify_file_from_zip(forge_installer_path, "install_profile.json")?,
-        )
-        .into_owned();
-        let install_profile_json: Value = serde_json::from_str(&install_profile_data).map_err(|e| Error::Params {
-            message: format!("install_profile.json 解析失败（源 JsonException）: {e}"),
-            source: None,
-        })?;
+    pub(crate) fn is_legacy_forge_installer(
+        &self,
+        forge_installer_path: &str,
+    ) -> Result<bool, Error> {
+        let install_profile_data =
+            String::from_utf8_lossy(&InstallerBase::read_specify_file_from_zip(
+                forge_installer_path,
+                "install_profile.json",
+            )?)
+            .into_owned();
+        let install_profile_json: Value =
+            serde_json::from_str(&install_profile_data).map_err(|e| Error::Params {
+                message: format!("install_profile.json 解析失败（源 JsonException）: {e}"),
+                source: None,
+            })?;
         let profile_name = get_profile_name(&install_profile_json);
         eprintln!("[ForgeInstaller] IsLegacyForgeInstaller 检测到 profileName={profile_name}");
         if !profile_name.eq_ignore_ascii_case("forge") {
@@ -598,26 +716,39 @@ impl ForgeInstaller {
     ///
     /// ⚠️ 源参数 versionId 在方法体内未使用（保留签名 → `_version_id`）。
     /// ⚠️ 源 LibInfo.Hash/Url 恒为空串（构造时未赋值），对应分支为死代码，仍逐字保留。
-    async fn get_miss_forge_libraries(&self, forge_installer_path: &str, _version_id: &str) -> Result<Vec<MissFileData>, Error> {
+    async fn get_miss_forge_libraries(
+        &self,
+        forge_installer_path: &str,
+        _version_id: &str,
+    ) -> Result<Vec<MissFileData>, Error> {
         // 源：installProfileData = ...("install_profile.json"); try { versionData = ...("version.json"); } catch { }
         //      （versionData 仅解析、方法体内从未使用，照源保留读取动作无意义 → 省略，见日志 D2）
-        let install_profile_data = String::from_utf8_lossy(
-            &InstallerBase::read_specify_file_from_zip(forge_installer_path, "install_profile.json")?,
-        )
-        .into_owned();
-        let install_profile_json: Value = serde_json::from_str(&install_profile_data).map_err(|e| Error::Params {
-            message: format!("install_profile.json 解析失败（源 JsonException）: {e}"),
-            source: None,
-        })?;
+        let install_profile_data =
+            String::from_utf8_lossy(&InstallerBase::read_specify_file_from_zip(
+                forge_installer_path,
+                "install_profile.json",
+            )?)
+            .into_owned();
+        let install_profile_json: Value =
+            serde_json::from_str(&install_profile_data).map_err(|e| Error::Params {
+                message: format!("install_profile.json 解析失败（源 JsonException）: {e}"),
+                source: None,
+            })?;
 
         // 源：var profileLibraries = ContainsKey("libraries") ? libs as JsonArray : versionInfo?.libraries as JsonArray;
         //      foreach (var lib in profileLibraries!) —— null → NullReferenceException
         let profile_libraries = install_profile_json
             .get("libraries")
             .and_then(|v| v.as_array())
-            .or_else(|| install_profile_json.get("versionInfo").and_then(|v| v.get("libraries")).and_then(|v| v.as_array()))
+            .or_else(|| {
+                install_profile_json
+                    .get("versionInfo")
+                    .and_then(|v| v.get("libraries"))
+                    .and_then(|v| v.as_array())
+            })
             .ok_or_else(|| Error::Params {
-                message: "install_profile.json 缺少 libraries（源 NullReferenceException）".to_string(),
+                message: "install_profile.json 缺少 libraries（源 NullReferenceException）"
+                    .to_string(),
                 source: None,
             })?;
 
@@ -629,13 +760,24 @@ impl ForgeInstaller {
                 source: None,
             })?;
             // 源：if (libObj.ContainsKey("clientreq") && libObj["clientreq"]?.ToString() == "false") continue;
-            if lib_obj.get("clientreq").is_some_and(|v| json_node_to_string(v) == "false") {
+            if lib_obj
+                .get("clientreq")
+                .is_some_and(|v| json_node_to_string(v) == "false")
+            {
                 continue;
             }
             // 源：var libInfo = new LibInfo { FullName = libObj["name"]?.ToString() ?? string.Empty };
-            let lib_info = LibInfo::new(lib_obj.get("name").map(json_node_to_string).unwrap_or_default());
+            let lib_info = LibInfo::new(
+                lib_obj
+                    .get("name")
+                    .map(json_node_to_string)
+                    .unwrap_or_default(),
+            );
             // 源：var libPath = Path.Combine(gameDir, "libraries", libInfo.Path);
-            let lib_path = normalize_separators(&path_combine(&path_combine(&self.game_dir, "libraries"), &lib_info.path));
+            let lib_path = normalize_separators(&path_combine(
+                &path_combine(&self.game_dir, "libraries"),
+                &lib_info.path,
+            ));
             if Path::new(&lib_path).is_file() {
                 // 源：if (!string.IsNullOrEmpty(Hash) && VerifyFileSha1(libPath, Hash)) continue;
                 //      else { if (string.IsNullOrEmpty(Hash)) continue; }
@@ -671,7 +813,9 @@ impl ForgeInstaller {
                             .map(|p| format!("maven/{}", InstallerBase::maven_to_path(&p)))
                     });
                 if let Some(file_path) = main_jar_file {
-                    if let Ok(bytes) = InstallerBase::read_specify_file_from_zip(forge_installer_path, &file_path) {
+                    if let Ok(bytes) =
+                        InstallerBase::read_specify_file_from_zip(forge_installer_path, &file_path)
+                    {
                         // 释放前确保父目录存在（源 File.WriteAllBytes 要求目录已存在；
                         // 流水线在 InstallLegacyForge 之前扫描时 libraries 目录可能尚未创建）
                         if let Some(parent) = Path::new(&lib_path).parent() {
@@ -690,7 +834,10 @@ impl ForgeInstaller {
 
         let mut miss_files = Vec::new();
         for lib in libs {
-            let lib_path = normalize_separators(&path_combine(&path_combine(&self.game_dir, "libraries"), &lib.path));
+            let lib_path = normalize_separators(&path_combine(
+                &path_combine(&self.game_dir, "libraries"),
+                &lib.path,
+            ));
             if !Path::new(&lib_path).is_file() {
                 // 源：url 解析（见方法 doc）
                 let mut url = String::new();
@@ -761,11 +908,23 @@ impl Installer for ForgeInstaller {
         let main_jar_path = main_jar_relative_path(version_id);
         // 源：if (IsLegacyForgeInstaller(forgeInstallerPath)) InstallLegacyForge else InstallForge
         if self.is_legacy_forge_installer(forge_installer_path)? {
-            self.install_legacy_forge(version_id, inherits_from_json, java_path, forge_installer_path)
-                .await
+            self.install_legacy_forge(
+                version_id,
+                inherits_from_json,
+                java_path,
+                forge_installer_path,
+            )
+            .await
         } else {
-            self.install_forge(version_id, inherits_from_json, java_path, forge_installer_path, installer_path, &main_jar_path)
-                .await
+            self.install_forge(
+                version_id,
+                inherits_from_json,
+                java_path,
+                forge_installer_path,
+                installer_path,
+                &main_jar_path,
+            )
+            .await
         }
     }
 
@@ -780,7 +939,8 @@ impl Installer for ForgeInstaller {
             return Ok(Vec::new());
         };
         // 源：GetMissForgeLibraries(para1, para2!)（para2 在方法体内未使用；null → 空串占位）
-        self.get_miss_forge_libraries(forge_installer_path, para2.unwrap_or("")).await
+        self.get_miss_forge_libraries(forge_installer_path, para2.unwrap_or(""))
+            .await
     }
 }
 
@@ -865,7 +1025,10 @@ fn json_node_to_string(v: &Value) -> String {
 /// profileName 提取（源三处同构逻辑：`IsNullOrEmpty(profile?.ToString()) ?
 /// install?.profileName?.ToString() ?? "" : profile?.ToString()!`）。
 fn get_profile_name(install_profile_json: &Value) -> String {
-    let direct = install_profile_json.get("profile").map(json_node_to_string).unwrap_or_default();
+    let direct = install_profile_json
+        .get("profile")
+        .map(json_node_to_string)
+        .unwrap_or_default();
     if direct.is_empty() {
         install_profile_json
             .get("install")
@@ -902,9 +1065,3 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
     }
 }
-
-
-
-
-
-

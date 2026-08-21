@@ -73,7 +73,10 @@ struct RawArguments {
 impl LaunchExecutor {
     /// 创建启动执行器（源构造函数 `LaunchExecutor(string launchName, string gameDir)`）
     pub(crate) fn new(launch_name: String, game_dir: String) -> Self {
-        Self { launch_name, game_dir }
+        Self {
+            launch_name,
+            game_dir,
+        }
     }
 
     /// 拼接完整启动参数字符串（源：SelectParams，353-482 行）。
@@ -115,7 +118,8 @@ impl LaunchExecutor {
 
         // 处理账户（源 377-385 行）
         // 源：`AuthOptions?.Mode != AuthMode.Offline`（AuthOptions 为 null 时判为 Microsoft）
-        let login_mode = if options.auth_options.as_ref().map(|a| a.mode) != Some(AuthMode::Offline) {
+        let login_mode = if options.auth_options.as_ref().map(|a| a.mode) != Some(AuthMode::Offline)
+        {
             "Microsoft"
         } else {
             "Legacy"
@@ -293,7 +297,9 @@ impl LaunchExecutor {
             .replace("${classpath}", &normalize_arg(&cp_libs_str))
             .replace(
                 "${game_directory}",
-                &normalize_arg(&format_dir_path(game_version_dir.trim_end_matches(separator))),
+                &normalize_arg(&format_dir_path(
+                    game_version_dir.trim_end_matches(separator),
+                )),
             )
             .replace("${version_name}", &format!("\"{}\"", options.version))
             .replace("${auth_uuid}", &uuid)
@@ -440,7 +446,10 @@ impl LaunchExecutor {
                 jvm_list.push("-Dos.version=\"10.0\"".to_string());
             }
 
-            jvm_list.push(format!("-Dminecraft.launcher.brand=\"{}\"", self.launch_name));
+            jvm_list.push(format!(
+                "-Dminecraft.launcher.brand=\"{}\"",
+                self.launch_name
+            ));
             jvm_list.push("-Dminecraft.launcher.version=23".to_string());
         }
 
@@ -469,12 +478,11 @@ impl LaunchExecutor {
         for element in jvm_items {
             if element.is_object() {
                 // 源：JsonSerializer.Deserialize(element, ParamsJsonContent.Default.ParamEntry)
-                let entry: ParamEntry = serde_json::from_value(element.clone()).map_err(|e| {
-                    Error::Params {
+                let entry: ParamEntry =
+                    serde_json::from_value(element.clone()).map_err(|e| Error::Params {
                         message: "JVM 参数项解析失败".to_string(),
                         source: Some(Box::new(e)),
-                    }
-                })?;
+                    })?;
 
                 // 源：`entry?.Rules is { Count: > 0 }` 时逐规则判定，任一适合 → shouldAdd；
                 // 无规则/规则为空 → 保持 false（该对象不加入，quirk 保留）
@@ -558,7 +566,9 @@ impl LaunchExecutor {
                 let Some(minecraft_arguments) = &config.minecraft_arguments else {
                     // 源：MinecraftArguments 为 null → NullReferenceException → 启动失败
                     return Err(Error::Params {
-                        message: "缺少 minecraftArguments（源此处为 null → NullReferenceException）".to_string(),
+                        message:
+                            "缺少 minecraftArguments（源此处为 null → NullReferenceException）"
+                                .to_string(),
                         source: None,
                     });
                 };
@@ -570,19 +580,20 @@ impl LaunchExecutor {
                 let Some(game_items) = &args.game else {
                     // 源：Arguments.Game 为 null → foreach → NullReferenceException → 启动失败
                     return Err(Error::Params {
-                        message: "arguments 缺少 game 列表（源此处为 null → NullReferenceException）".to_string(),
+                        message:
+                            "arguments 缺少 game 列表（源此处为 null → NullReferenceException）"
+                                .to_string(),
                         source: None,
                     });
                 };
                 for element in game_items {
                     if element.is_object() {
                         // 源：JsonSerializer.Deserialize(element, ParamsJsonContent.Default.ParamEntry)
-                        let entry: ParamEntry = serde_json::from_value(element.clone()).map_err(
-                            |e| Error::Params {
+                        let entry: ParamEntry =
+                            serde_json::from_value(element.clone()).map_err(|e| Error::Params {
                                 message: "游戏参数项解析失败".to_string(),
                                 source: Some(Box::new(e)),
-                            },
-                        )?;
+                            })?;
                         // 源：`entry?.Rules is { Count: > 0 } → continue`（带规则的对象整体跳过）
                         if let Some(rules) = &entry.rules {
                             if !rules.is_empty() {
@@ -821,6 +832,3 @@ fn windows_major_version() -> Option<u32> {
         None
     }
 }
-
-
-

@@ -31,7 +31,9 @@ use crate::error::Error;
 use crate::event::ProgressReporter;
 use crate::models::download::DownloadMirror;
 use crate::models::local::LocalVersionInfo;
-use crate::models::version_manifest::{LatestVersionInfo, ManifestVersionInfo, VersionManifestRoot};
+use crate::models::version_manifest::{
+    LatestVersionInfo, ManifestVersionInfo, VersionManifestRoot,
+};
 use crate::models::version_metadata::CompleteVersionMetadata;
 use crate::net::NetworkConfig;
 use crate::services::download::mirror::DefaultDownloadSourceManager;
@@ -64,7 +66,10 @@ impl VersionManifestCache {
                 let _ = std::fs::create_dir_all(directory);
             }
         }
-        Self { cache_file_path, cache_duration }
+        Self {
+            cache_file_path,
+            cache_duration,
+        }
     }
 
     /// 缓存是否有效（源：HasValidCache）。
@@ -90,7 +95,9 @@ impl VersionManifestCache {
         if !Path::new(&self.cache_file_path).is_file() {
             return None;
         }
-        let json = tokio::fs::read_to_string(&self.cache_file_path).await.ok()?;
+        let json = tokio::fs::read_to_string(&self.cache_file_path)
+            .await
+            .ok()?;
         deserialize_version_manifest(&json).ok().flatten()
     }
 
@@ -164,12 +171,13 @@ impl VersionManagementService {
 
         // 源：new DefaultVersionLocator(gameRootPath)（mirror 默认 Official、
         // httpClient 默认 null → 内部自建）
-        let version_locator: Box<dyn VersionLocator + Send + Sync> =
-            Box::new(DefaultVersionLocator::new(game_root_path.clone(), DownloadMirror::Official));
+        let version_locator: Box<dyn VersionLocator + Send + Sync> = Box::new(
+            DefaultVersionLocator::new(game_root_path.clone(), DownloadMirror::Official),
+        );
 
         // 源：downloadSourceManager ?? new DefaultDownloadSourceManager()（Default 构造 → BMCLAPI 首选）
-        let download_source_manager =
-            download_source_manager.unwrap_or_else(|| Arc::new(DefaultDownloadSourceManager::default()));
+        let download_source_manager = download_source_manager
+            .unwrap_or_else(|| Arc::new(DefaultDownloadSourceManager::default()));
 
         // 源：new DefaultResourceCompleter(gameRootPath, _downloadSourceManager)
         // （maxConcurrentDownloads 默认 8，Rust 显式传入）
@@ -265,8 +273,10 @@ impl VersionManagement for VersionManagementService {
     /// 获取特定版本的完整元数据（源：GetVersionMetadataAsync(string versionId)）。
     /// 1. 本地已安装版本优先；2. 清单中查找（不存在 → VersionNotFound，
     /// URL 无效 → VersionMetadata）；3. 下载并保存到本地。
-    async fn get_version_metadata(&self, version_id: &str)
-        -> Result<CompleteVersionMetadata, Error> {
+    async fn get_version_metadata(
+        &self,
+        version_id: &str,
+    ) -> Result<CompleteVersionMetadata, Error> {
         // 源：先从本地已安装的版本中读取
         if let Some(local_metadata) = self.version_locator.get_version_metadata(version_id) {
             return Ok(local_metadata);
@@ -360,9 +370,3 @@ impl VersionManagement for VersionManagementService {
         self.version_locator.get_all_versions()
     }
 }
-
-
-
-
-
-

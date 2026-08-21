@@ -4,7 +4,9 @@
 use qomicex_core_rust::models::download::{DownloadMirror, DownloadStatus, ResourceType};
 use qomicex_core_rust::models::expansion::curseforge::CurseForgeFileInfo;
 use qomicex_core_rust::models::expansion::modrinth::ModLoaderType;
-use qomicex_core_rust::models::version_manifest::{LatestVersionInfo, ManifestVersionInfo, VersionManifestRoot};
+use qomicex_core_rust::models::version_manifest::{
+    LatestVersionInfo, ManifestVersionInfo, VersionManifestRoot,
+};
 use qomicex_core_rust::models::version_metadata::{ArgumentItem, VersionArguments};
 
 // ── 特殊兼容：VersionArguments 新旧格式 ──────────────
@@ -15,7 +17,9 @@ fn version_arguments_old_string_form() {
     let parsed: VersionArguments = serde_json::from_str(json).unwrap();
     assert_eq!(
         parsed,
-        VersionArguments::Old("--username ${auth_player_name} --version ${version_name}".to_string())
+        VersionArguments::Old(
+            "--username ${auth_player_name} --version ${version_name}".to_string()
+        )
     );
 }
 
@@ -82,9 +86,18 @@ fn version_arguments_serialize_old_form_errors() {
 
 #[test]
 fn modrinth_mod_loader_type_string_values() {
-    assert_eq!(serde_json::to_string(&ModLoaderType::NeoForge).unwrap(), "\"neoForge\"");
-    assert_eq!(serde_json::to_string(&ModLoaderType::LiteLoader).unwrap(), "\"liteLoader\"");
-    assert_eq!(serde_json::to_string(&ModLoaderType::Minecraft).unwrap(), "\"minecraft\"");
+    assert_eq!(
+        serde_json::to_string(&ModLoaderType::NeoForge).unwrap(),
+        "\"neoForge\""
+    );
+    assert_eq!(
+        serde_json::to_string(&ModLoaderType::LiteLoader).unwrap(),
+        "\"liteLoader\""
+    );
+    assert_eq!(
+        serde_json::to_string(&ModLoaderType::Minecraft).unwrap(),
+        "\"minecraft\""
+    );
     let parsed: ModLoaderType = serde_json::from_str("\"fabric\"").unwrap();
     assert_eq!(parsed, ModLoaderType::Fabric);
 }
@@ -95,7 +108,10 @@ fn modrinth_mod_loader_type_string_values() {
 fn numeric_enums_serialize_as_numbers() {
     assert_eq!(serde_json::to_string(&DownloadStatus::Failed).unwrap(), "3");
     assert_eq!(serde_json::to_string(&ResourceType::Asset).unwrap(), "1");
-    assert_eq!(serde_json::to_string(&DownloadMirror::Bmclapi).unwrap(), "1");
+    assert_eq!(
+        serde_json::to_string(&DownloadMirror::Bmclapi).unwrap(),
+        "1"
+    );
     let parsed: DownloadStatus = serde_json::from_str("4").unwrap();
     assert_eq!(parsed, DownloadStatus::Retrying);
 }
@@ -160,7 +176,10 @@ fn cf_file_info_accepts_integer_ids_from_real_api() {
     let parsed: CurseForgeFileInfo = serde_json::from_str(json).unwrap();
     assert_eq!(parsed.file_id, "6238281");
     assert_eq!(parsed.mod_id, "238222");
-    assert_eq!(parsed.file_name.as_deref(), Some("jei-1.20.1-forge-15.3.0.4.jar"));
+    assert_eq!(
+        parsed.file_name.as_deref(),
+        Some("jei-1.20.1-forge-15.3.0.4.jar")
+    );
     assert_eq!(parsed.file_length, 1234567);
 }
 

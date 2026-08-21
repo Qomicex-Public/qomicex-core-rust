@@ -245,11 +245,17 @@ pub(crate) async fn get_forge_versions_from_official_html(
                 message: format!("读取 Forge 版本缓存文件时间失败: {e}"),
                 source: Some(Box::new(e)),
             })?;
-        let age = SystemTime::now().duration_since(modified).unwrap_or_default();
+        let age = SystemTime::now()
+            .duration_since(modified)
+            .unwrap_or_default();
         if age < Duration::from_secs(CACHE_EXPIRY_HOURS * 3600) {
             match std::fs::read_to_string(&cache_file_path) {
                 Ok(cached_html) => {
-                    return Ok(parse_forge_versions(mc_version, &forge_mc_version, &cached_html));
+                    return Ok(parse_forge_versions(
+                        mc_version,
+                        &forge_mc_version,
+                        &cached_html,
+                    ));
                 }
                 Err(e) => eprintln!("使用缓存失败: {e}，将重新获取"),
             }
@@ -306,7 +312,11 @@ pub(crate) async fn get_forge_versions_from_official_html(
         match std::fs::read_to_string(&cache_file_path) {
             Ok(cached_html) => {
                 eprintln!("读取已缓存html到{cache_file_path}中的数据");
-                return Ok(parse_forge_versions(mc_version, &forge_mc_version, &cached_html));
+                return Ok(parse_forge_versions(
+                    mc_version,
+                    &forge_mc_version,
+                    &cached_html,
+                ));
             }
             Err(e) => eprintln!("使用过期缓存失败: {e}"),
         }
@@ -360,7 +370,8 @@ pub(crate) fn parse_forge_versions(
         };
         let match_end = version_match.get(0).map(|m| m.end()).unwrap_or(0);
         // 等价于源 lookahead `(?=\s*<)`：捕获后必须为可选空白 + '<'
-        let after = row_html[match_end..].trim_start_matches([' ', '\t', '\r', '\n', '\x0b', '\x0c']);
+        let after =
+            row_html[match_end..].trim_start_matches([' ', '\t', '\r', '\n', '\x0b', '\x0c']);
         if !after.starts_with('<') {
             continue;
         }
@@ -410,8 +421,8 @@ pub(crate) fn parse_forge_versions(
             .unwrap_or_default();
 
         let lower_row = row_html.to_ascii_lowercase();
-        let is_recommended = lower_row.contains("promo-recommended")
-            || lower_row.contains("promo-latest");
+        let is_recommended =
+            lower_row.contains("promo-recommended") || lower_row.contains("promo-latest");
 
         forge_loaders.push(ModLoaderResult {
             r#type: ModLoaderType::Forge,
@@ -464,7 +475,11 @@ pub(crate) fn clean_download_url(raw_url: &str) -> String {
 /// - BMCLAPI：`https://bmclapi2.bangbang93.com/forge/download/{forgeVersion}`；
 /// - 官方：`https://maven.minecraftforge.net/net/minecraftforge/forge/{mc}-{ver}/forge-{mc}-{ver}-installer.jar`，
 ///   其中 `mc` = `mcVersion.Replace('-', "_")`（两次替换，源同）。
-pub(crate) fn get_forge_download_url(mirror: DownloadMirror, mc_version: &str, forge_version: &str) -> String {
+pub(crate) fn get_forge_download_url(
+    mirror: DownloadMirror,
+    mc_version: &str,
+    forge_version: &str,
+) -> String {
     if forge_version.is_empty() {
         return String::new();
     }
@@ -487,7 +502,10 @@ pub(crate) fn get_forge_download_url(mirror: DownloadMirror, mc_version: &str, f
 /// 逐字保留源逻辑：`buildNumber` 非整数 → false；已收录列表中任一版本的
 /// `Version.Split('.').LastOrDefault()`（末段）可解析为整数且 `currentBuild <=
 /// existingBuild` → false；否则 true。
-pub(crate) fn is_recommended_version(build_number: &str, existing_loaders: &[ModLoaderResult]) -> bool {
+pub(crate) fn is_recommended_version(
+    build_number: &str,
+    existing_loaders: &[ModLoaderResult],
+) -> bool {
     let Ok(current_build) = build_number.parse::<i32>() else {
         return false;
     };
@@ -525,12 +543,11 @@ async fn cleanroom_releases_inner(http: &reqwest::Client) -> Result<Vec<ModLoade
             source: Some(Box::new(e)),
         })?;
     // 源 `EnsureSuccessStatusCode()`
-    let response = response.error_for_status()
-        .map_err(|e| Error::Http {
-            message: format!("Cleanroom GitHub API 请求失败: {e}"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
+    let response = response.error_for_status().map_err(|e| Error::Http {
+        message: format!("Cleanroom GitHub API 请求失败: {e}"),
+        status: None,
+        source: Some(Box::new(e)),
+    })?;
     let json = response.text().await.map_err(|e| Error::Http {
         message: format!("Cleanroom GitHub API 响应读取失败: {e}"),
         status: None,
@@ -588,7 +605,8 @@ async fn neoforge_official_api_inner(
     http: &reqwest::Client,
     mc_version: &str,
 ) -> Result<Vec<ModLoaderResult>, Error> {
-    const OLD_URL: &str = "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/forge";
+    const OLD_URL: &str =
+        "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/forge";
     const META_URL: &str =
         "https://maven.neoforged.net/api/maven/versions/releases/net/neoforged/neoforge";
 
@@ -605,18 +623,16 @@ async fn neoforge_official_api_inner(
         source: Some(Box::new(e)),
     })?;
     // 源两处 `EnsureSuccessStatusCode()`
-    let old_response = old_response.error_for_status()
-        .map_err(|e| Error::Http {
-            message: format!("NeoForge 官方 API 请求失败: {e}"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
-    let meta_response = meta_response.error_for_status()
-        .map_err(|e| Error::Http {
-            message: format!("NeoForge 官方 API 请求失败: {e}"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
+    let old_response = old_response.error_for_status().map_err(|e| Error::Http {
+        message: format!("NeoForge 官方 API 请求失败: {e}"),
+        status: None,
+        source: Some(Box::new(e)),
+    })?;
+    let meta_response = meta_response.error_for_status().map_err(|e| Error::Http {
+        message: format!("NeoForge 官方 API 请求失败: {e}"),
+        status: None,
+        source: Some(Box::new(e)),
+    })?;
     let old_json = old_response.text().await.map_err(|e| Error::Http {
         message: format!("NeoForge 官方 API 响应读取失败: {e}"),
         status: None,
@@ -696,7 +712,8 @@ async fn neoforge_official_api_inner(
             if parsed_mc_version.is_empty() {
                 continue;
             }
-            if !mc_version.is_empty() && !matches_minecraft_version(&parsed_mc_version, mc_version) {
+            if !mc_version.is_empty() && !matches_minecraft_version(&parsed_mc_version, mc_version)
+            {
                 continue;
             }
             versions.push(ModLoaderResult {
@@ -737,12 +754,11 @@ async fn neoforge_bmcl_api_inner(
         source: Some(Box::new(e)),
     })?;
     // 源 `EnsureSuccessStatusCode()`
-    let response = response.error_for_status()
-        .map_err(|e| Error::Http {
-            message: format!("NeoForge BMCLAPI 请求失败: {e}"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
+    let response = response.error_for_status().map_err(|e| Error::Http {
+        message: format!("NeoForge BMCLAPI 请求失败: {e}"),
+        status: None,
+        source: Some(Box::new(e)),
+    })?;
     let json = response.text().await.map_err(|e| Error::Http {
         message: format!("NeoForge BMCLAPI 响应读取失败: {e}"),
         status: None,
@@ -948,9 +964,9 @@ fn version_try_parse(s: &str) -> bool {
     if parts.len() > 4 {
         return false;
     }
-    parts.iter().all(|p| {
-        !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<i32>().is_ok()
-    })
+    parts
+        .iter()
+        .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<i32>().is_ok())
 }
 
 /// 版本号比较（源 InstallerProvider 私有静态 `VersionSortInteger` + `VersionComparer`，
@@ -1141,10 +1157,8 @@ fn download_table_regex() -> &'static Regex {
 fn download_row_regex() -> &'static Regex {
     static ROW_RE: OnceLock<Regex> = OnceLock::new();
     ROW_RE.get_or_init(|| {
-        Regex::new(
-            r#"(?s)<tr[^>]*>.*?<td[^>]+class="[^"]*download-version[^"]*"[^>]*>.*?</tr>"#,
-        )
-        .expect("静态正则编译失败")
+        Regex::new(r#"(?s)<tr[^>]*>.*?<td[^>]+class="[^"]*download-version[^"]*"[^>]*>.*?</tr>"#)
+            .expect("静态正则编译失败")
     })
 }
 
@@ -1191,11 +1205,3 @@ fn maven_jar_regex() -> &'static Regex {
         Regex::new(r"https://maven\.minecraftforge\.net/.*?\.jar").expect("静态正则编译失败")
     })
 }
-
-
-
-
-
-
-
-

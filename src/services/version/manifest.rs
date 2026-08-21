@@ -65,11 +65,12 @@ impl VersionManifest for VersionManifestService {
         for version in &mut root.versions {
             // 源在反序列化时经 MinecraftDateTimeConverter 解析 releaseTime（失败抛 JsonException），
             // Rust 侧模型为字符串保真（B1 决策），解析推迟到此：失败按同源语义报错
-            let time = parse_minecraft_datetime(&version.release_time).map_err(|msg| Error::Http {
-                message: msg,
-                status: None,
-                source: None,
-            })?;
+            let time =
+                parse_minecraft_datetime(&version.release_time).map_err(|msg| Error::Http {
+                    message: msg,
+                    status: None,
+                    source: None,
+                })?;
             if version.r#type == "snapshot" && time.month == 4 && time.day == 1 {
                 version.r#type = "april_fools".to_string();
             }
@@ -121,7 +122,7 @@ async fn get_json(http: &reqwest::Client, url: &str) -> Result<String, Error> {
                 status.as_u16(),
                 status.canonical_reason().unwrap_or("")
             ),
-                status: None,
+            status: None,
             source: None,
         });
     }
@@ -136,7 +137,3 @@ fn http_err(e: reqwest::Error) -> Error {
         source: Some(Box::new(e)),
     }
 }
-
-
-
-

@@ -72,7 +72,6 @@ pub struct MissFileData {
     pub sha1: String,
 }
 
-
 /// 全局默认 User-Agent（源：`InstallerBase.DefaultUserAgent` 静态属性）。
 ///
 /// C# 为进程级可读写属性（可重复赋值）→ Rust `static OnceLock<String>`：
@@ -227,23 +226,34 @@ impl InstallerBase {
 
             let resolved = match reqwest::Url::parse(&redirect_url) {
                 Ok(abs) => abs.to_string(),
-                Err(_) => match reqwest::Url::parse(url).and_then(|base| base.join(&redirect_url)) {
-                    Ok(joined) => joined.to_string(),
-                    Err(_) => {
-                        return Err(Error::DownloadFailed {
-                            message: format!("下载文件失败（{url}）：重定向地址无效"),
-                            source: None,
-                        });
+                Err(_) => {
+                    match reqwest::Url::parse(url).and_then(|base| base.join(&redirect_url)) {
+                        Ok(joined) => joined.to_string(),
+                        Err(_) => {
+                            return Err(Error::DownloadFailed {
+                                message: format!("下载文件失败（{url}）：重定向地址无效"),
+                                source: None,
+                            });
+                        }
                     }
-                },
+                }
             };
 
-            return Box::pin(Self::download_file_async(client, &resolved, destination_path, max_redirects - 1)).await;
+            return Box::pin(Self::download_file_async(
+                client,
+                &resolved,
+                destination_path,
+                max_redirects - 1,
+            ))
+            .await;
         }
 
         if !response.status().is_success() {
             return Err(Error::DownloadFailed {
-                message: format!("下载文件失败（{url}）：响应状态码非成功：{}", response.status()),
+                message: format!(
+                    "下载文件失败（{url}）：响应状态码非成功：{}",
+                    response.status()
+                ),
                 source: None,
             });
         }
@@ -300,7 +310,10 @@ impl InstallerBase {
     /// 未找到 → Err「未找到指定文件 {fileName}」（源 FileNotFoundException）。
     /// ⚠️ UNMAPPED：源 FileNotFoundException 无对应 Error 变体，暂用 `Error::Params`
     /// （见日志 U1）。zip crate 读 API（B6 已裁剪 deflate-miniz/deflate64，无需新特性）。
-    pub(crate) fn read_specify_file_from_zip(path: &str, file_name: &str) -> Result<Vec<u8>, Error> {
+    pub(crate) fn read_specify_file_from_zip(
+        path: &str,
+        file_name: &str,
+    ) -> Result<Vec<u8>, Error> {
         let file = std::fs::File::open(path).map_err(|e| Error::Params {
             message: format!("读取ZIP失败（{path}）：{e}"),
             source: Some(Box::new(e)),
@@ -467,6 +480,3 @@ fn is_redirect_status(status: reqwest::StatusCode) -> bool {
             | reqwest::StatusCode::TEMPORARY_REDIRECT
     )
 }
-
-
-

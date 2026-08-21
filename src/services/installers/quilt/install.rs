@@ -29,8 +29,8 @@ use serde_json::Value;
 
 use crate::error::Error;
 use crate::models::download::DownloadMirror;
-use crate::services::installers::installer::MissFileData;
 use crate::services::installers::fabric::install::verify_file_sha1;
+use crate::services::installers::installer::MissFileData;
 use crate::services::installers::installer::{Installer, InstallerBase};
 use crate::util::lib_helper::maven_to_path;
 
@@ -151,19 +151,25 @@ impl QuiltInstaller {
             status: None,
             source: Some(Box::new(e)),
         })?;
-        let mut meta = meta_value.as_object().ok_or_else(|| Error::Http {
-            message: "Launcher Meta 顶层非 JSON 对象".to_string(),
-            status: None,
-            source: None,
-        })?.clone();
+        let mut meta = meta_value
+            .as_object()
+            .ok_or_else(|| Error::Http {
+                message: "Launcher Meta 顶层非 JSON 对象".to_string(),
+                status: None,
+                source: None,
+            })?
+            .clone();
 
         // 源：`meta["libraries"] as JsonArray`（null/非数组 → 跳过下载）
         if let Some(libs) = meta.get("libraries").and_then(|v| v.as_array()) {
             for lib in libs {
-                let name = lib.get("name").and_then(|v| v.as_str()).ok_or_else(|| Error::Params {
-                    message: "库条目缺少 name（源 NullReferenceException）".to_string(),
-                    source: None,
-                })?;
+                let name =
+                    lib.get("name")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| Error::Params {
+                            message: "库条目缺少 name（源 NullReferenceException）".to_string(),
+                            source: None,
+                        })?;
                 let url_domain = lib
                     .get("url")
                     .and_then(|v| v.as_str())
@@ -234,10 +240,13 @@ impl QuiltInstaller {
         let mut miss_files = Vec::new();
         if let Some(libs) = meta.get("libraries").and_then(|v| v.as_array()) {
             for lib in libs {
-                let name = lib.get("name").and_then(|v| v.as_str()).ok_or_else(|| Error::Params {
-                    message: "库条目缺少 name（源 NullReferenceException）".to_string(),
-                    source: None,
-                })?;
+                let name =
+                    lib.get("name")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| Error::Params {
+                            message: "库条目缺少 name（源 NullReferenceException）".to_string(),
+                            source: None,
+                        })?;
                 let url_domain = lib
                     .get("url")
                     .and_then(|v| v.as_str())
@@ -286,8 +295,8 @@ impl Installer for QuiltInstaller {
         inherits_from_json: &str,
         para1: Option<&str>,
         para2: Option<&str>,
-    _para3: Option<&str>,
-    _para4: Option<&str>,
+        _para3: Option<&str>,
+        _para4: Option<&str>,
     ) -> Result<(), Error> {
         // 源：`if (quiltVersion == null) throw new ArgumentNullException(nameof(quiltVersion));`
         let quilt_version = para1.ok_or_else(|| Error::Params {
@@ -330,14 +339,3 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
     }
 }
-
-
-
-
-
-
-
-
-
-
-

@@ -140,7 +140,10 @@ impl ServerManager {
     /// 源所有错误路径均为 `yield break`（空流，不抛异常）→ 本实现恒返回 `Ok(rx)`：
     /// 创建客户端失败/接收失败/取消 → 发送端 drop → rx 立即关流（空流等价）；
     /// 契约 `Result` 中的 `Err` 在源语义下不会出现。
-    pub(crate) async fn discover_lan(&self, ct: &CancellationToken) -> Result<mpsc::Receiver<LanServerEntry>, Error> {
+    pub(crate) async fn discover_lan(
+        &self,
+        ct: &CancellationToken,
+    ) -> Result<mpsc::Receiver<LanServerEntry>, Error> {
         let (tx, rx) = mpsc::channel::<LanServerEntry>(LAN_CHANNEL_CAPACITY);
 
         // 克隆令牌供任务持有（tokio::spawn 需 'static；克隆共享同一取消状态，同源实例语义）
@@ -189,7 +192,11 @@ impl ServerManager {
 
     /// 解析 SRV 记录获取服务器地址（源：ResolveSrvAsync(string host, CancellationToken ct)；
     /// `Task<string?>` → `Result<Option<String>, Error>`）
-    pub(crate) async fn resolve_srv(&self, host: &str, ct: &CancellationToken) -> Result<Option<String>, Error> {
+    pub(crate) async fn resolve_srv(
+        &self,
+        host: &str,
+        ct: &CancellationToken,
+    ) -> Result<Option<String>, Error> {
         let result = resolve_srv_internal(host, ct).await;
         // 源：return result?.Target
         Ok(result.map(|(target, _port)| target))
@@ -267,7 +274,10 @@ fn extract_lan_tag(payload: &str, tag_name: &str) -> Option<String> {
 /// 向**全部**系统 DNS 服务器顺序发送（源 foreach）→ 3 秒内接收首个响应（源 ReceiveTimeout
 /// 3000ms + ReceiveAsync(ct)）→ ParseDnsSrvResponse。任一环节失败 → None（源全部错误
 /// 路径 null）。
-pub(crate) async fn resolve_srv_internal(host: &str, ct: &CancellationToken) -> Option<(String, u16)> {
+pub(crate) async fn resolve_srv_internal(
+    host: &str,
+    ct: &CancellationToken,
+) -> Option<(String, u16)> {
     let query_name = encode_dns_name(&format!("_minecraft._tcp.{host}"));
     let query = build_dns_query(&query_name);
 
@@ -379,8 +389,8 @@ fn system_dns_addresses() -> Vec<IpAddr> {
 /// 与系统语言无关，无 locale 脆弱性）
 #[cfg(target_os = "windows")]
 fn windows_dns_from_registry() -> Vec<IpAddr> {
-    use winreg::enums::HKEY_LOCAL_MACHINE;
     use winreg::RegKey;
+    use winreg::enums::HKEY_LOCAL_MACHINE;
 
     let mut addresses: Vec<IpAddr> = Vec::new();
     let hklm = match RegKey::predef(HKEY_LOCAL_MACHINE)
@@ -603,8 +613,3 @@ fn decode_dns_name(message: &[u8], offset: usize) -> String {
 
     labels.join(".")
 }
-
-
-
-
-

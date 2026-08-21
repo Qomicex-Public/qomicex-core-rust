@@ -12,6 +12,5 @@
 //! 本目录整体在 services/ 实现层，全部 `pub(crate)`。
 
 pub mod curseforge;
-pub mod modrinth;
 pub mod ftb;
-
+pub mod modrinth;

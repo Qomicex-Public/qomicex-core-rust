@@ -18,7 +18,6 @@
 //! LiteLoader/OptiFine 为 (i32, String, String)，Cleanroom 为 (i32, String)），
 //! 本文件按约定签名引用，以实际落地为准。
 
-
 use crate::api::installer::InstallerFactory;
 use crate::models::download::DownloadMirror;
 use crate::services::installers::babric::BabricInstaller;
@@ -36,12 +35,20 @@ pub struct DefaultInstallerFactory;
 
 impl InstallerFactory for DefaultInstallerFactory {
     /// 创建 Fabric 安装器（源：`CreateFabric(int downloadSource, string gameDir)`）
-    fn create_fabric(&self, download_source: i32, game_dir: &str) -> Box<dyn Installer + Send + Sync> {
+    fn create_fabric(
+        &self,
+        download_source: i32,
+        game_dir: &str,
+    ) -> Box<dyn Installer + Send + Sync> {
         Box::new(FabricInstaller::new(download_source, game_dir.to_string()))
     }
 
     /// 创建 Quilt 安装器（源：`CreateQuilt(int downloadSource, string gameDir)`）
-    fn create_quilt(&self, download_source: i32, game_dir: &str) -> Box<dyn Installer + Send + Sync> {
+    fn create_quilt(
+        &self,
+        download_source: i32,
+        game_dir: &str,
+    ) -> Box<dyn Installer + Send + Sync> {
         Box::new(QuiltInstaller::new(download_source, game_dir.to_string()))
     }
 
@@ -81,11 +88,13 @@ impl InstallerFactory for DefaultInstallerFactory {
         game_dir: &str,
         game_version: &str,
     ) -> Box<dyn Installer + Send + Sync> {
-        Box::new(crate::services::installers::liteloader::install::LiteloaderInstaller::new(
-            download_source,
-            game_dir.to_string(),
-            game_version.to_string(),
-        ))
+        Box::new(
+            crate::services::installers::liteloader::install::LiteloaderInstaller::new(
+                download_source,
+                game_dir.to_string(),
+                game_version.to_string(),
+            ),
+        )
     }
 
     /// 创建 OptiFine 安装器（源：`CreateOptiFine(int downloadSource, string gameDir,
@@ -96,20 +105,28 @@ impl InstallerFactory for DefaultInstallerFactory {
         game_dir: &str,
         game_version: &str,
     ) -> Box<dyn Installer + Send + Sync> {
-        Box::new(crate::services::installers::optifine::install::OptiFineInstaller::new(
-            download_source,
-            game_dir.to_string(),
-            game_version.to_string(),
-        ))
+        Box::new(
+            crate::services::installers::optifine::install::OptiFineInstaller::new(
+                download_source,
+                game_dir.to_string(),
+                game_version.to_string(),
+            ),
+        )
     }
 
     /// 创建 Cleanroom 安装器（源：`CreateCleanroom(int downloadSource, string gameDir)`；
     /// CleanroomInstaller 由并行子任务按约定写入）
-    fn create_cleanroom(&self, download_source: i32, game_dir: &str) -> Box<dyn Installer + Send + Sync> {
-        Box::new(crate::services::installers::cleanroom::CleanroomInstaller::new(
-            download_source,
-            game_dir.to_string(),
-        ))
+    fn create_cleanroom(
+        &self,
+        download_source: i32,
+        game_dir: &str,
+    ) -> Box<dyn Installer + Send + Sync> {
+        Box::new(
+            crate::services::installers::cleanroom::CleanroomInstaller::new(
+                download_source,
+                game_dir.to_string(),
+            ),
+        )
     }
 
     /// 创建 LegacyFabric 安装器（源：`CreateLegacyFabric(int downloadSource, string gameDir)`；
@@ -127,7 +144,11 @@ impl InstallerFactory for DefaultInstallerFactory {
 
     /// 创建 Babric 安装器（源：`CreateBabric(int downloadSource, string gameDir)`；
     /// 源构造参数被忽略，按映射表 downloadSource int → DownloadMirror 收参）
-    fn create_babric(&self, download_source: i32, game_dir: &str) -> Box<dyn Installer + Send + Sync> {
+    fn create_babric(
+        &self,
+        download_source: i32,
+        game_dir: &str,
+    ) -> Box<dyn Installer + Send + Sync> {
         Box::new(BabricInstaller::new(
             mirror_from_download_source(download_source),
             game_dir,
@@ -145,11 +166,13 @@ impl InstallerFactory for DefaultInstallerFactory {
         version_isolation: bool,
         modpack_file_path: &str,
     ) -> Box<dyn Installer + Send + Sync> {
-        Box::new(crate::services::installers::modpacks::curseforge::CurseForgeModpackInstaller::new(
-            game_dir,
-            version_isolation,
-            modpack_file_path,
-        ))
+        Box::new(
+            crate::services::installers::modpacks::curseforge::CurseForgeModpackInstaller::new(
+                game_dir,
+                version_isolation,
+                modpack_file_path,
+            ),
+        )
     }
 
     /// 创建 Modrinth 整合包安装器（源：`CreateModrinthModpack(string gameDir, bool
@@ -163,11 +186,13 @@ impl InstallerFactory for DefaultInstallerFactory {
         version_isolation: bool,
         modpack_file_path: &str,
     ) -> Box<dyn Installer + Send + Sync> {
-        Box::new(crate::services::installers::modpacks::modrinth::ModrinthModpackInstaller::new(
-            game_dir,
-            version_isolation,
-            modpack_file_path,
-        ))
+        Box::new(
+            crate::services::installers::modpacks::modrinth::ModrinthModpackInstaller::new(
+                game_dir,
+                version_isolation,
+                modpack_file_path,
+            ),
+        )
     }
 
     /// 创建 FTB 整合包安装器（源：`CreateFtbModpack(string gameDir, bool versionIsolation,
@@ -182,12 +207,14 @@ impl InstallerFactory for DefaultInstallerFactory {
         http_client: reqwest::Client,
         cf_api_key: &str,
     ) -> Box<dyn Installer + Send + Sync> {
-        Box::new(crate::services::installers::modpacks::ftb::FtbModpackInstaller::new(
-            game_dir,
-            version_isolation,
-            http_client,
-            cf_api_key,
-        ))
+        Box::new(
+            crate::services::installers::modpacks::ftb::FtbModpackInstaller::new(
+                game_dir,
+                version_isolation,
+                http_client,
+                cf_api_key,
+            ),
+        )
     }
 }
 
@@ -200,7 +227,3 @@ fn mirror_from_download_source(download_source: i32) -> DownloadMirror {
         DownloadMirror::Official
     }
 }
-
-
-
-

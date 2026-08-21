@@ -34,7 +34,6 @@
 //! 注：`modrinth::VersionInfo` 与 `ftb::VersionInfo` 同名冲突，分别别名导入
 //! 为 `ModrinthVersionInfo` / `FtbVersionInfo`（对应源 C# 类型名均仍为 VersionInfo）。
 
-use async_trait::async_trait;
 use crate::error::Error;
 use crate::models::expansion::curseforge::{
     CurseForgeFileInfo, CurseForgeFingerprintMatch, CurseForgeInfo, CurseForgeSearchResponse,
@@ -46,6 +45,7 @@ use crate::models::expansion::ftb::{
 use crate::models::expansion::modrinth::{
     ModrinthTag, ProjectInfo, ProjectVersionInfo, SearchResult, VersionInfo as ModrinthVersionInfo,
 };
+use async_trait::async_trait;
 use std::collections::HashMap;
 
 /// Modrinth 数据源（源：IModrinthSource 接口）。
@@ -75,13 +75,19 @@ pub trait ModrinthSource: Send + Sync {
     async fn get_project_info(&self, project_id: &str) -> Result<ProjectInfo, Error>;
 
     /// 获取项目全部版本信息（源：`GetProjectVersionInfoAsync`）。
-    async fn get_project_version_info(&self, project_id: &str) -> Result<Vec<ProjectVersionInfo>, Error>;
+    async fn get_project_version_info(
+        &self,
+        project_id: &str,
+    ) -> Result<Vec<ProjectVersionInfo>, Error>;
 
     /// 获取单个版本详情（源：`GetVersionInfoAsync`）。
     async fn get_version_info(&self, version_id: &str) -> Result<ModrinthVersionInfo, Error>;
 
     /// 通过哈希值反查项目版本信息（源：`GetProjectVersionsFromHashesAsync`）。
-    async fn get_project_versions_from_hashes(&self, hashes: &[String]) -> Result<Vec<ProjectVersionInfo>, Error>;
+    async fn get_project_versions_from_hashes(
+        &self,
+        hashes: &[String],
+    ) -> Result<Vec<ProjectVersionInfo>, Error>;
 
     /// 通过哈希值反查项目版本信息，返回 版本ID → 版本信息 映射（源：`GetProjectVersionsFromHashesDictAsync`）。
     async fn get_project_versions_from_hashes_dict(
@@ -136,13 +142,17 @@ pub trait CurseForgeSource: Send + Sync {
     async fn get_mod_info(&self, id: &str) -> Result<CurseForgeInfo, Error>;
 
     /// 获取模组文件信息（源：`GetFileInfoAsync`）。
-    async fn get_file_info(&self, mod_id: &str, file_id: &str) -> Result<CurseForgeFileInfo, Error>;
+    async fn get_file_info(&self, mod_id: &str, file_id: &str)
+    -> Result<CurseForgeFileInfo, Error>;
 
     /// 获取文件下载地址（源：`GetDownloadUrlAsync`）。
     async fn get_download_url(&self, id: &str, file_id: &str) -> Result<String, Error>;
 
     /// 通过指纹反查文件信息（源：`GetInfoFromHashesAsync`）。
-    async fn get_info_from_hashes(&self, hashes: &[i64]) -> Result<Vec<FingerprintsFilesMeta>, Error>;
+    async fn get_info_from_hashes(
+        &self,
+        hashes: &[i64],
+    ) -> Result<Vec<FingerprintsFilesMeta>, Error>;
 
     /// 通过指纹反查文件信息，返回 指纹 → 文件信息 映射（源：`GetInfoFromHashesDictAsync`）。
     async fn get_info_from_hashes_dict(
@@ -182,10 +192,18 @@ pub trait FtbSource: Send + Sync {
     async fn get_pack_detail(&self, id: i32) -> Result<Option<ModpackInfo>, Error>;
 
     /// 获取整合包指定版本详情（源：`GetVersionDetailAsync`，可空返回 → `Option`）。
-    async fn get_version_detail(&self, pack_id: i32, version_id: i32) -> Result<Option<VersionDetail>, Error>;
+    async fn get_version_detail(
+        &self,
+        pack_id: i32,
+        version_id: i32,
+    ) -> Result<Option<VersionDetail>, Error>;
 
     /// 获取整合包指定版本的更新日志（源：`GetChangelogAsync`，可空返回 → `Option`）。
-    async fn get_changelog(&self, pack_id: i32, version_id: i32) -> Result<Option<ChangelogResult>, Error>;
+    async fn get_changelog(
+        &self,
+        pack_id: i32,
+        version_id: i32,
+    ) -> Result<Option<ChangelogResult>, Error>;
 }
 
 /// 获取整合包最新正式版本（源：IFTBSource 的 `GetLatestVersion` 静态方法默认实现）。
@@ -205,4 +223,3 @@ pub fn get_latest_version(pack: &ModpackInfo) -> Option<FtbVersionInfo> {
         })
         .cloned()
 }
-

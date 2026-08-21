@@ -16,13 +16,15 @@
 //! - `IProgress<DownloadProgress>?` → `Option<&dyn ProgressReporter>`（见 src/event.rs）
 //! - C# 重载方法（meta 与 jsonData 两个变体）→ `_from_json` 后缀区分（见日志重命名决策）
 
-use async_trait::async_trait;
 use crate::error::Error;
 use crate::event::ProgressReporter;
 use crate::models::installer::MissFileInfo;
 use crate::models::local::LocalVersionInfo;
-use crate::models::version_manifest::{LatestVersionInfo, ManifestVersionInfo, VersionManifestRoot};
+use crate::models::version_manifest::{
+    LatestVersionInfo, ManifestVersionInfo, VersionManifestRoot,
+};
 use crate::models::version_metadata::CompleteVersionMetadata;
+use async_trait::async_trait;
 
 /// 版本管理服务（源：IVersionManagementService，版本安装/卸载/查询总入口）
 #[async_trait]
@@ -41,8 +43,10 @@ pub trait VersionManagement: Send + Sync {
     async fn get_latest_versions(&self, force_refresh: bool) -> Result<LatestVersionInfo, Error>;
 
     /// 获取指定版本的完整元数据（对应 GetVersionMetadataAsync(string versionId)）
-    async fn get_version_metadata(&self, version_id: &str)
-        -> Result<CompleteVersionMetadata, Error>;
+    async fn get_version_metadata(
+        &self,
+        version_id: &str,
+    ) -> Result<CompleteVersionMetadata, Error>;
 
     /// 判断指定版本是否已安装（对应 IsVersionInstalled，同步方法）
     fn is_version_installed(&self, version_id: &str) -> bool;
@@ -95,7 +99,10 @@ pub trait VersionLocator: Send + Sync {
 
     /// 获取缺失文件列表（对应 GetMissFilesAsync(CompleteVersionMetadata meta) 重载，
     /// 传入已解析的元数据对象）
-    async fn get_miss_files(&self, meta: &CompleteVersionMetadata) -> Result<Vec<MissFileInfo>, Error>;
+    async fn get_miss_files(
+        &self,
+        meta: &CompleteVersionMetadata,
+    ) -> Result<Vec<MissFileInfo>, Error>;
 
     /// 获取缺失文件列表（对应 GetMissFilesAsync(string jsonData) 重载，
     /// 传入元数据 JSON 字符串；C# 重载无法直接映射 → 重命名为 `_from_json`，
@@ -110,8 +117,10 @@ pub trait VersionLocator: Send + Sync {
 
     /// 获取缺失库文件列表（对应 GetMissLibrariesAsync(string jsonData) 重载，
     /// 重命名规则同 `get_miss_files_from_json`）
-    async fn get_miss_libraries_from_json(&self, json_data: &str)
-        -> Result<Vec<MissFileInfo>, Error>;
+    async fn get_miss_libraries_from_json(
+        &self,
+        json_data: &str,
+    ) -> Result<Vec<MissFileInfo>, Error>;
 
     /// 获取缺失主 Jar 文件（对应 GetMissMainJarAsync(CompleteVersionMetadata meta) 重载；
     /// C# 返回 `MissFileInfo?` → `Option<MissFileInfo>`）
@@ -122,8 +131,10 @@ pub trait VersionLocator: Send + Sync {
 
     /// 获取缺失主 Jar 文件（对应 GetMissMainJarAsync(string jsonData) 重载，
     /// 重命名规则同 `get_miss_files_from_json`）
-    async fn get_miss_main_jar_from_json(&self, json_data: &str)
-        -> Result<Option<MissFileInfo>, Error>;
+    async fn get_miss_main_jar_from_json(
+        &self,
+        json_data: &str,
+    ) -> Result<Option<MissFileInfo>, Error>;
 
     /// 获取缺失资源文件列表（对应 GetMissAssetsAsync(CompleteVersionMetadata meta) 重载）
     async fn get_miss_assets(
@@ -148,7 +159,8 @@ pub trait ResourceCompleter: Send + Sync {
     ) -> Result<(), Error>;
 
     /// 检查资源是否完整（对应 CheckResourcesCompleteAsync）
-    async fn check_resources_complete(&self, metadata: &CompleteVersionMetadata)
-        -> Result<bool, Error>;
+    async fn check_resources_complete(
+        &self,
+        metadata: &CompleteVersionMetadata,
+    ) -> Result<bool, Error>;
 }
-

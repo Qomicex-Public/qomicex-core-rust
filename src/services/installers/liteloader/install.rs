@@ -111,7 +111,9 @@ impl LiteloaderInstaller {
             .await?;
         let Some(remote_version) = remote_version else {
             return Err(Error::Params {
-                message: format!("无法获取LiteLoader {lite_version}（对应MC {mc_version}）的版本信息"),
+                message: format!(
+                    "无法获取LiteLoader {lite_version}（对应MC {mc_version}）的版本信息"
+                ),
                 source: None,
             });
         };
@@ -185,7 +187,12 @@ impl LiteloaderInstaller {
 
         // 源：`var versionJson = BuildVersionJson(...);
         //      if (string.IsNullOrEmpty(versionJson)) throw new Exception("构建版本配置失败");`
-        let version_json = self.build_version_json(version_id, &base_version, &remote_version, &merged_libraries);
+        let version_json = self.build_version_json(
+            version_id,
+            &base_version,
+            &remote_version,
+            &merged_libraries,
+        );
         if version_json.is_empty() {
             return Err(Error::DownloadFailed {
                 message: "构建版本配置失败".to_string(),
@@ -268,7 +275,10 @@ impl LiteloaderInstaller {
         let mut lite_loader_versions: Option<&serde_json::Map<String, Value>> = None;
         for node_name in ["snapshots", "artefacts"] {
             if let Some(node_obj) = mc_obj.get(node_name).and_then(|v| v.as_object()) {
-                if node_obj.get("com.mumfrey:liteloader").is_some_and(|v| v.is_object()) {
+                if node_obj
+                    .get("com.mumfrey:liteloader")
+                    .is_some_and(|v| v.is_object())
+                {
                     lite_loader_versions = node_obj
                         .get("com.mumfrey:liteloader")
                         .and_then(|v| v.as_object());
@@ -421,16 +431,13 @@ impl LiteloaderInstaller {
         let maven_coord = format!("com.mumfrey:liteloader:{lite_version}");
         let mut maven_path = maven_to_path(&maven_coord);
         if maven_path.is_empty() {
-            maven_path = format!("com/mumfrey/liteloader/{lite_version}/liteloader-{lite_version}.jar");
+            maven_path =
+                format!("com/mumfrey/liteloader/{lite_version}/liteloader-{lite_version}.jar");
         }
 
-        let download_url = remote_version
-            .urls
-            .first()
-            .cloned()
-            .unwrap_or_else(|| {
-                format!("{}/{maven_path}", self.base_repo_url.trim_end_matches('/'))
-            });
+        let download_url = remote_version.urls.first().cloned().unwrap_or_else(|| {
+            format!("{}/{maven_path}", self.base_repo_url.trim_end_matches('/'))
+        });
 
         Library {
             // 源：`Artifact = new Artifact { GroupId = "com.mumfrey", ArtifactId = "liteloader",
@@ -464,9 +471,11 @@ impl LiteloaderInstaller {
         // 源：`baseLibraries.Any(lib => lib.Artifact?.ToString() == coreLibCoord)`
         // （lib.Artifact 为 null → null != coord → 视为不存在；闭包经 is_some_and 比较，
         // 避免 move 捕获 core_lib_coord —— FnMut 限制）
-        let core_lib_exists = base_libraries
-            .iter()
-            .any(|lib| lib.artifact.as_ref().is_some_and(|a| a.to_string() == core_lib_coord));
+        let core_lib_exists = base_libraries.iter().any(|lib| {
+            lib.artifact
+                .as_ref()
+                .is_some_and(|a| a.to_string() == core_lib_coord)
+        });
         let mut result = base_libraries.to_vec();
         if !core_lib_exists {
             result.push(core_library);
@@ -518,7 +527,11 @@ impl LiteloaderInstaller {
     }
 
     /// 保存版本 JSON（源：SaveVersionJson，private static）。
-    fn save_version_json(version_id: &str, game_dir: &str, json_content: &str) -> Result<(), Error> {
+    fn save_version_json(
+        version_id: &str,
+        game_dir: &str,
+        json_content: &str,
+    ) -> Result<(), Error> {
         // 源：`var versionDir = Path.Combine(gameDir, "versions", versionId);
         //      if (!Directory.Exists(versionDir)) Directory.CreateDirectory(versionDir);`
         let version_dir = path_combine(&path_combine(game_dir, "versions"), version_id);
@@ -553,16 +566,20 @@ impl Installer for LiteloaderInstaller {
     ) -> Result<(), Error> {
         // 源：`if (string.IsNullOrEmpty(modLoaderVersion))
         //      throw new ArgumentNullException(nameof(modLoaderVersion));`
-        let mod_loader_version = para1.filter(|v| !v.is_empty()).ok_or_else(|| Error::Params {
-            message: "modLoaderVersion 为 null 或空（源 ArgumentNullException）".to_string(),
-            source: None,
-        })?;
+        let mod_loader_version = para1
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| Error::Params {
+                message: "modLoaderVersion 为 null 或空（源 ArgumentNullException）".to_string(),
+                source: None,
+            })?;
         // 源：`if (string.IsNullOrEmpty(gameVersion))
         //      throw new ArgumentNullException(nameof(gameVersion));`
-        let game_version = para2.filter(|v| !v.is_empty()).ok_or_else(|| Error::Params {
-            message: "gameVersion 为 null 或空（源 ArgumentNullException）".to_string(),
-            source: None,
-        })?;
+        let game_version = para2
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| Error::Params {
+                message: "gameVersion 为 null 或空（源 ArgumentNullException）".to_string(),
+                source: None,
+            })?;
 
         // 源：`bool installResult = await InstallLiteLoaderCoreAsync(versionId, gameVersion,
         //      modLoaderVersion); if (!installResult) throw new Exception(...);`
@@ -707,7 +724,10 @@ fn library_to_json(lib: &Library) -> Value {
                 .map(|u| Value::String(u.clone()))
                 .unwrap_or(Value::Null),
         );
-        obj.insert("downloads".to_string(), serde_json::json!({ "artifact": Value::Object(artifact_obj) }));
+        obj.insert(
+            "downloads".to_string(),
+            serde_json::json!({ "artifact": Value::Object(artifact_obj) }),
+        );
     }
     Value::Object(obj)
 }
@@ -725,7 +745,3 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
     }
 }
-
-
-
-

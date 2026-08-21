@@ -35,7 +35,7 @@ use serde_json::Value;
 
 use crate::error::Error;
 use crate::services::installers::installer::{Installer, InstallerBase, MissFileData};
-use crate::services::installers::neoforge::install::{check_libs_ver_static, LibInfo};
+use crate::services::installers::neoforge::install::{LibInfo, check_libs_ver_static};
 use crate::util::file_helper::normalize_separators;
 
 /// Cleanroom 安装器（源：`internal class CleanroomInstaller : InstallerBase, IInstaller`）。
@@ -53,7 +53,10 @@ pub(crate) struct CleanroomInstaller {
 impl CleanroomInstaller {
     /// 创建 Cleanroom 安装器（源：`CleanroomInstaller(int sourceId, string gameDir)`）。
     pub(crate) fn new(source_id: i32, game_dir: String) -> Self {
-        Self { source_id, game_dir }
+        Self {
+            source_id,
+            game_dir,
+        }
     }
 
     /// 安装主体（源：`InstallCleanroom`，private async）。
@@ -68,24 +71,21 @@ impl CleanroomInstaller {
         // 源：`try { versionJsonData = UTF8.GetString(ReadSpecifyFileFromZip(installer, "version.json"));
         //      installProfileData = ...("install_profile.json"); }
         //      catch (Exception ex) { throw new Exception("读取 Cleanroom 安装器内容失败，请检查安装器文件是否正确", ex); }`
-        let (version_json_data, install_profile_data) =
-            (|| -> Result<(String, String), Error> {
-                let version_bytes =
-                    InstallerBase::read_specify_file_from_zip(installer_path, "version.json")?;
-                let profile_bytes = InstallerBase::read_specify_file_from_zip(
-                    installer_path,
-                    "install_profile.json",
-                )?;
-                Ok((
-                    // 源 Encoding.UTF8.GetString：无效序列替换（有损）
-                    String::from_utf8_lossy(&version_bytes).into_owned(),
-                    String::from_utf8_lossy(&profile_bytes).into_owned(),
-                ))
-            })()
-            .map_err(|e| Error::Params {
-                message: "读取 Cleanroom 安装器内容失败，请检查安装器文件是否正确".to_string(),
-                source: Some(Box::new(e)),
-            })?;
+        let (version_json_data, install_profile_data) = (|| -> Result<(String, String), Error> {
+            let version_bytes =
+                InstallerBase::read_specify_file_from_zip(installer_path, "version.json")?;
+            let profile_bytes =
+                InstallerBase::read_specify_file_from_zip(installer_path, "install_profile.json")?;
+            Ok((
+                // 源 Encoding.UTF8.GetString：无效序列替换（有损）
+                String::from_utf8_lossy(&version_bytes).into_owned(),
+                String::from_utf8_lossy(&profile_bytes).into_owned(),
+            ))
+        })()
+        .map_err(|e| Error::Params {
+            message: "读取 Cleanroom 安装器内容失败，请检查安装器文件是否正确".to_string(),
+            source: Some(Box::new(e)),
+        })?;
 
         // 源：`var versionJson = JsonNode.Parse(versionJsonData)!.AsObject();`
         let mut version_json: Value =
@@ -158,16 +158,20 @@ impl CleanroomInstaller {
                     if let Some(jar_dir) = Path::new(&jar_full_path).parent() {
                         let jar_dir = jar_dir.to_string_lossy().to_string();
                         if !jar_dir.is_empty() && !Path::new(&jar_dir).is_dir() {
-                            std::fs::create_dir_all(&jar_dir).map_err(|e| Error::DownloadFailed {
-                                message: format!("创建核心 Jar 目录失败: {jar_dir}"),
-                                source: Some(Box::new(e)),
+                            std::fs::create_dir_all(&jar_dir).map_err(|e| {
+                                Error::DownloadFailed {
+                                    message: format!("创建核心 Jar 目录失败: {jar_dir}"),
+                                    source: Some(Box::new(e)),
+                                }
                             })?;
                             back_dirs.push(jar_dir);
                         }
                     }
-                    std::fs::write(&jar_full_path, &jar_bytes).map_err(|e| Error::DownloadFailed {
-                        message: format!("写出核心 Jar 失败: {jar_full_path}"),
-                        source: Some(Box::new(e)),
+                    std::fs::write(&jar_full_path, &jar_bytes).map_err(|e| {
+                        Error::DownloadFailed {
+                            message: format!("写出核心 Jar 失败: {jar_full_path}"),
+                            source: Some(Box::new(e)),
+                        }
                     })?;
                     back_files.push(jar_full_path);
                     Ok(())
@@ -218,23 +222,20 @@ impl CleanroomInstaller {
         _version_id: &str,
     ) -> Result<Vec<MissFileData>, Error> {
         // 源：zip 读取（同 InstallCleanroom，失败 → 同一错误文案；此处无内层包装）
-        let (version_json_data, install_profile_data) =
-            (|| -> Result<(String, String), Error> {
-                let version_bytes =
-                    InstallerBase::read_specify_file_from_zip(installer_path, "version.json")?;
-                let profile_bytes = InstallerBase::read_specify_file_from_zip(
-                    installer_path,
-                    "install_profile.json",
-                )?;
-                Ok((
-                    String::from_utf8_lossy(&version_bytes).into_owned(),
-                    String::from_utf8_lossy(&profile_bytes).into_owned(),
-                ))
-            })()
-            .map_err(|_| Error::Params {
-                message: "读取 Cleanroom 安装器内容失败，请检查安装器文件是否正确".to_string(),
-                source: None,
-            })?;
+        let (version_json_data, install_profile_data) = (|| -> Result<(String, String), Error> {
+            let version_bytes =
+                InstallerBase::read_specify_file_from_zip(installer_path, "version.json")?;
+            let profile_bytes =
+                InstallerBase::read_specify_file_from_zip(installer_path, "install_profile.json")?;
+            Ok((
+                String::from_utf8_lossy(&version_bytes).into_owned(),
+                String::from_utf8_lossy(&profile_bytes).into_owned(),
+            ))
+        })()
+        .map_err(|_| Error::Params {
+            message: "读取 Cleanroom 安装器内容失败，请检查安装器文件是否正确".to_string(),
+            source: None,
+        })?;
 
         // 源：`allLibs = GetLibInfosFromJson(installProfileData) + GetLibInfosFromJson(versionJsonData);
         //      allLibs = ForgeInstaller.CheckLibsVerStatic(allLibs);`

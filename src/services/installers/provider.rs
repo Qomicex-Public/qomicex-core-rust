@@ -77,7 +77,11 @@ impl InstallerProviderService {
     /// game 列表支持性检查 → `{baseUrl}/loader/{mcVersion}` → 逐项解析（loader.version / loader.stable）。
     /// 源 catch(HttpRequestException) → "Fabric API 请求失败"，catch(Exception) → "Fabric API 处理失败"；
     /// 成功/失败统一在 catch 外走 SortAndDeduplicate（源即如此）。
-    async fn get_fabric_versions(&self, minecraft_version: &str, base_url: &str) -> Vec<ModLoaderResult> {
+    async fn get_fabric_versions(
+        &self,
+        minecraft_version: &str,
+        base_url: &str,
+    ) -> Vec<ModLoaderResult> {
         let mut versions: Vec<ModLoaderResult> = Vec::new();
         let outcome: Result<(), Error> = async {
             // 源：var gameVersions = await GetSupportedGameVersions(_http, $"{baseUrl}/game");
@@ -93,11 +97,16 @@ impl InstallerProviderService {
             // 源：var encodedMcVersion = Uri.EscapeDataString(minecraftVersion);
             let encoded_mc_version = escape_data_string(minecraft_version);
             let loader_url = format!("{base_url}/loader/{encoded_mc_version}");
-            let loader_response = self.http.get(&loader_url).send().await.map_err(|e| Error::Http {
-                message: format!("GET {loader_url} 失败"),
-                status: None,
-                source: Some(Box::new(e)),
-            })?;
+            let loader_response =
+                self.http
+                    .get(&loader_url)
+                    .send()
+                    .await
+                    .map_err(|e| Error::Http {
+                        message: format!("GET {loader_url} 失败"),
+                        status: None,
+                        source: Some(Box::new(e)),
+                    })?;
             if !loader_response.status().is_success() {
                 return Err(Error::Http {
                     message: format!("请求失败，状态码 {}", loader_response.status()),
@@ -124,13 +133,16 @@ impl InstallerProviderService {
                     .get("version")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let is_stable = loader_info.get("stable").map(|s| match s {
-                    // 源：loaderInfo["stable"]?.ToString().Equals("true", OrdinalIgnoreCase)
-                    //     JSON 布尔 true → "True" → 也匹配（faithful 处理）
-                    Value::String(s) => s.eq_ignore_ascii_case("true"),
-                    Value::Bool(b) => *b,
-                    _ => false,
-                }).unwrap_or(false);
+                let is_stable = loader_info
+                    .get("stable")
+                    .map(|s| match s {
+                        // 源：loaderInfo["stable"]?.ToString().Equals("true", OrdinalIgnoreCase)
+                        //     JSON 布尔 true → "True" → 也匹配（faithful 处理）
+                        Value::String(s) => s.eq_ignore_ascii_case("true"),
+                        Value::Bool(b) => *b,
+                        _ => false,
+                    })
+                    .unwrap_or(false);
 
                 if loader_version.is_empty() {
                     continue;
@@ -184,11 +196,12 @@ impl InstallerProviderService {
             for alias in get_minecraft_version_aliases(minecraft_version) {
                 let encoded_mc_version = escape_data_string(&alias);
                 let url = format!("{base_url}/loader/{encoded_mc_version}");
-                let loader_response = self.http.get(&url).send().await.map_err(|e| Error::Http {
-                    message: format!("GET {url} 失败"),
-                    status: None,
-                    source: Some(Box::new(e)),
-                })?;
+                let loader_response =
+                    self.http.get(&url).send().await.map_err(|e| Error::Http {
+                        message: format!("GET {url} 失败"),
+                        status: None,
+                        source: Some(Box::new(e)),
+                    })?;
                 // 源：if (!loaderResponse.IsSuccessStatusCode) continue;
                 if !loader_response.status().is_success() {
                     continue;
@@ -208,12 +221,8 @@ impl InstallerProviderService {
             if loader_array.is_empty() {
                 // 源：var globalLoaderResponse = await _http.GetAsync($"{baseUrl}/loader");
                 let url = format!("{base_url}/loader");
-                let global_loader_response = self
-                    .http
-                    .get(&url)
-                    .send()
-                    .await
-                    .map_err(|e| Error::Http {
+                let global_loader_response =
+                    self.http.get(&url).send().await.map_err(|e| Error::Http {
                         message: format!("GET {url} 失败"),
                         status: None,
                         source: Some(Box::new(e)),
@@ -226,12 +235,17 @@ impl InstallerProviderService {
                         source: None,
                     });
                 }
-                let global_loader_json = global_loader_response.text().await.map_err(|e| Error::Http {
-                    message: format!("读取响应体失败: {url}"),
-                    status: None,
-                    source: Some(Box::new(e)),
-                })?;
-                let global_loader_items = parse_json_array(&global_loader_json, "Quilt 全局 loader 响应")?;
+                let global_loader_json =
+                    global_loader_response
+                        .text()
+                        .await
+                        .map_err(|e| Error::Http {
+                            message: format!("读取响应体失败: {url}"),
+                            status: None,
+                            source: Some(Box::new(e)),
+                        })?;
+                let global_loader_items =
+                    parse_json_array(&global_loader_json, "Quilt 全局 loader 响应")?;
                 // 源：item["hashed"]?["version"]?.ToString() / item["intermediary"]?["version"]?.ToString()
                 //     → MatchesMinecraftVersion（?? string.Empty）
                 loader_array = global_loader_items
@@ -261,11 +275,14 @@ impl InstallerProviderService {
                     .get("version")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let is_stable = loader_info.get("stable").map(|s| match s {
-                    Value::String(s) => s.eq_ignore_ascii_case("true"),
-                    Value::Bool(b) => *b,
-                    _ => false,
-                }).unwrap_or(false);
+                let is_stable = loader_info
+                    .get("stable")
+                    .map(|s| match s {
+                        Value::String(s) => s.eq_ignore_ascii_case("true"),
+                        Value::Bool(b) => *b,
+                        _ => false,
+                    })
+                    .unwrap_or(false);
                 if loader_version.is_empty() {
                     continue;
                 }
@@ -342,10 +359,26 @@ impl InstallerProviderService {
             }
 
             for info in optifine_list {
-                let mc_ver = info.get("mcversion").and_then(Value::as_str).unwrap_or_default().to_string();
-                let patch = info.get("patch").and_then(Value::as_str).unwrap_or_default().to_string();
-                let r#type = info.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
-                let forge = info.get("forge").and_then(Value::as_str).unwrap_or_default().to_string();
+                let mc_ver = info
+                    .get("mcversion")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let patch = info
+                    .get("patch")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let r#type = info
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let forge = info
+                    .get("forge")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
 
                 // 源：if (string.IsNullOrEmpty(mcVer) || string.IsNullOrEmpty(type) || string.IsNullOrEmpty(patch)) continue;
                 if mc_ver.is_empty() || r#type.is_empty() || patch.is_empty() {
@@ -437,9 +470,21 @@ impl InstallerProviderService {
             }
 
             for info in liteloader_list {
-                let mc_ver = info.get("mcversion").and_then(Value::as_str).unwrap_or_default().to_string();
-                let version = info.get("version").and_then(Value::as_str).unwrap_or_default().to_string();
-                let hash = info.get("hash").and_then(Value::as_str).unwrap_or_default().to_string();
+                let mc_ver = info
+                    .get("mcversion")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let version = info
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let hash = info
+                    .get("hash")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
 
                 // 源：if (string.IsNullOrEmpty(version)) continue;
                 if version.is_empty() {
@@ -490,7 +535,9 @@ impl InstallerProviderService {
 
             // ponytail: Legacy Fabric 仅支持 MC 1.12.2 及以下（源注释）
             if !is_version_below_or_equal(minecraft_version, "1.12.2") {
-                eprintln!("Legacy Fabric 不支持 MC 版本 {minecraft_version}（仅支持 1.12.2 及以下）");
+                eprintln!(
+                    "Legacy Fabric 不支持 MC 版本 {minecraft_version}（仅支持 1.12.2 及以下）"
+                );
                 return Ok(());
             }
 
@@ -506,11 +553,16 @@ impl InstallerProviderService {
 
             let encoded_mc_version = escape_data_string(minecraft_version);
             let loader_url = format!("{BASE_URL}/loader/{encoded_mc_version}");
-            let loader_response = self.http.get(&loader_url).send().await.map_err(|e| Error::Http {
-                message: format!("GET {loader_url} 失败"),
-                status: None,
-                source: Some(Box::new(e)),
-            })?;
+            let loader_response =
+                self.http
+                    .get(&loader_url)
+                    .send()
+                    .await
+                    .map_err(|e| Error::Http {
+                        message: format!("GET {loader_url} 失败"),
+                        status: None,
+                        source: Some(Box::new(e)),
+                    })?;
             if !loader_response.status().is_success() {
                 return Err(Error::Http {
                     message: format!("请求失败，状态码 {}", loader_response.status()),
@@ -533,11 +585,14 @@ impl InstallerProviderService {
                     .get("version")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let is_stable = loader_info.get("stable").map(|s| match s {
-                    Value::String(s) => s.eq_ignore_ascii_case("true"),
-                    Value::Bool(b) => *b,
-                    _ => false,
-                }).unwrap_or(false);
+                let is_stable = loader_info
+                    .get("stable")
+                    .map(|s| match s {
+                        Value::String(s) => s.eq_ignore_ascii_case("true"),
+                        Value::Bool(b) => *b,
+                        _ => false,
+                    })
+                    .unwrap_or(false);
                 if loader_version.is_empty() {
                     continue;
                 }
@@ -583,11 +638,16 @@ impl InstallerProviderService {
 
             let encoded_mc_version = escape_data_string(minecraft_version);
             let loader_url = format!("{BASE_URL}/loader/{encoded_mc_version}");
-            let loader_response = self.http.get(&loader_url).send().await.map_err(|e| Error::Http {
-                message: format!("GET {loader_url} 失败"),
-                status: None,
-                source: Some(Box::new(e)),
-            })?;
+            let loader_response =
+                self.http
+                    .get(&loader_url)
+                    .send()
+                    .await
+                    .map_err(|e| Error::Http {
+                        message: format!("GET {loader_url} 失败"),
+                        status: None,
+                        source: Some(Box::new(e)),
+                    })?;
             if !loader_response.status().is_success() {
                 return Err(Error::Http {
                     message: format!("请求失败，状态码 {}", loader_response.status()),
@@ -610,11 +670,14 @@ impl InstallerProviderService {
                     .get("version")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let is_stable = loader_info.get("stable").map(|s| match s {
-                    Value::String(s) => s.eq_ignore_ascii_case("true"),
-                    Value::Bool(b) => *b,
-                    _ => false,
-                }).unwrap_or(false);
+                let is_stable = loader_info
+                    .get("stable")
+                    .map(|s| match s {
+                        Value::String(s) => s.eq_ignore_ascii_case("true"),
+                        Value::Bool(b) => *b,
+                        _ => false,
+                    })
+                    .unwrap_or(false);
                 if loader_version.is_empty() {
                     continue;
                 }
@@ -662,13 +725,14 @@ impl InstallerProviderService {
     /// 额外行为：Official 源无结果时自动回退 BMCLAPI，避免国内网络下官方 API 不可达导致列表为空。
     async fn get_neoforge_versions(&self, minecraft_version: &str) -> Vec<ModLoaderResult> {
         if self.mirror == DownloadMirror::Official {
-            let official = crate::services::installers::provider_forge::get_neoforge_from_official_api(
-                &self.http,
-                self.mirror,
-                minecraft_version,
-            )
-            .await
-            .unwrap_or_default();
+            let official =
+                crate::services::installers::provider_forge::get_neoforge_from_official_api(
+                    &self.http,
+                    self.mirror,
+                    minecraft_version,
+                )
+                .await
+                .unwrap_or_default();
             if !official.is_empty() {
                 return official;
             }
@@ -711,11 +775,16 @@ impl InstallerProviderService {
         &self,
         game_versions_url: &str,
     ) -> Result<HashSet<String>, Error> {
-        let response = self.http.get(game_versions_url).send().await.map_err(|e| Error::Http {
-            message: format!("GET {game_versions_url} 失败"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
+        let response = self
+            .http
+            .get(game_versions_url)
+            .send()
+            .await
+            .map_err(|e| Error::Http {
+                message: format!("GET {game_versions_url} 失败"),
+                status: None,
+                source: Some(Box::new(e)),
+            })?;
         if !response.status().is_success() {
             return Err(Error::Http {
                 message: format!("请求失败，状态码 {}", response.status()),
@@ -738,7 +807,10 @@ impl InstallerProviderService {
         if let Some(items) = parsed.as_array() {
             for item in items {
                 // 源：j["version"]?.ToString()，空值过滤（见文件头通用偏差说明）
-                let version = item.get("version").and_then(Value::as_str).unwrap_or_default();
+                let version = item
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 if !version.is_empty() {
                     result.insert(version.to_string());
                 }
@@ -964,7 +1036,10 @@ fn matches_minecraft_version(candidate_version: &str, requested_version: &str) -
 
 /// 对应源私有静态 `SupportsMinecraftVersion`：supportedVersions 全量展开别名（忽略大小写）
 /// 后，requestedVersion 任一带用名命中即支持。
-fn supports_minecraft_version(supported_versions: &HashSet<String>, requested_version: &str) -> bool {
+fn supports_minecraft_version(
+    supported_versions: &HashSet<String>,
+    requested_version: &str,
+) -> bool {
     let mut normalized_supported: HashSet<String> = HashSet::new();
     for supported_version in supported_versions {
         for alias in get_minecraft_version_aliases(supported_version) {
@@ -1088,7 +1163,9 @@ impl InstallerProvider for InstallerProviderService {
                 InstallerProviderService::with_timeout(self.get_optifine_versions(game_version)),
                 InstallerProviderService::with_timeout(self.get_liteloader_versions(game_version)),
                 InstallerProviderService::with_timeout(self.get_cleanroom_versions(game_version)),
-                InstallerProviderService::with_timeout(self.get_legacy_fabric_versions(game_version)),
+                InstallerProviderService::with_timeout(
+                    self.get_legacy_fabric_versions(game_version)
+                ),
                 InstallerProviderService::with_timeout(self.get_babric_versions(game_version)),
             );
 
@@ -1136,11 +1213,3 @@ impl InstallerProvider for InstallerProviderService {
         Ok(loaders)
     }
 }
-
-
-
-
-
-
-
-
