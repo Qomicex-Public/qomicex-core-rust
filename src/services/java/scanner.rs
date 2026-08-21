@@ -102,6 +102,7 @@ static EXCLUDED_PATHS: LazyLock<HashSet<String>> = LazyLock::new(|| {
         "INetCache",
         "Docker",
         "containerd",
+        "JavaAppletPlugin.plugin",
     ]
     .into_iter()
     .map(str::to_lowercase)
