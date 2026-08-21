@@ -39,19 +39,69 @@ use crate::util::platform::normalize_path;
 /// C# 集合大小写不敏感 → 存储时统一小写，比较侧也小写（`should_exclude` / `search_custom`）。
 static EXCLUDED_PATHS: LazyLock<HashSet<String>> = LazyLock::new(|| {
     [
-        "Windows", "ProgramData", "$Recycle.Bin", "System32", "SysWOW64",
-        "WinSxS", "node_modules", ".git", ".svn", ".hg", "target", "build",
-        "dist", ".gradle", ".m2", ".nuget", ".vscode", ".idea", "__pycache__",
-        ".venv", "venv", "env", ".tox", ".pytest_cache", ".cargo", ".rustup",
-        ".npm", ".yarn", ".pnpm-store", ".next", ".nuxt", "out", ".output",
-        ".parcel-cache", ".webpack", ".cache", ".angular", ".svelte-kit",
-        ".nyc_output", ".coverage", ".sonarqube", ".scannerwork", ".vs",
-        ".vscode-test", "obj",
-        "Steam", "Epic Games", "Origin", "EA Games", "Battle.net",
-        "Ubisoft Game Launcher", "GOG Galaxy",
-        "Temp", "tmp", "temp", "Downloads", "Prefetch", "Recent",
-        "Cookies", "History", "INetCache",
-        "Docker", "containerd",
+        "Windows",
+        "ProgramData",
+        "$Recycle.Bin",
+        "System32",
+        "SysWOW64",
+        "WinSxS",
+        "node_modules",
+        ".git",
+        ".svn",
+        ".hg",
+        "target",
+        "build",
+        "dist",
+        ".gradle",
+        ".m2",
+        ".nuget",
+        ".vscode",
+        ".idea",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "env",
+        ".tox",
+        ".pytest_cache",
+        ".cargo",
+        ".rustup",
+        ".npm",
+        ".yarn",
+        ".pnpm-store",
+        ".next",
+        ".nuxt",
+        "out",
+        ".output",
+        ".parcel-cache",
+        ".webpack",
+        ".cache",
+        ".angular",
+        ".svelte-kit",
+        ".nyc_output",
+        ".coverage",
+        ".sonarqube",
+        ".scannerwork",
+        ".vs",
+        ".vscode-test",
+        "obj",
+        "Steam",
+        "Epic Games",
+        "Origin",
+        "EA Games",
+        "Battle.net",
+        "Ubisoft Game Launcher",
+        "GOG Galaxy",
+        "Temp",
+        "tmp",
+        "temp",
+        "Downloads",
+        "Prefetch",
+        "Recent",
+        "Cookies",
+        "History",
+        "INetCache",
+        "Docker",
+        "containerd",
     ]
     .into_iter()
     .map(str::to_lowercase)
@@ -221,7 +271,10 @@ impl JavaScanner {
     /// async 包装由 facade 后置负责。
     pub(crate) fn search(&self, options: &JavaSearchOptions) -> Result<Vec<JavaResult>, Error> {
         if options.mode == JavaSearchMode::Custom
-            && options.custom_root_path.as_deref().is_none_or(str::is_empty)
+            && options
+                .custom_root_path
+                .as_deref()
+                .is_none_or(str::is_empty)
         {
             return Err(Error::Params {
                 message: "Custom模式必须提供CustomRootPath".to_string(),
@@ -558,7 +611,10 @@ fn reg_query_subkeys(key_path: &str) -> Option<Vec<String>> {
         .ok()?;
     if !output.status.success() {
         if output.status.code() != Some(1) {
-            eprintln!("读取注册表 {full_key} 失败: reg query 退出码 {:?}", output.status.code());
+            eprintln!(
+                "读取注册表 {full_key} 失败: reg query 退出码 {:?}",
+                output.status.code()
+            );
         }
         return None;
     }
@@ -601,7 +657,10 @@ fn reg_query_value(key_path: &str, sub_key: &str, value_name: &str) -> Option<St
         .ok()?;
     if !output.status.success() {
         if output.status.code() != Some(1) {
-            eprintln!("读取注册表 {full_key} 失败: reg query 退出码 {:?}", output.status.code());
+            eprintln!(
+                "读取注册表 {full_key} 失败: reg query 退出码 {:?}",
+                output.status.code()
+            );
         }
         return None;
     }
@@ -715,7 +774,13 @@ fn search_minecraft_runtime(
             }
             let version_dir = version_entry.path().to_string_lossy().into_owned();
             if let Some(java_path) = get_java_executable_path(&version_dir) {
-                add_java_if_valid(&java_path, results, discovered_paths, options, "MinecraftRuntime");
+                add_java_if_valid(
+                    &java_path,
+                    results,
+                    discovered_paths,
+                    options,
+                    "MinecraftRuntime",
+                );
             }
         }
     });
@@ -928,14 +993,19 @@ fn get_normalized_major_version(version: &str) -> i32 {
 /// 读 stderr（java -version 输出到 stderr），解析引号内版本号；
 /// 命中 → Version/MajorVersion/Name(`Java {version} (未验证)`)。
 ///
+/// 同时尝试检测 JDK/JRE 类型：通过 `java -version` 输出关键字或检查 `javac` 是否存在。
+///
 /// 超时差异：源 `ReadToEnd` 阻塞读 stderr → `WaitForExit(5000)` 超时**不杀进程**
 /// （.NET 会泄漏悬挂 java 进程）；本实现 5 秒后 `child.kill()` 并回收读线程，
 /// 防止进程悬挂时 join 永久阻塞。stderr 在子线程读取避免管道填满死锁。
 fn try_get_version_from_command(java_info: &mut JavaResult) {
     use std::io::Read;
+    use std::path::Path;
     use std::process::{Command, Stdio};
 
-    let Ok(mut child) = Command::new(&java_info.path)
+    let java_path = &java_info.path;
+
+    let Ok(mut child) = Command::new(java_path)
         .arg("-version")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -977,16 +1047,94 @@ fn try_get_version_from_command(java_info: &mut JavaResult) {
     if output.is_empty() {
         return;
     }
+
+    let mut detected_type = None;
+    let mut parsed_version: Option<String> = None;
+
     for line in output.lines() {
-        if line.contains("version") {
+        if line.contains("version") && parsed_version.is_none() {
             if let Some(version) = match_quoted_version(line) {
-                java_info.version = version.clone();
-                java_info.major_version = get_normalized_major_version(&version);
-                java_info.name = format!("Java {version} (未验证)");
-                break;
+                parsed_version = Some(version);
+            } else if let Some(version) = match_quoted_version_lenient(line) {
+                parsed_version = Some(version);
+            }
+        }
+        let lower = line.to_lowercase();
+        if lower.contains("jdk") || lower.contains("java development kit") {
+            detected_type = Some(crate::models::java::JavaType::JDK);
+        } else if lower.contains("jre") || lower.contains("java runtime") {
+            detected_type = Some(crate::models::java::JavaType::JRE);
+        }
+    }
+
+    if let Some(version) = parsed_version {
+        java_info.version = version.clone();
+        java_info.major_version = get_normalized_major_version(&version);
+        java_info.name = format!("Java {version} (未验证)");
+    }
+
+    if detected_type.is_none() {
+        if let Some(java_home) = Path::new(java_path).parent().and_then(Path::parent) {
+            let javac = if cfg!(windows) { "javac.exe" } else { "javac" };
+            if java_home.join("bin").join(javac).is_file()
+                || java_home.join("include").is_dir()
+                || java_home.join("jre").is_dir()
+            {
+                detected_type = Some(crate::models::java::JavaType::JDK);
+            } else {
+                detected_type = Some(crate::models::java::JavaType::JRE);
             }
         }
     }
+
+    if let Some(t) = detected_type {
+        java_info.r#type = t;
+    }
+}
+
+/// 宽松版本解析：允许下划线（如 1.8.0_502）、额外构建信息。
+/// 仅在严格解析失败时作为二次尝试使用。
+fn match_quoted_version_lenient(line: &str) -> Option<String> {
+    let bytes = line.as_bytes();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        if bytes[pos] == b'"' {
+            let mut end = pos + 1;
+            let mut i = end;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'_') {
+                i += 1;
+            }
+            if i == end {
+                pos += 1;
+                continue;
+            }
+            end = i;
+            loop {
+                let mut k = end;
+                if k < bytes.len() && bytes[k] == b':' {
+                    k += 1;
+                }
+                if k < bytes.len() && bytes[k] == b'.' {
+                    k += 1;
+                } else {
+                    break;
+                }
+                let digits_start = k;
+                while k < bytes.len() && (bytes[k].is_ascii_digit() || bytes[k] == b'_') {
+                    k += 1;
+                }
+                if k == digits_start {
+                    break;
+                }
+                end = k;
+            }
+            if end < bytes.len() && bytes[end] == b'"' {
+                return Some(line[pos + 1..end].to_string());
+            }
+        }
+        pos += 1;
+    }
+    None
 }
 
 /// 源正则 `"(\d+(:?\.\d+)*)"` 的手工等价解析（bug-for-bug，特殊兼容）。
@@ -1163,14 +1311,15 @@ where
     let next = AtomicUsize::new(0);
     std::thread::scope(|scope| {
         for _ in 0..workers {
-            scope.spawn(|| loop {
-                let index = next.fetch_add(1, Ordering::Relaxed);
-                if index >= items.len() {
-                    break;
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= items.len() {
+                        break;
+                    }
+                    f(&items[index]);
                 }
-                f(&items[index]);
             });
         }
     });
 }
-
