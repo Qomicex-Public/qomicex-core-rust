@@ -174,11 +174,13 @@ static LINUX_PATHS: LazyLock<Vec<String>> = LazyLock::new(|| {
     ]
 });
 
-/// macOS 高优先级路径（源：`MacOSPaths` 静态字段，逐字保留）。
+/// macOS 高优先级路径（源：`MacOSPaths` 静态字段 + 平台适配增补）。
 static MACOS_PATHS: LazyLock<Vec<String>> = LazyLock::new(|| {
     let home = env_user_profile();
     vec![
         "/Library/Java/JavaVirtualMachines".to_string(),
+        // 用户级 JVM 标准安装位（macOS 官方 java_home 也枚举此处）
+        join_path(&home, "Library/Java/JavaVirtualMachines"),
         "/System/Library/Java/JavaVirtualMachines".to_string(),
         "/opt/homebrew/opt".to_string(),
         "/usr/local/opt".to_string(),
@@ -306,6 +308,8 @@ impl JavaScanner {
         }
 
         search_high_priority_paths(&results, &discovered_paths, options);
+
+        search_macos_java_home(&results, &discovered_paths, options);
 
         if let Some(game_dir) = options.game_dir.as_deref() {
             if !game_dir.is_empty() {
@@ -464,15 +468,21 @@ fn breadth_first_search(
     }
 }
 
-/// 目录是否应排除（源：`ShouldExclude`，逐字保留）。
+/// 目录是否应排除（源：`ShouldExclude`，逐字保留 + Unix 虚拟目录增补）。
 ///
 /// 1. 目录名在 exclude 集合中（大小写不敏感 → 统一小写）；
 /// 2. **任一 exclude 子串出现在完整路径任意位置即排除**（源
 ///    `fullPath.IndexOf(exclude, OrdinalIgnoreCase) >= 0`；"build" 等短名
 ///    误伤路径的行为 bug-for-bug 保留）；
 /// 3. Windows 下以 `\\`（UNC）开头 → 排除；
-/// 4. 点目录排除，白名单 `.jdks/.sdkman/.jenv/.jabba/.asdf`。
+/// 4. 点目录排除，白名单 `.jdks/.sdkman/.jenv/.jabba/.asdf`；
+/// 5. Unix 虚拟文件系统（/dev /proc /sys /run）→ 排除（平台适配增补：
+///    无 Java 安装价值；/dev/fd 指回进程自身 fd，BFS 入队自引用）。
 fn should_exclude(full_path: &str, dir_name: &str, excludes: &HashSet<String>) -> bool {
+    if cfg!(unix) && is_unix_virtual_fs(full_path) {
+        return true;
+    }
+
     let dir_name_lower = dir_name.to_lowercase();
     if excludes.contains(&dir_name_lower) {
         return true;
@@ -500,6 +510,15 @@ fn should_exclude(full_path: &str, dir_name: &str, excludes: &HashSet<String>) -
     }
 
     false
+}
+
+/// Unix 虚拟文件系统路径判定：精确前缀匹配（`/dev` 命中但 `/devtools` 不误伤）。
+fn is_unix_virtual_fs(full_path: &str) -> bool {
+    ["/dev", "/proc", "/sys", "/run"].iter().any(|prefix| {
+        full_path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
 }
 
 /// 环境变量扫描（源：`SearchEnvironmentVariables`）：JAVA_HOME / JDK_HOME / JRE_HOME，
@@ -735,6 +754,49 @@ fn search_high_priority_paths(
             }
         }
     });
+}
+
+/// macOS 官方 JVM 枚举（`/usr/libexec/java_home -V`）。
+///
+/// 平台适配新增（非源逻辑）：macOS 上替代全盘 BFS 的发现手段——java_home
+/// 由系统维护 JVM 注册表，能发现非标准位置的注册项。注意枚举结果输出到
+/// **stderr**（stdout 为空）；每行末段为 Home 路径。无 JVM 时输出提示文本，
+/// 经 starts_with('/') + is_dir 过滤后自然跳过。路径含空格时末段解析不完整
+/// → is_dir 校验失败跳过，不误报（JVM Home 含空格非标准布局，可接受）。
+#[cfg(target_os = "macos")]
+fn search_macos_java_home(
+    results: &Mutex<Vec<JavaResult>>,
+    discovered_paths: &Mutex<HashSet<String>>,
+    options: &JavaSearchOptions,
+) {
+    let Ok(output) = std::process::Command::new("/usr/libexec/java_home")
+        .arg("-V")
+        .output()
+    else {
+        return;
+    };
+
+    let text = String::from_utf8_lossy(&output.stderr);
+    for line in text.lines() {
+        let Some(path) = line.rsplit(' ').next() else {
+            continue;
+        };
+        if !path.starts_with('/') || !Path::new(path).is_dir() {
+            continue;
+        }
+        if let Some(java_path) = get_java_executable_path(path) {
+            add_java_if_valid(&java_path, results, discovered_paths, options, "JavaHome");
+        }
+    }
+}
+
+/// 非 macOS 空实现（同 `search_registry` 的平台属性语义）。
+#[cfg(not(target_os = "macos"))]
+fn search_macos_java_home(
+    _results: &Mutex<Vec<JavaResult>>,
+    _discovered_paths: &Mutex<HashSet<String>>,
+    _options: &JavaSearchOptions,
+) {
 }
 
 /// Minecraft runtime 扫描（源：`SearchMinecraftRuntime`）：
@@ -1219,11 +1281,15 @@ fn get_java_executable_path(java_home: &str) -> Option<String> {
 /// 有效驱动器列表（源：`GetValidDrives`）。
 ///
 /// - Windows：A-Z 盘符枚举 + GetDriveTypeW 类型过滤 + 根目录可访问性（近似 IsReady）；
-/// - Linux/macOS：逐字返回 `/`、`/home`、`/opt`、`/usr`（不校验存在性，BFS 自行吞错）；
+/// - Linux/Android：逐字返回 `/`、`/home`、`/opt`、`/usr`（不校验存在性，BFS 自行吞错）；
+/// - **macOS：不返回全盘根**（平台适配决策，见 ADR）：BFS 从 `/` 遍历会触碰
+///   TCC 保护目录（Desktop/Documents/Library/Containers/外接卷等），每个未授权
+///   类别触发一次系统权限弹窗；macOS Java 安装位置高度标准化，已由
+///   MACOS_PATHS + `/usr/libexec/java_home -V` 覆盖，全盘扫描收益≈0；
 /// - 其余平台：空。
 fn get_valid_drives(include_network_drives: bool) -> Vec<String> {
     let mut drives = get_windows_drives(include_network_drives);
-    if cfg!(any(target_os = "linux", target_os = "android")) || cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "linux", target_os = "android")) {
         drives.push("/".to_string());
         drives.push("/home".to_string());
         drives.push("/opt".to_string());
@@ -1333,4 +1399,59 @@ where
             });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unix_virtual_fs_prefixes_match_exactly() {
+        assert!(is_unix_virtual_fs("/dev"));
+        assert!(is_unix_virtual_fs("/dev/fd/34"));
+        assert!(is_unix_virtual_fs("/proc"));
+        assert!(is_unix_virtual_fs("/proc/self"));
+        assert!(is_unix_virtual_fs("/sys"));
+        assert!(is_unix_virtual_fs("/sys/kernel"));
+        assert!(is_unix_virtual_fs("/run"));
+        assert!(is_unix_virtual_fs("/run/user/1000"));
+    }
+
+    #[test]
+    fn unix_virtual_fs_does_not_misfire_on_normal_paths() {
+        assert!(!is_unix_virtual_fs("/devtools"));
+        assert!(!is_unix_virtual_fs("/procedures"));
+        assert!(!is_unix_virtual_fs("/system"));
+        assert!(!is_unix_virtual_fs("/runtime"));
+        assert!(!is_unix_virtual_fs("/usr"));
+        assert!(!is_unix_virtual_fs("/opt/java"));
+        assert!(!is_unix_virtual_fs("C:\\dev"));
+    }
+
+    #[test]
+    fn should_exclude_keeps_existing_rules() {
+        let excludes: HashSet<String> = EXCLUDED_PATHS.clone();
+        assert!(should_exclude("/home/u/.gradle", ".gradle", &excludes));
+        assert!(!should_exclude("/home/u/.jdks", ".jdks", &excludes));
+        assert!(!should_exclude(
+            "/Library/Java/JavaVirtualMachines",
+            "JavaVirtualMachines",
+            &excludes
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_exclude_rejects_virtual_fs_paths() {
+        let excludes: HashSet<String> = EXCLUDED_PATHS.clone();
+        assert!(should_exclude("/dev/fd/34", "34", &excludes));
+        assert!(should_exclude("/proc/self", "self", &excludes));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_deep_scan_has_no_full_disk_roots() {
+        let drives = get_valid_drives(false);
+        assert!(drives.is_empty());
+    }
 }
