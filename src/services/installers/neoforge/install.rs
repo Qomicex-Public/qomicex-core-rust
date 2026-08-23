@@ -301,6 +301,9 @@ impl NeoForgeInstaller {
         back_files.push(client_lzma_path.clone());
 
         // 源：`installProfileJson["data"]!["BINPATCH"]!["client"] = $"\"{clientLzmaPath}\"";`
+        // ⚠️ 偏离源：C# 的引号服务于 cmd /c 整串命令行；Rust 侧 run_install_process 按
+        // argv 切词传参，引号由 build_processor_args 统一负责——数据层存裸路径，否则
+        // 含空格 VersionDirName 会被二次加引号 → 切词劈裂 → processor invalid params。
         //（data / BINPATCH / client 任一缺失 → 源 NullReferenceException）
         let binpatch_client = profile_value
             .get_mut("data")
@@ -314,7 +317,7 @@ impl NeoForgeInstaller {
                         .to_string(),
                 source: None,
             })?;
-        *binpatch_client = Value::String(format!("\"{client_lzma_path}\""));
+        *binpatch_client = Value::String(client_lzma_path);
 
         // 源：`var libs = GetMissNeoForgeLibraries(neoForgeInstallerPath, versionId);`
         let libs = self

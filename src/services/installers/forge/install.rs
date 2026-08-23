@@ -298,9 +298,13 @@ impl ForgeInstaller {
             });
         }
 
-        // 源：binPatchPath = $"\"{Path.Combine(gameDir, "libraries", ..., "client.lzma")}\""（带引号）
+        // ⚠️ 偏离源：C# 源写 `$"\"{path}\""`（带引号），因其经 cmd /c 整串命令行执行、
+        // 需要预埋引号保护空格；Rust 侧 run_install_process 已改为 split_command_line
+        // 切词后逐参传递，引号由 build_processor_args 统一负责——数据层必须存裸路径，
+        // 否则含空格 VersionDirName（整合包）会被二次加引号 → ""path"" → 切词劈裂 →
+        // binarypatcher invalid params exit 1。
         //      installProfileJson["data"]!["BINPATCH"]!["client"] = binPatchPath;
-        let bin_patch_path = format!("\"{}\"", path_combine(&lzma_dir, "client.lzma"));
+        let bin_patch_path = path_combine(&lzma_dir, "client.lzma");
         // 源 `!`（null-forgiving）：data/BINPATCH 缺失 → NullReferenceException；非对象 → InvalidOperationException
         let data_obj = install_profile_json
             .get_mut("data")

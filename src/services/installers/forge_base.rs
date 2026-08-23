@@ -602,6 +602,7 @@ pub(crate) fn main_jar_relative_path(version_dir_name: &str) -> String {
 mod tests {
     use super::*;
     use crate::services::installers::installer::InstallerBase;
+    use crate::services::launch::process::split_command_line;
 
     fn base_with(game_dir: &str) -> ForgeInstallerBase {
         ForgeInstallerBase {
@@ -687,13 +688,14 @@ mod tests {
                 "BINPATCH": { "client": r"%BINPATCH" }
             }
         });
-        // 模拟 install_forge 改写 BINPATCH.client 为 lzma 绝对路径
+        // 模拟 install_forge 改写 BINPATCH.client 为 lzma 绝对路径（裸路径，quoting 归组装层）
         let lzma_dir = join_path(
             &join_path(&join_path(&base.game_dir, "libraries"), "net"),
             "minecraftforge",
         );
-        let lzma_dir = join_path(&join_path(&lzma_dir, "forge"), "26.2-65.1.1");
-        let binpatch_val = format!("\"{}\"", join_path(&lzma_dir, "client.lzma"));
+        let lzma_dir = join_path(&lzma_dir, "forge");
+        let lzma_dir = join_path(&lzma_dir, "26.2-65.1.1");
+        let binpatch_val = join_path(&lzma_dir, "client.lzma");
         let mut ip_mut = ip_obj;
         ip_mut["data"]["BINPATCH"]["client"] = serde_json::Value::String(binpatch_val.clone());
         let ip_map = ip_mut.as_object().expect("obj");
@@ -727,6 +729,68 @@ mod tests {
             "未替换的占位符残留: {args}"
         );
         eprintln!("[binarypatcher client args] {args}");
+    }
+
+    #[test]
+    fn binpatch_quoting_survives_command_line_splitting_with_spaced_version_dir() {
+        // 回归：整合包 VersionDirName 含空格（如 "1.20.1-DeceasedCraft - Urban Zombie
+        // Apocalypse"）时，binarypatcher 的 --apply 值曾被双重引号包裹：
+        //   1) install 层把 data.BINPATCH.client 写成带引号路径（C# cmd /c 整串命令行
+        //      时代的遗留；cmd 解析会消化一层引号）
+        //   2) build_processor_args 对含空格参数再加一层引号 → ""path""
+        // run_install_process 已改为 split_command_line 切词后逐参传 java：""path"" 在
+        // 未闭合引号外的空格处被切分，路径劈成两个参数 → jopt invalid params → exit 1。
+        // quoting 职责唯一归组装层，数据层必须存裸路径。
+        let base = base_with(r"C:\Games\.minecraft");
+        let spaced_version_dir = "26.2-DeceasedCraft - Urban Zombie Apocalypse";
+        let lzma_dir = join_path(
+            &join_path(
+                &join_path(&join_path(&base.game_dir, "libraries"), "net"),
+                "minecraftforge",
+            ),
+            "forge",
+        );
+        let lzma_dir = join_path(&lzma_dir, spaced_version_dir);
+        let lzma_path = join_path(&lzma_dir, "client.lzma");
+
+        let ip_obj = serde_json::json!({
+            "path": "net.minecraftforge:forge:26.2-65.1.1:shim",
+            "data": {
+                "PATCHED": { "client": "[net.minecraftforge:forge:26.2-65.1.1:client]" },
+                "MC_UNPACKED": { "client": "[net.minecraft:client:26.2]" },
+                "BINPATCH": { "client": "\u{0}placeholder\u{0}" }
+            }
+        });
+        // 模拟 install 层对 BINPATCH.client 的改写（修复后契约：裸路径，quoting 归组装层）
+        let mut ip_mut = ip_obj;
+        ip_mut["data"]["BINPATCH"]["client"] = serde_json::Value::String(lzma_path.clone());
+
+        let processor = serde_json::json!({
+            "jar": "net.minecraftforge:binarypatcher:1.1.1",
+            "classpath": [],
+            "args": [
+                "--clean", "{MINECRAFT_JAR}",
+                "--output", "{PATCHED}",
+                "--apply", "{BINPATCH}"
+            ]
+        });
+        let args = base
+            .build_processor_args(
+                ip_mut.as_object().expect("obj"),
+                processor.as_object().expect("obj"),
+            )
+            .expect("build_processor_args 不应失败");
+
+        let tokens = split_command_line(&args);
+        let apply_value = tokens
+            .iter()
+            .position(|t| t == "--apply")
+            .and_then(|i| tokens.get(i + 1));
+        assert_eq!(
+            apply_value.map(String::as_str),
+            Some(lzma_path.as_str()),
+            "--apply 必须切词为单个裸路径 token，实际 tokens: {tokens:?}"
+        );
     }
 
     #[test]
