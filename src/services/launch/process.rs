@@ -76,6 +76,32 @@ pub fn subscribe_game_log() -> broadcast::Receiver<GameLogLine> {
     game_log_tx().subscribe()
 }
 
+/// 游戏进程退出事件（供启动器后端崩溃检测：按 `pid` 关联实例，`code` 判定崩溃）。
+#[derive(Debug, Clone)]
+pub struct GameExitEvent {
+    /// 退出的游戏进程 PID。
+    pub pid: i32,
+    /// 进程退出码；被信号终止等无退出码场景记为 -1。
+    pub code: i32,
+}
+
+/// 全局进程退出总线（容量 64：退出事件低频，足够缓冲订阅方短暂繁忙）。
+static GAME_EXIT_TX: OnceLock<broadcast::Sender<GameExitEvent>> = OnceLock::new();
+
+fn game_exit_tx() -> broadcast::Sender<GameExitEvent> {
+    GAME_EXIT_TX
+        .get_or_init(|| {
+            let (tx, _rx) = broadcast::channel(64);
+            tx
+        })
+        .clone()
+}
+
+/// 订阅所有游戏进程的退出事件（每实例归属由订阅方按 `GameExitEvent::pid` 关联）。
+pub fn subscribe_game_exit() -> broadcast::Receiver<GameExitEvent> {
+    game_exit_tx().subscribe()
+}
+
 /// 启动执行器实现（源：`internal sealed class LaunchExecutor : ILaunchExecutor` 的
 /// LaunchAsync / KillAsync 部分；struct 定义与参数组装方法在 jvm_args.rs）。
 #[async_trait]
@@ -290,10 +316,18 @@ impl LaunchExecutor {
             let err_fut =
                 OptionFuture::from(stderr_pipe.map(|p| forward_pipe(p, false, process_id)));
             let _ = futures::future::join(out_fut, err_fut).await;
-            // 源：process.Exited → result.OnExit?.Invoke(process.ExitCode)（写 stderr）+ Dispose
+            // 源：process.Exited → result.OnExit?.Invoke(process.ExitCode)（写 stderr）+ Dispose。
+            // 退出码同时广播到退出总线，供启动器后端做崩溃检测/诊断收集。
             let mut child = child;
             match child.wait().await {
-                Ok(status) => eprintln!("进程退出，代码: {}", status.code().unwrap_or(-1)),
+                Ok(status) => {
+                    let code = status.code().unwrap_or(-1);
+                    eprintln!("进程退出，代码: {}", code);
+                    let _ = game_exit_tx().send(GameExitEvent {
+                        pid: process_id,
+                        code,
+                    });
+                }
                 Err(e) => eprintln!("等待进程退出失败: {e}"),
             }
         });
@@ -836,5 +870,21 @@ mod tests {
         assert!(s.len() >= 24);
         assert!(s.ends_with('Z'));
         assert!(s.contains('.'));
+    }
+
+    /// 退出事件总线连通性：订阅后发送，接收方应按序收到事件
+    /// （真实进程退出 → launch_inner 后台任务发布的链路由启动器集成场景覆盖）。
+    #[tokio::test]
+    async fn game_exit_event_bus_roundtrip() {
+        let mut rx = subscribe_game_exit();
+        game_exit_tx()
+            .send(GameExitEvent { pid: 4321, code: 3 })
+            .expect("send exit event");
+        let ev = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout waiting for exit event")
+            .expect("bus closed");
+        assert_eq!(ev.pid, 4321);
+        assert_eq!(ev.code, 3);
     }
 }
