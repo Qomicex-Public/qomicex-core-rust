@@ -6,7 +6,7 @@
 //! - `Installer` trait / `MissFileData`：src/services/installers/installer.rs（B9）
 //! - `InstallerFactory::create_ftb_modpack`：src/api/installer.rs（B9，`HttpClient` → `reqwest::Client` 按值）
 //! - FTB 客户端：src/services/expansion/ftb/query.rs（B13，`FtbBase` + `FtbSource::get_version_detail`）
-//! - CurseForge 客户端：src/services/expansion/curseforge/query.rs（B13，`CurseForgeBase::get_files_batch`）
+//! - CurseForge 客户端：src/services/expansion/curseforge/query.rs（B13，`CurseForgeBase::get_files_batch_inner`）
 //!
 //! 流程要点（逐字保留源）：
 //! - `InstallAsync`：直接返回 CompletedTask，不写任何文件（源无任何逻辑）→ Ok(())；
@@ -223,7 +223,7 @@ impl Installer for FtbModpackInstaller {
             mods_info.mods.as_ref().map_or(0, |m| m.len())
         );
         // 源：var fileInfoMap = await _cf.GetFilesBatchAsync(fileIds);
-        let file_info_map = cf.get_files_batch(&file_ids).await?;
+        let file_info_map = cf.get_files_batch_inner(&file_ids).await?;
         println!(
             "[FTB] CurseForge 批量查询完成，成功获取={}",
             file_info_map.len()

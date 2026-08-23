@@ -181,12 +181,13 @@ impl CurseForgeBase {
         })
     }
 
-    /// 批量获取文件信息（源：`GetFilesBatchAsync`，类级公开方法，不属于 ICurseForgeSource 接口）。
+    /// 批量获取文件信息内部实现（源：`GetFilesBatchAsync`）。
     ///
     /// 每批最多 100 个 fileId（`MaxBatchFileIds`）；过滤非正整数/超出 int32 范围的无效 id；
     /// 整批返回 400 时打印日志并跳过继续（源仅吞掉 `HttpRequestException` 且
     /// `StatusCode == BadRequest`，其余错误传播）。
-    pub(crate) async fn get_files_batch(
+    /// 公开入口见 trait `CurseForgeSource::get_files_batch`。
+    pub(crate) async fn get_files_batch_inner(
         &self,
         file_ids: &[i64],
     ) -> Result<HashMap<i64, CurseForgeBatchFileInfo>, Error> {
@@ -689,6 +690,16 @@ impl CurseForgeSource for CurseForgeBase {
                 status: None,
                 source: None,
             })
+    }
+
+    /// 批量获取文件信息（源 `GetFilesAsync`；委托固有 get_files_batch_inner，
+    /// 每批 MaxBatchFileIds=100 自动分批）。整合包安装用它把 projectID:fileID
+    /// 清单一次解析为下载链接，替代逐文件两次串行查询。
+    async fn get_files_batch(
+        &self,
+        file_ids: &[i64],
+    ) -> Result<HashMap<i64, CurseForgeBatchFileInfo>, Error> {
+        CurseForgeBase::get_files_batch_inner(self, file_ids).await
     }
 
     /// 通过指纹反查文件信息（源：`GetInfoFromHashesAsync`，内部委托

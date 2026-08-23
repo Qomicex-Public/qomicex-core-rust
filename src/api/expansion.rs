@@ -36,8 +36,8 @@
 
 use crate::error::Error;
 use crate::models::expansion::curseforge::{
-    CurseForgeFileInfo, CurseForgeFingerprintMatch, CurseForgeInfo, CurseForgeSearchResponse,
-    FingerprintsFilesMeta,
+    CurseForgeBatchFileInfo, CurseForgeFileInfo, CurseForgeFingerprintMatch, CurseForgeInfo,
+    CurseForgeSearchResponse, FingerprintsFilesMeta,
 };
 use crate::models::expansion::ftb::{
     ChangelogResult, ModpackInfo, VersionDetail, VersionInfo as FtbVersionInfo,
@@ -147,6 +147,14 @@ pub trait CurseForgeSource: Send + Sync {
 
     /// 获取文件下载地址（源：`GetDownloadUrlAsync`）。
     async fn get_download_url(&self, id: &str, file_id: &str) -> Result<String, Error>;
+
+    /// 批量获取文件信息（源 `GetFilesAsync`；每批 MaxBatchFileIds=100 自动分批）。
+    /// 返回 fileId → 文件信息（含 fileName/downloadUrl）；整合包安装用它把
+    /// projectID:fileID 清单一次解析为下载链接，替代逐文件两次串行查询。
+    async fn get_files_batch(
+        &self,
+        file_ids: &[i64],
+    ) -> Result<HashMap<i64, CurseForgeBatchFileInfo>, Error>;
 
     /// 通过指纹反查文件信息（源：`GetInfoFromHashesAsync`）。
     async fn get_info_from_hashes(
