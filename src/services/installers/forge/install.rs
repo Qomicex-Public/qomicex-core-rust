@@ -771,12 +771,28 @@ impl ForgeInstaller {
                 continue;
             }
             // 源：var libInfo = new LibInfo { FullName = libObj["name"]?.ToString() ?? string.Empty };
-            let lib_info = LibInfo::new(
+            let mut lib_info = LibInfo::new(
                 lib_obj
                     .get("name")
                     .map(json_node_to_string)
                     .unwrap_or_default(),
             );
+            // ⚠️ 修复：与 NeoForge 对齐，补读 install_profile.json 中 downloads.artifact 的
+            // url / sha1（源 C# ForgeInstaller.cs 本就赋值，Rust 移植时漏了这一支，导致
+            // url 恒空 → 走 base_url HEAD 探测，误判/回退到 libraries.minecraft.net 而 404）。
+            if lib_obj.contains_key("downloads") {
+                let artifact = lib_obj.get("downloads").and_then(|d| d.get("artifact"));
+                lib_info.hash = artifact
+                    .and_then(|a| a.get("sha1"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                lib_info.url = artifact
+                    .and_then(|a| a.get("url"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+            }
             // 源：var libPath = Path.Combine(gameDir, "libraries", libInfo.Path);
             let lib_path = normalize_separators(&path_combine(
                 &path_combine(&self.game_dir, "libraries"),
