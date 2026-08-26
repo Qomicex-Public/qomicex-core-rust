@@ -259,6 +259,10 @@ impl AuthProvider for MicrosoftAuthProvider {
             .get("verification_uri")
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        let verification_uri_complete = data
+            .get("verification_uri_complete")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         // 源默认值：interval ?? 5，expires_in ?? 900
         let interval = data.get("interval").and_then(|v| v.as_i64()).unwrap_or(5) as i32;
         let expires_in = data
@@ -274,6 +278,7 @@ impl AuthProvider for MicrosoftAuthProvider {
             device_code: device_code.to_string(),
             user_code: user_code.to_string(),
             verification_uri: verification_uri.to_string(),
+            verification_uri_complete: verification_uri_complete.to_string(),
             interval,
             expires_in,
         }))

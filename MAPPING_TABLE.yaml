@@ -116,6 +116,7 @@ models_b1:
   Exceptions/*.cs (5 个异常) -> error.rs 的 Error enum 变体（B1）
   Models/Auth/YggdrasilModels.cs + Models/UserAuth.cs -> models/auth.rs（Yggdrasil 认证 DTO）
   Public/IAuthProvider.cs 内 AuthRequest/AuthResult/DeviceCodeResult/PollTokenResult -> models/auth.rs
+  #   私有扩展：DeviceCodeResult 额外透传微软返回的 verification_uri_complete（已预填 otc 的跳转地址），源 C# 无此字段
   Builder/CoreOptions.cs 内 AuthMode/AuthOptions/DownloadMirror -> models/auth.rs / models/download.rs
   Models/Download/DownloadProgress.cs + DownloadSource.cs -> models/download.rs
   Models/ResourceType.cs -> models/download.rs

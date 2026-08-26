@@ -172,6 +172,9 @@ pub struct DeviceCodeResult {
     pub device_code: String,
     pub user_code: String,
     pub verification_uri: String,
+    /// 微软返回的已预填验证码地址（如 https://www.microsoft.com/link?otc=<user_code>），
+    /// 浏览器直接打开即可免手工输入。源 C# 未映射，为启动器私有扩展。
+    pub verification_uri_complete: String,
     pub interval: i32,
     pub expires_in: i32,
 }
