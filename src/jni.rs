@@ -536,7 +536,6 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_microsoftDevice
             "deviceCode": dc.device_code,
             "userCode": dc.user_code,
             "verificationUri": dc.verification_uri,
-            "verificationUriComplete": dc.verification_uri_complete,
             "interval": dc.interval,
             "expiresIn": dc.expires_in,
             "userType": "microsoft"
