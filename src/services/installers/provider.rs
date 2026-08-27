@@ -1213,13 +1213,42 @@ impl InstallerProvider for InstallerProviderService {
         Ok(loaders)
     }
 
-    /// 按语言优先级获取 NeoForge 版本（ENH-07）。
+    /// 按语言优先级获取 NeoForge 版本（ENH-07/ENH-09）。
     /// prefer_bmclapi=true（中文环境）→ [BMCLAPI → 官方]；false → [官方 → BMCLAPI]。
+    /// 与 Forge 一致的文件缓存（%TEMP%/NeoForgeVersionCache/{mc_version}.json，TTL=24h）。
+    /// force_refresh=true 跳过缓存直接请求（手动刷新入口）。
     async fn get_neoforge_versions_with_priority(
         &self,
         game_version: &str,
         prefer_bmclapi: bool,
+        force_refresh: bool,
     ) -> Result<Vec<ModLoaderResult>, Error> {
+        const CACHE_EXPIRY_HOURS: u64 = 24;
+        // 与 Forge 一致的文件缓存路径
+        let cache_dir = std::env::temp_dir().join("NeoForgeVersionCache");
+        let cache_file = cache_dir.join(format!("{}.json", game_version.replace('-', "_")));
+
+        // 缓存命中（未过期、非强制刷新）→ 直接返回
+        if !force_refresh && cache_file.is_file() {
+            if let Ok(meta) = std::fs::metadata(&cache_file) {
+                if let Ok(modified) = meta.modified() {
+                    if modified
+                        .elapsed()
+                        .map(|e| e < Duration::from_secs(CACHE_EXPIRY_HOURS * 3600))
+                        .unwrap_or(false)
+                    {
+                        if let Ok(json) = std::fs::read_to_string(&cache_file) {
+                            if let Ok(cached) = serde_json::from_str::<Vec<ModLoaderResult>>(&json)
+                            {
+                                return Ok(cached);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 无缓存/过期/强制刷新 → 按语言优先级获取
         let bmclapi = || {
             crate::services::installers::provider_forge::get_neoforge_from_bmcl_api(
                 &self.http,
@@ -1235,18 +1264,29 @@ impl InstallerProvider for InstallerProviderService {
             )
         };
 
-        if prefer_bmclapi {
+        let versions = if prefer_bmclapi {
             let v = bmclapi().await.unwrap_or_default();
             if !v.is_empty() {
-                return Ok(v);
+                v
+            } else {
+                official().await.unwrap_or_default()
             }
-            official().await
         } else {
             let v = official().await.unwrap_or_default();
             if !v.is_empty() {
-                return Ok(v);
+                v
+            } else {
+                bmclapi().await.unwrap_or_default()
             }
-            bmclapi().await
+        };
+
+        // 成功写入缓存（失败不写，下次重试）
+        if !versions.is_empty() {
+            let _ = std::fs::create_dir_all(&cache_dir);
+            if let Ok(json) = serde_json::to_string(&versions) {
+                let _ = std::fs::write(&cache_file, json);
+            }
         }
+        Ok(versions)
     }
 }

@@ -29,16 +29,17 @@ pub trait InstallerProvider: Send + Sync {
         r#type: ModLoaderType,
     ) -> Result<Vec<ModLoaderResult>, Error>;
 
-    /// 按语言优先级获取 NeoForge 版本列表（ENH-07）。
+    /// 按语言优先级获取 NeoForge 版本列表（ENH-07/ENH-09）。
     /// `prefer_bmclapi=true`（中文环境）时按 [BMCLAPI → 官方] 依次请求，任一成功即停；
-    /// 否则按 [官方 → BMCLAPI]。默认实现委托 `get_available_mod_loaders(NeoForge)`，
-    /// 保持向后兼容（未重写的实现行为不变）。
+    /// 否则按 [官方 → BMCLAPI]。`force_refresh=true` 跳过缓存直接请求（手动刷新入口）。
+    /// 默认实现委托 `get_available_mod_loaders(NeoForge)`，保持向后兼容。
     async fn get_neoforge_versions_with_priority(
         &self,
         game_version: &str,
         prefer_bmclapi: bool,
+        force_refresh: bool,
     ) -> Result<Vec<ModLoaderResult>, Error> {
-        let _ = prefer_bmclapi;
+        let _ = (prefer_bmclapi, force_refresh);
         self.get_available_mod_loaders(game_version, ModLoaderType::NeoForge)
             .await
     }
