@@ -206,6 +206,9 @@ pub struct CurseForgeInfo {
     pub authors: Option<Vec<AuthorMeta>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub screenshots: Option<Vec<ScreenshotsMeta>>,
+    /// 模组 Logo（CF /v1/mods/{id} 响应的 data.logo；与搜索响应 iconUrl 同源）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logo: Option<CurseForgeLogo>,
     #[serde(rename = "latestFilesIndexes", skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<CurseForgeFilesMeta>>,
 }
