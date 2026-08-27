@@ -28,6 +28,20 @@ pub trait InstallerProvider: Send + Sync {
         game_version: &str,
         r#type: ModLoaderType,
     ) -> Result<Vec<ModLoaderResult>, Error>;
+
+    /// 按语言优先级获取 NeoForge 版本列表（ENH-07）。
+    /// `prefer_bmclapi=true`（中文环境）时按 [BMCLAPI → 官方] 依次请求，任一成功即停；
+    /// 否则按 [官方 → BMCLAPI]。默认实现委托 `get_available_mod_loaders(NeoForge)`，
+    /// 保持向后兼容（未重写的实现行为不变）。
+    async fn get_neoforge_versions_with_priority(
+        &self,
+        game_version: &str,
+        prefer_bmclapi: bool,
+    ) -> Result<Vec<ModLoaderResult>, Error> {
+        let _ = prefer_bmclapi;
+        self.get_available_mod_loaders(game_version, ModLoaderType::NeoForge)
+            .await
+    }
 }
 
 /// 安装器工厂（源：`IInstallerFactory` 接口，Services/Installers/IInstallerFactory.cs）。

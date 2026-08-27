@@ -1212,4 +1212,41 @@ impl InstallerProvider for InstallerProviderService {
         Self::sort_descending(&mut loaders);
         Ok(loaders)
     }
+
+    /// 按语言优先级获取 NeoForge 版本（ENH-07）。
+    /// prefer_bmclapi=true（中文环境）→ [BMCLAPI → 官方]；false → [官方 → BMCLAPI]。
+    async fn get_neoforge_versions_with_priority(
+        &self,
+        game_version: &str,
+        prefer_bmclapi: bool,
+    ) -> Result<Vec<ModLoaderResult>, Error> {
+        let bmclapi = || {
+            crate::services::installers::provider_forge::get_neoforge_from_bmcl_api(
+                &self.http,
+                self.mirror,
+                game_version,
+            )
+        };
+        let official = || {
+            crate::services::installers::provider_forge::get_neoforge_from_official_api(
+                &self.http,
+                self.mirror,
+                game_version,
+            )
+        };
+
+        if prefer_bmclapi {
+            let v = bmclapi().await.unwrap_or_default();
+            if !v.is_empty() {
+                return Ok(v);
+            }
+            official().await
+        } else {
+            let v = official().await.unwrap_or_default();
+            if !v.is_empty() {
+                return Ok(v);
+            }
+            bmclapi().await
+        }
+    }
 }
