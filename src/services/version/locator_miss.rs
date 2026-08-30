@@ -200,8 +200,7 @@ impl DefaultVersionLocator {
     ///    路径仍为空 → **直接返回已收集项**（源 `return items`，跳过后续 natives/裸坐标分支）；
     /// 2. natives 分类器（Natives 非空 且 Downloads.Classifiers 非空）：按当前 OS 取 classifier 键
     ///    （${arch} 替换为当前架构位数），命中则加入 `{name}:{classifierKey}` 项；
-    /// 3. Downloads == null（Rust 模型 downloads 必填 → 以 artifact/classifiers 均为空近似，
-    ///    ⚠️ 见 lib_helper.rs is_class_path 的偏差注记）且名称非空：Maven 坐标转路径，
+    /// 3. Downloads == null 且名称非空：Maven 坐标转路径，
     ///    非空则加入 `{librariesSource}{path}` 项。
     /// 说明：natives/classifiers 判定按源逐字条件实现（与 lib_helper 的 is_class_path/is_natives
     /// 语义不完全一致，为忠实保留源行为不复用，见翻译日志 p28b）。
@@ -209,7 +208,7 @@ impl DefaultVersionLocator {
         let mut items = Vec::new();
 
         // 分支1：Downloads?.Artifact（源：artifact != null）
-        if let Some(artifact) = &lib.downloads.artifact {
+        if let Some(artifact) = lib.downloads.as_ref().and_then(|d| d.artifact.as_ref()) {
             let lib_path = if !artifact.path.is_empty() {
                 artifact.path.clone()
             } else {
@@ -228,8 +227,17 @@ impl DefaultVersionLocator {
         }
 
         // 分支2：Natives != null && Downloads?.Classifiers != null
-        if lib.natives.is_some() && lib.downloads.classifiers.is_some() {
-            if let (Some(natives), Some(classifiers)) = (&lib.natives, &lib.downloads.classifiers) {
+        if lib.natives.is_some()
+            && lib
+                .downloads
+                .as_ref()
+                .and_then(|d| d.classifiers.as_ref())
+                .is_some()
+        {
+            if let (Some(natives), Some(classifiers)) = (
+                &lib.natives,
+                &lib.downloads.as_ref().and_then(|d| d.classifiers.as_ref()),
+            ) {
                 let os_name = get_current_os_name();
                 if let Some(native_classifier) = natives.get(os_name) {
                     // 源：nativeClassifier.Replace("${arch}", SystemHelper.GetCurrentArch())
@@ -247,11 +255,8 @@ impl DefaultVersionLocator {
             }
         }
 
-        // 分支3：Downloads == null（近似）&& Name 非空
-        if lib.downloads.artifact.is_none()
-            && lib.downloads.classifiers.is_none()
-            && !lib.name.is_empty()
-        {
+        // 分支3：Downloads == null && Name 非空
+        if lib.downloads.is_none() && !lib.name.is_empty() {
             let path = maven_to_path(&lib.name);
             if !path.is_empty() {
                 items.push(MissFileInfo {

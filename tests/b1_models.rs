@@ -7,7 +7,11 @@ use qomicex_core_rust::models::expansion::modrinth::ModLoaderType;
 use qomicex_core_rust::models::version_manifest::{
     LatestVersionInfo, ManifestVersionInfo, VersionManifestRoot,
 };
-use qomicex_core_rust::models::version_metadata::{ArgumentItem, VersionArguments};
+use qomicex_core_rust::models::version_metadata::{
+    ArgumentItem, CompleteVersionMetadata, VersionArguments,
+};
+use qomicex_core_rust::util::json_helper::deserialize_version_metadata;
+use qomicex_core_rust::util::lib_helper::is_class_path;
 
 // ── 特殊兼容：VersionArguments 新旧格式 ──────────────
 
@@ -80,6 +84,35 @@ fn version_arguments_serialize_new_form() {
 fn version_arguments_serialize_old_form_errors() {
     let args = VersionArguments::Old("legacy".to_string());
     assert!(serde_json::to_value(&args).is_err());
+}
+
+// ── 回归：Fabric 合并 JSON 库条目缺 downloads 键 ──────────────
+
+#[test]
+fn merged_json_library_without_downloads_parses() {
+    // 第三方启动器的 vanilla+Fabric 合并版本 JSON 中，fabric-loader 等库条目
+    // 只带 name、无 downloads 键。downloads 必填时 serde 解析失败 →
+    // "无效的版本 JSON 数据"（get_meta_from_json）。
+    let json = r#"{
+        "id": "26.2-Fabric-0.19.3",
+        "type": "release",
+        "mainClass": "net.fabricmc.loader.impl.launch.knot.KnotClient",
+        "releaseTime": "08/24/2026 07:31:24",
+        "time": "08/24/2026 07:31:24",
+        "libraries": [
+            {"name": "net.fabricmc:fabric-loader:0.19.3"},
+            {
+                "name": "org.ow2.asm:asm:9.10.1",
+                "downloads": {"artifact": {"path": "org/ow2/asm/asm/9.10.1/asm-9.10.1.jar", "url": "https://libraries.minecraft.net/org/ow2/asm/asm/9.10.1/asm-9.10.1.jar", "sha1": "a", "size": 1}}
+            }
+        ]
+    }"#;
+    let meta: CompleteVersionMetadata = deserialize_version_metadata(json)
+        .unwrap()
+        .expect("版本 JSON 解析失败");
+    assert_eq!(meta.libraries.len(), 2);
+    let loader = &meta.libraries[0];
+    assert!(is_class_path(loader), "无 downloads 的库应视为 classpath");
 }
 
 // ── 字符串枚举（ModrinthJsonContext UseStringEnumConverter）──

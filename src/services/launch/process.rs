@@ -356,15 +356,17 @@ impl LaunchExecutor {
     /// 优先取 downloads.classifiers 中按当前 OS/架构（`${arch}` → "64"/"32"）匹配的 artifact
     /// path；否则回退 `MavenToPath(native.Name)`。
     pub(crate) fn get_native_path(&self, library: &Library) -> String {
-        if let (Some(natives), Some(classifiers)) =
-            (&library.natives, library.downloads.classifiers.as_ref())
-        {
-            let os_name = get_current_os_name();
-            if let Some(classifier_template) = natives.get(os_name) {
-                let key = classifier_template.replace("${arch}", get_current_arch());
-                if let Some(artifact) = classifiers.get(&key) {
-                    if !artifact.path.is_empty() {
-                        return artifact.path.clone();
+        if let Some(downloads) = &library.downloads {
+            if let (Some(natives), Some(classifiers)) =
+                (&library.natives, downloads.classifiers.as_ref())
+            {
+                let os_name = get_current_os_name();
+                if let Some(classifier_template) = natives.get(os_name) {
+                    let key = classifier_template.replace("${arch}", get_current_arch());
+                    if let Some(artifact) = classifiers.get(&key) {
+                        if !artifact.path.is_empty() {
+                            return artifact.path.clone();
+                        }
                     }
                 }
             }

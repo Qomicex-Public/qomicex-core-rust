@@ -279,7 +279,10 @@ pub struct OsRequirement {
 #[serde(rename_all = "camelCase")]
 pub struct Library {
     pub name: String,
-    pub downloads: LibraryDownloads,
+    /// 下载信息（源：`Library.Downloads`，可空）。Fabric 合并 JSON 等第三方格式
+    /// 的库条目只带 name、无 downloads 键；缺失时按 Maven 坐标解析路径。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub downloads: Option<LibraryDownloads>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<Rule>>,
     #[serde(skip_serializing_if = "Option::is_none")]

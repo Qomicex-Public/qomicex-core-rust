@@ -600,8 +600,13 @@ impl DefaultResourceCompleter {
     fn get_library_artifacts(&self, library: &Library) -> Vec<Artifact> {
         let mut artifacts = Vec::new();
 
+        let Some(downloads) = &library.downloads else {
+            // 源：Downloads == null → 无 artifact 可收集（Fabric 合并 JSON 的裸坐标库）
+            return artifacts;
+        };
+
         // 源：Downloads.Artifact != null && (Rules == null || ShouldIncludeLibrary(Rules))
-        if let Some(artifact) = &library.downloads.artifact {
+        if let Some(artifact) = &downloads.artifact {
             let include = match &library.rules {
                 None => true,
                 Some(rules) => should_include_library(rules),
@@ -612,9 +617,7 @@ impl DefaultResourceCompleter {
         }
 
         // 源：Natives != null && Downloads.Classifiers != null → 按当前 OS 取分类器
-        if let (Some(natives), Some(classifiers)) =
-            (&library.natives, &library.downloads.classifiers)
-        {
+        if let (Some(natives), Some(classifiers)) = (&library.natives, &downloads.classifiers) {
             let os_name = get_current_os_name();
             if let Some(native_classifier) = natives.get(os_name) {
                 // 源：nativeClassifier.Replace("${arch}", SystemHelper.GetCurrentArch())

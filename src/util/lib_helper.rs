@@ -13,15 +13,24 @@ use crate::util::platform::is_os_match;
 
 /// 判断库是否属于 classpath（对应 LibHelper.IsClassPath）
 /// C# 逻辑：Downloads 非空时看 Artifact 是否存在；Downloads 缺失时，Natives 为空则视为 classpath
-/// ⚠️ 偏差：Rust 模型（B1）中 Library.downloads 为必填字段，无法表达"C# 中 Downloads 为 null"的形态；
-/// 此处以"artifact 与 classifiers 均为空"近似"无下载信息"，再按 C# 的 Natives 分支判定。
 pub fn is_class_path(library: &Library) -> bool {
     // C# 分支1：Downloads 存在且 Artifact 存在 → classpath
-    if library.downloads.artifact.is_some() {
+    if library
+        .downloads
+        .as_ref()
+        .and_then(|d| d.artifact.as_ref())
+        .is_some()
+    {
         return true;
     }
     // C# 分支2（Downloads 为 null 时）：Natives 为 null → classpath
-    if library.downloads.classifiers.is_none() && library.natives.is_none() {
+    if library
+        .downloads
+        .as_ref()
+        .and_then(|d| d.classifiers.as_ref())
+        .is_none()
+        && library.natives.is_none()
+    {
         return true;
     }
     false
@@ -33,7 +42,12 @@ pub fn is_natives(library: &Library) -> bool {
     if library.natives.is_some() {
         return true;
     }
-    if library.downloads.classifiers.is_some() {
+    if library
+        .downloads
+        .as_ref()
+        .and_then(|d| d.classifiers.as_ref())
+        .is_some()
+    {
         return true;
     }
     if library.name.to_lowercase().contains("natives") {

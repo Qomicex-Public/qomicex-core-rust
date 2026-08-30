@@ -1,7 +1,7 @@
 //! B2 批次验证：工具层（MurmurHash2 / NBT / 时间解析 / 库坐标 / class 常量池）
 //! MurmurHash2 向量由 dotnet 10 参考实现（与源同逻辑）生成
 
-use qomicex_core_rust::models::version_metadata::{Library, LibraryDownloads};
+use qomicex_core_rust::models::version_metadata::Library;
 use qomicex_core_rust::util::file_helper::normalize_separators;
 use qomicex_core_rust::util::json_helper::{format_minecraft_datetime, parse_minecraft_datetime};
 use qomicex_core_rust::util::lib_helper::{
@@ -103,10 +103,7 @@ fn maven_to_path_basic() {
 fn lib(name: &str) -> Library {
     Library {
         name: name.to_string(),
-        downloads: LibraryDownloads {
-            artifact: None,
-            classifiers: None,
-        },
+        downloads: None,
         rules: None,
         natives: None,
         extract: None,
@@ -118,10 +115,7 @@ fn lib_classpath_natives_classification() {
     assert!(is_class_path(&lib("org.example:mod:1.0")));
     let natives = Library {
         name: "org.example:native:1.0".to_string(),
-        downloads: LibraryDownloads {
-            artifact: None,
-            classifiers: None,
-        },
+        downloads: None,
         rules: None,
         natives: Some(
             [("windows".to_string(), "natives-windows".to_string())]
