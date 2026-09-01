@@ -221,7 +221,7 @@ impl DefaultVersionLocator {
     ) -> Result<CompleteVersionMetadata, Error> {
         let metadata = json_helper::deserialize_version_metadata(json_data)
             .map_err(|e| Error::Params {
-                message: "无效的版本 JSON 数据".to_string(),
+                message: format!("无效的版本 JSON 数据: {e}"),
                 source: Some(Box::new(e)),
             })?
             .ok_or_else(|| Error::Params {
