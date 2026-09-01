@@ -209,11 +209,12 @@ impl DefaultVersionLocator {
 
         // 分支1：Downloads?.Artifact（源：artifact != null）
         if let Some(artifact) = lib.downloads.as_ref().and_then(|d| d.artifact.as_ref()) {
-            let lib_path = if !artifact.path.is_empty() {
-                artifact.path.clone()
-            } else {
-                maven_to_path(&lib.name)
-            };
+            let lib_path = artifact
+                .path
+                .as_deref()
+                .filter(|p| !p.is_empty())
+                .map(String::from)
+                .unwrap_or_else(|| maven_to_path(&lib.name));
             // 源：if (string.IsNullOrEmpty(libPath)) return items;
             if lib_path.is_empty() {
                 return items;
@@ -243,12 +244,17 @@ impl DefaultVersionLocator {
                     // 源：nativeClassifier.Replace("${arch}", SystemHelper.GetCurrentArch())
                     let classifier_key = native_classifier.replace("${arch}", get_current_arch());
                     if let Some(native_artifact) = classifiers.get(&classifier_key) {
+                        let native_path = native_artifact
+                            .path
+                            .as_deref()
+                            .filter(|p| !p.is_empty())
+                            .map(String::from)
+                            .unwrap_or_else(|| maven_to_path(&lib.name));
                         items.push(MissFileInfo {
                             name: format!("{}:{}", lib.name, classifier_key),
-                            url: self
-                                .replace_library_url(&native_artifact.url, &native_artifact.path),
+                            url: self.replace_library_url(&native_artifact.url, &native_path),
                             sha1: native_artifact.sha1.clone(),
-                            path: native_artifact.path.clone(),
+                            path: native_path,
                         });
                     }
                 }

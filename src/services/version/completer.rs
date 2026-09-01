@@ -30,6 +30,8 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 
+use crate::util::lib_helper::maven_to_path;
+
 use crate::api::download::DownloadSourceManager;
 use crate::api::version::ResourceCompleter;
 use crate::error::Error;
@@ -230,7 +232,7 @@ impl ResourceCompleter for DefaultResourceCompleter {
             for artifact in self.get_library_artifacts(library) {
                 let local_path = Path::new(&self.game_root_path)
                     .join("libraries")
-                    .join(&artifact.path);
+                    .join(artifact.path.as_deref().unwrap());
                 if !local_path.is_file() {
                     return Ok(false);
                 }
@@ -254,7 +256,7 @@ impl DefaultResourceCompleter {
     ) -> Result<(), Error> {
         let local_path = Path::new(&self.game_root_path)
             .join("libraries")
-            .join(&artifact.path);
+            .join(artifact.path.as_deref().unwrap());
         let local_path_str = local_path.to_string_lossy().into_owned();
 
         // 源：Path.GetDirectoryName 非空时 Directory.CreateDirectory
@@ -297,7 +299,10 @@ impl DefaultResourceCompleter {
             }),
         };
         Err(Error::DownloadFailed {
-            message: format!("下载 {} 失败", artifact.path),
+            message: format!(
+                "下载 {} 失败",
+                artifact.path.as_deref().unwrap_or("unknown")
+            ),
             source: Some(source),
         })
     }
@@ -597,6 +602,7 @@ impl DefaultResourceCompleter {
 
     /// 收集库文件工件（源：GetLibraryArtifacts）：
     /// 主工件（规则允许时）+ natives 分类器（当前 OS/架构匹配时）。
+    /// path 为空时回退到 maven_to_path（MultiMC 格式库条目可能省略 path）。
     fn get_library_artifacts(&self, library: &Library) -> Vec<Artifact> {
         let mut artifacts = Vec::new();
 
@@ -612,7 +618,11 @@ impl DefaultResourceCompleter {
                 Some(rules) => should_include_library(rules),
             };
             if include {
-                artifacts.push(artifact.clone());
+                let mut a = artifact.clone();
+                if a.path.as_deref().unwrap_or("").is_empty() {
+                    a.path = Some(maven_to_path(&library.name));
+                }
+                artifacts.push(a);
             }
         }
 
@@ -623,7 +633,11 @@ impl DefaultResourceCompleter {
                 // 源：nativeClassifier.Replace("${arch}", SystemHelper.GetCurrentArch())
                 let classifier_key = native_classifier.replace("${arch}", get_current_arch());
                 if let Some(native_artifact) = classifiers.get(&classifier_key) {
-                    artifacts.push(native_artifact.clone());
+                    let mut a = native_artifact.clone();
+                    if a.path.as_deref().unwrap_or("").is_empty() {
+                        a.path = Some(maven_to_path(&library.name));
+                    }
+                    artifacts.push(a);
                 }
             }
         }

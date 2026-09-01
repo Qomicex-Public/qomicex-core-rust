@@ -364,8 +364,8 @@ impl LaunchExecutor {
                 if let Some(classifier_template) = natives.get(os_name) {
                     let key = classifier_template.replace("${arch}", get_current_arch());
                     if let Some(artifact) = classifiers.get(&key) {
-                        if !artifact.path.is_empty() {
-                            return artifact.path.clone();
+                        if let Some(p) = artifact.path.as_deref().filter(|p| !p.is_empty()) {
+                            return p.to_string();
                         }
                     }
                 }

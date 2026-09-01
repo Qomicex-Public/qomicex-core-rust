@@ -305,7 +305,8 @@ pub struct LibraryDownloads {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Artifact {
-    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     pub url: String,
     pub sha1: String,
     pub size: i64,
