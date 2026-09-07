@@ -254,10 +254,16 @@ impl LaunchExecutor {
     async fn launch_inner(&self, options: &LaunchOptions) -> Result<LaunchResult, Error> {
         let game_dir = self.effective_game_dir(options);
 
-        // 解压 natives（源：UnzipNatives(launchOptions)）
+        // 解压 natives（源：UnzipNatives(launchOptions)）；先上报细分阶段供宿主展示
+        if let Some(cb) = options.on_stage.as_ref() {
+            cb("natives");
+        }
         self.unzip_natives(options)?;
 
         // 拼接参数（源：SelectParams(launchOptions) —— jvm_args.rs 协同提供）
+        if let Some(cb) = options.on_stage.as_ref() {
+            cb("params");
+        }
         let params_str = self.select_params(options)?;
 
         // 源：FileName = NormalizeArg(launchOptions.JavaOptions?.JavaPath ?? "java")

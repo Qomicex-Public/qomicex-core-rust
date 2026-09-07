@@ -2,9 +2,16 @@
 //! - Public/Models/LaunchResult.cs：LaunchResult 类
 //! - Builder/CoreOptions.cs 内 JavaOptions / LaunchOptions 记录类
 
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
 
 use crate::models::auth::AuthOptions;
+
+/// 启动阶段回调：core 在解压 natives / 组装启动参数前以阶段名调用
+/// （"natives" / "params"），供宿主（启动器后端）上报细分启动进度。
+/// 不参与序列化，也不参与 `PartialEq` 比较（回调不影响语义）。
+pub type LaunchStageCallback = Arc<dyn Fn(&str) + Send + Sync>;
 
 /// 启动结果（源：Public/Models/LaunchResult.cs 的 LaunchResult 类）。
 ///
@@ -38,7 +45,7 @@ impl Default for JavaOptions {
 }
 
 /// 启动选项（源：Builder/CoreOptions.cs 内 LaunchOptions 记录类）。
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchOptions {
     pub version: String,
@@ -48,6 +55,9 @@ pub struct LaunchOptions {
     pub java_options: Option<JavaOptions>,
     pub auth_options: Option<AuthOptions>,
     pub game_root: Option<String>,
+    /// 启动细分阶段回调（非源字段，不参与序列化）。
+    #[serde(skip)]
+    pub on_stage: Option<LaunchStageCallback>,
 }
 
 impl Default for LaunchOptions {
@@ -60,6 +70,33 @@ impl Default for LaunchOptions {
             java_options: None,
             auth_options: None,
             game_root: None,
+            on_stage: None,
         }
+    }
+}
+
+impl std::fmt::Debug for LaunchOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LaunchOptions")
+            .field("version", &self.version)
+            .field("version_isolation", &self.version_isolation)
+            .field("join_server", &self.join_server)
+            .field("join_world", &self.join_world)
+            .field("java_options", &self.java_options)
+            .field("auth_options", &self.auth_options)
+            .field("game_root", &self.game_root)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for LaunchOptions {
+    fn eq(&self, other: &Self) -> bool {
+        self.version == other.version
+            && self.version_isolation == other.version_isolation
+            && self.join_server == other.join_server
+            && self.join_world == other.join_world
+            && self.java_options == other.java_options
+            && self.auth_options == other.auth_options
+            && self.game_root == other.game_root
     }
 }
