@@ -771,12 +771,25 @@ impl ForgeInstaller {
                 continue;
             }
             // 源：var libInfo = new LibInfo { FullName = libObj["name"]?.ToString() ?? string.Empty };
-            let lib_info = LibInfo::new(
+            let mut lib_info = LibInfo::new(
                 lib_obj
                     .get("name")
                     .map(json_node_to_string)
                     .unwrap_or_default(),
             );
+            // 偏离源：新版 install_profile.json（1.16.5+）自带 downloads.artifact.{url,sha1}
+            // 权威下载信息（源 C# 恒丢弃，仅靠逐源探测兜底）。探测在网络抖动时全失败会
+            // 回退最后基地址 libraries.minecraft.net，而该源不含 Forge 专属依赖（如
+            // error_prone_annotations 2.1.3）→ 404。此处优先采用权威 URL+sha1，
+            // 缺失时保持源行为（逐源探测）。
+            if let Some(artifact) = lib_obj.get("downloads").and_then(|d| d.get("artifact")) {
+                if let Some(url) = artifact.get("url").and_then(|v| v.as_str()) {
+                    lib_info.url = url.to_string();
+                }
+                if let Some(sha1) = artifact.get("sha1").and_then(|v| v.as_str()) {
+                    lib_info.hash = sha1.to_string();
+                }
+            }
             // 源：var libPath = Path.Combine(gameDir, "libraries", libInfo.Path);
             let lib_path = normalize_separators(&path_combine(
                 &path_combine(&self.game_dir, "libraries"),
@@ -1067,5 +1080,78 @@ fn path_combine(a: &str, b: &str) -> String {
         format!("{a}{b}")
     } else {
         format!("{a}{}{b}", std::path::MAIN_SEPARATOR)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 回归：install_profile.json 带 downloads.artifact.{url,sha1} 时必须采用
+    /// 权威 URL+sha1，不得丢弃后走逐源探测（1.16.5 Forge 安装 404 的根因）。
+    /// 断言选 sha1：无修复时 LibInfo.hash 恒空，探测分支不填 sha1 → 必失败。
+    #[tokio::test]
+    async fn miss_forge_libraries_uses_authoritative_url_and_sha1() {
+        let dir = std::env::temp_dir().join(format!("qml-forge-ip-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let installer = dir.join("installer.jar");
+        {
+            let file = std::fs::File::create(&installer).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts: zip::write::SimpleFileOptions = Default::default();
+            let profile = r#"{
+                "install": { "path": "net.minecraftforge:forge:1.16.5-36.2.42" },
+                "libraries": [
+                    {
+                        "name": "com.google.errorprone:error_prone_annotations:2.1.3",
+                        "downloads": {
+                            "artifact": {
+                                "path": "com/google/errorprone/error_prone_annotations/2.1.3/error_prone_annotations-2.1.3.jar",
+                                "url": "https://maven.minecraftforge.net/com/google/errorprone/error_prone_annotations/2.1.3/error_prone_annotations-2.1.3.jar",
+                                "sha1": "39b109f2cd352b2d71b52a3b5a1a9850e1dc304b",
+                                "size": 13704
+                            }
+                        }
+                    },
+                    { "name": "org.ow2.asm:asm:9.1" }
+                ]
+            }"#;
+            zip.start_file("install_profile.json", opts).unwrap();
+            std::io::Write::write_all(&mut zip, profile.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let installer_obj =
+            ForgeInstaller::new(0, dir.to_string_lossy().into_owned(), "1.16.5".into());
+        let miss = installer_obj
+            .get_miss_forge_libraries(installer.to_str().unwrap(), "1.16.5-Forge-36.2.42")
+            .await
+            .unwrap();
+
+        // errorprone 库不在本地 → 必须进缺失列表，且携带权威 URL+sha1
+        let ep = miss
+            .iter()
+            .find(|m| m.name.contains("error_prone_annotations"))
+            .expect("errorprone 应在缺失列表");
+        assert_eq!(
+            ep.url,
+            "https://maven.minecraftforge.net/com/google/errorprone/error_prone_annotations/2.1.3/error_prone_annotations-2.1.3.jar"
+        );
+        assert_eq!(ep.sha1, "39b109f2cd352b2d71b52a3b5a1a9850e1dc304b");
+
+        // 无 downloads 的库（asm）→ 保持源行为：url 走逐源探测（Official 双源，探测可达即 forge maven）
+        let asm = miss
+            .iter()
+            .find(|m| m.name.contains("asm"))
+            .expect("asm 应在缺失列表");
+        assert!(
+            asm.url.starts_with("https://maven.minecraftforge.net/")
+                || asm.url.starts_with("https://libraries.minecraft.net/")
+        );
+        assert!(asm.sha1.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
