@@ -34,7 +34,6 @@
 //! 错误语义（沿用安装器域既有定案）：ArgumentNullException / 参数校验 → Error::Params；
 //! JSON 解析（源 JsonException）→ Error::Http；文件 IO / 下载 → Error::DownloadFailed。
 
-use std::cmp::Ordering;
 use std::path::Path;
 
 use async_trait::async_trait;
@@ -656,24 +655,24 @@ impl LibInfo {
     }
 }
 
-/// 按库名去重并取组内版本最高者（源：`ForgeInstaller.CheckLibsVerStatic`，static）。
+/// 仅去除完全相同的库坐标（按 `FullName` 去重），保留所有不同版本。
 ///
-/// 分组键 = Name（"group.artifact"）；组内比较用 `string.Compare(lib.Version,
-/// newest.Version, Ordinal) > 0` 取更高版本（Rust String 按字节序比较，版本号均为
-/// ASCII，语义等价，见 util/lib_helper.rs 先例）；保留各组首次出现顺序（同 GroupBy）。
+/// ⚠️ 偏离源 `ForgeInstaller.CheckLibsVerStatic`（源按 Name 去重取最高 Version）：
+/// 源语义会丢弃 processor classpath 显式需要的旧版本（如 installertools 需要
+/// `org.ow2.asm:asm-commons:9.3`，而 libraries 里同时存在 9.5/9.7 → 源只留 9.7，
+/// 9.3 缺失后由 run_processor 另行下载，官方 base_url 含 `|` 多源时拼出畸形 URL 404）。
+/// 安装期按完整坐标去重保留全部版本，确保 processor classpath 依赖均已预下载。
 pub(crate) fn check_libs_ver_static(libs: Vec<LibInfo>) -> Vec<LibInfo> {
-    let mut best: Vec<(String, LibInfo)> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    let mut result: Vec<LibInfo> = Vec::new();
     for lib in libs {
-        match best.iter_mut().find(|(key, _)| key == &lib.name) {
-            Some((_, newest)) => {
-                if lib.version.cmp(&newest.version) == Ordering::Greater {
-                    *newest = lib;
-                }
-            }
-            None => best.push((lib.name.clone(), lib)),
+        if seen.iter().any(|f| f == &lib.full_name) {
+            continue;
         }
+        seen.push(lib.full_name.clone());
+        result.push(lib);
     }
-    best.into_iter().map(|(_, lib)| lib).collect()
+    result
 }
 
 /// 从版本/安装配置 JSON 提取库列表（源：`NeoForgeInstaller.GetLibrariesFromJson`，static）。

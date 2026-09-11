@@ -1008,21 +1008,20 @@ impl LibInfo {
     }
 }
 
-/// 库按 Name 去重取 Version 最大（源：`CheckLibsVerStatic`，internal static）。
+/// 仅去除完全相同的库坐标（按 `FullName` 去重），保留所有不同版本。
 ///
-/// LINQ GroupBy 按各键首次出现顺序输出；组内 `string.Compare(lib.Version, newest.Version,
-/// Ordinal) > 0` 严格大于才替换（相等保留先出现者）。Rust `>` 为字节序比较，与 Ordinal 一致。
+/// ⚠️ 偏离源 `CheckLibsVerStatic`（源按 Name 去重取最高 Version）：源语义会丢弃
+/// processor classpath 显式需要的旧版本（NeoForge 安装 404 的根因，详见
+/// neoforge/install.rs 同名函数注释）。安装期按完整坐标去重保留全部版本。
 fn check_libs_ver_static(libs: Vec<LibInfo>) -> Vec<LibInfo> {
+    let mut seen: Vec<String> = Vec::new();
     let mut result: Vec<LibInfo> = Vec::new();
     for lib in libs {
-        match result.iter_mut().find(|existing| existing.name == lib.name) {
-            Some(newest) => {
-                if lib.version > newest.version {
-                    *newest = lib;
-                }
-            }
-            None => result.push(lib),
+        if seen.iter().any(|f| f == &lib.full_name) {
+            continue;
         }
+        seen.push(lib.full_name.clone());
+        result.push(lib);
     }
     result
 }
@@ -1153,5 +1152,31 @@ mod tests {
         assert!(asm.sha1.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归：安装期库去重必须只去掉完全相同的坐标，保留所有不同版本。
+    /// 旧实现按 Name 去重取最高 Version，会丢弃 processor classpath 显式需要的旧版本
+    /// （NeoForge 需 asm-commons:9.3，libraries 里同时有 9.5/9.7 → 旧实现只留 9.7，
+    /// 9.3 缺失后由 run_processor 另行下载并拼出含 '|' 的畸形 URL → 404）。
+    #[test]
+    fn check_libs_ver_static_keeps_all_distinct_versions() {
+        let libs = vec![
+            LibInfo::new("org.ow2.asm:asm-commons:9.3@jar".to_string()),
+            LibInfo::new("org.ow2.asm:asm-commons:9.5@jar".to_string()),
+            LibInfo::new("org.ow2.asm:asm-commons:9.7@jar".to_string()),
+            // 完全相同的坐标 → 只保留一条
+            LibInfo::new("org.ow2.asm:asm-commons:9.3@jar".to_string()),
+            LibInfo::new("net.neoforged.installertools:installertools:2.1.2".to_string()),
+        ];
+        let deduped = check_libs_ver_static(libs);
+
+        // 三个不同版本全部保留，重复的 9.3 只留一条
+        assert_eq!(deduped.len(), 4);
+        let versions: Vec<&str> = deduped
+            .iter()
+            .filter(|l| l.name == "org.ow2.asm.asm-commons")
+            .map(|l| l.version.as_str())
+            .collect();
+        assert_eq!(versions, vec!["9.3@jar", "9.5@jar", "9.7@jar"]);
     }
 }

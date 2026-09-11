@@ -138,18 +138,11 @@ impl ForgeInstallerBase {
             });
         }
 
-        // 源：缺失时下载 `{BaseUrl}/{group→/}/{artifact}/{version}/{artifact}-{version}.jar`
+        // 缺失时下载：URL 复用 `maven_to_path`（正确剥离 `@type`、拼接 classifier），
+        // 前缀 base_url；base_url 含 `|` 多源时逐源 HEAD 探测首个可达者。
         let jar_path = Self::resolve_library_path(game_dir, &jar)?;
         if !Path::new(&jar_path).is_file() {
-            let download_url = format!(
-                "{}/{}/{}/{}/{}-{}.jar",
-                self.base_url,
-                jar_parts[0].replace('.', "/"),
-                jar_parts[1],
-                jar_parts[2],
-                jar_parts[1],
-                jar_parts[2]
-            );
+            let download_url = Self::resolve_download_url(&self.base_url, &jar).await;
             let client = InstallerBase::create_http_client();
             InstallerBase::download_file_async(&client, &download_url, &jar_path, 5).await?;
         }
@@ -168,15 +161,7 @@ impl ForgeInstallerBase {
                 }
                 let cp_jar_path = Self::resolve_library_path(game_dir, &cp_str)?;
                 if !Path::new(&cp_jar_path).is_file() {
-                    let download_url = format!(
-                        "{}/{}/{}/{}/{}-{}.jar",
-                        self.base_url,
-                        cp_parts[0].replace('.', "/"),
-                        cp_parts[1],
-                        cp_parts[2],
-                        cp_parts[1],
-                        cp_parts[2]
-                    );
+                    let download_url = Self::resolve_download_url(&self.base_url, &cp_str).await;
                     let client = InstallerBase::create_http_client();
                     InstallerBase::download_file_async(&client, &download_url, &cp_jar_path, 5)
                         .await?;
@@ -311,6 +296,32 @@ impl ForgeInstallerBase {
             &join_path(game_dir, "libraries"),
             &normalized_relative_path,
         ))
+    }
+
+    /// 由 Maven 坐标构造下载 URL：`{base_url}/{maven_to_path(coord)}`。
+    ///
+    /// 复用 `maven_to_path` 而非手工拼 `group/artifact/version/artifact-version.jar`，
+    /// 以保证与本地路径完全一致（正确剥离 `@type` 后缀、拼接 classifier）。
+    /// 手工拼接会把 `org.ow2.asm:asm-commons:9.3@jar` 拼成
+    /// `…/9.3@jar/asm-commons-9.3@jar.jar`（错误 URL）。
+    ///
+    /// `base_url` 可能含 `|` 分隔的多备选源（Forge/NeoForge 官方源）；此时逐源拼接
+    /// `{base}/{path}` 并 HEAD 探测，取首个可达者；全部不可达时保留最后拼接结果
+    /// （与 get_miss_*_libraries 的多源语义一致）。
+    pub(crate) async fn resolve_download_url(base_url: &str, maven_coordinate: &str) -> String {
+        let path = InstallerBase::maven_to_path(maven_coordinate);
+        if base_url.contains('|') {
+            let mut url = format!("{base_url}/{path}");
+            for base in base_url.split('|') {
+                url = format!("{base}/{path}");
+                if Self::is_file_url_available_async(&url, 10).await {
+                    break;
+                }
+            }
+            url
+        } else {
+            format!("{base_url}/{path}")
+        }
     }
     /// 解析 processor 输出键为本地文件路径（源：`internal string
     /// ResolveProcessorOutputPath(string outputKey)`）。
@@ -642,6 +653,40 @@ mod tests {
         assert!(
             !p.starts_with("versions/1.21.11/"),
             "不应回落到共享 vanilla 目录: {p}"
+        );
+    }
+
+    /// 回归：processor jar/classpath 的下载 URL 必须复用 `maven_to_path`，
+    /// 正确剥离 `@type` 后缀。旧实现手工拼 `{v}/{a}-{v}.jar`，会把
+    /// `org.ow2.asm:asm-commons:9.3@jar` 拼成 `…/9.3@jar/asm-commons-9.3@jar.jar`（404）。
+    #[tokio::test]
+    async fn resolve_download_url_strips_at_suffix() {
+        let base = "https://maven.neoforged.net/releases";
+        let url =
+            ForgeInstallerBase::resolve_download_url(base, "org.ow2.asm:asm-commons:9.3@jar").await;
+        assert_eq!(
+            url,
+            "https://maven.neoforged.net/releases/org/ow2/asm/asm-commons/9.3/asm-commons-9.3.jar"
+        );
+        assert!(!url.contains("@jar"), "URL 不应残留 @jar: {url}");
+
+        // 无 @ 的普通坐标
+        let url2 =
+            ForgeInstallerBase::resolve_download_url(base, "net.md-5:SpecialSource:1.11.0").await;
+        assert_eq!(
+            url2,
+            "https://maven.neoforged.net/releases/net/md-5/SpecialSource/1.11.0/SpecialSource-1.11.0.jar"
+        );
+
+        // classifier（4 段）坐标
+        let url3 = ForgeInstallerBase::resolve_download_url(
+            base,
+            "net.minecraftforge:forge:26.2-65.1.1:client",
+        )
+        .await;
+        assert_eq!(
+            url3,
+            "https://maven.neoforged.net/releases/net/minecraftforge/forge/26.2-65.1.1/forge-26.2-65.1.1-client.jar"
         );
     }
 
