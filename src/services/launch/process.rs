@@ -623,15 +623,20 @@ where
     R: tokio::io::AsyncRead + Unpin,
 {
     let mut reader = tokio::io::BufReader::new(&mut pipe);
-    let mut line = String::new();
+    let mut buf: Vec<u8> = Vec::new();
     let tx = game_log_tx();
     loop {
-        line.clear();
-        match reader.read_line(&mut line).await {
+        buf.clear();
+        // 按字节读行（read_until），不要求合法 UTF-8：游戏输出里的 mod 文件名等
+        // 常为系统代码页编码（如 GBK），严格 UTF-8 的 read_line 遇非法字节会返回
+        // InvalidData，读取线程随即 break → 此后所有输出丢失（日志窗口中途冻结，
+        // 游戏本体仍正常运行）。lossy 解码把非法字节替换为 U+FFFD，读取永不中断。
+        match reader.read_until(b'\n', &mut buf).await {
             // 0 = EOF；读错误同样结束（源读线程异常不向外传播）
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                let trimmed = line.trim_end_matches(['\r', '\n']);
+                let text = String::from_utf8_lossy(&buf);
+                let trimmed = text.trim_end_matches(['\r', '\n']);
                 if !trimmed.is_empty() {
                     if is_stdout {
                         println!("[OUT] {trimmed}");
@@ -878,6 +883,48 @@ mod tests {
         assert!(s.len() >= 24);
         assert!(s.ends_with('Z'));
         assert!(s.contains('.'));
+    }
+
+    /// 回归：游戏输出含非 UTF-8 字节（如 GBK 编码的 mod 文件名）时，
+    /// forward_pipe 必须继续读取后续行，不得中途停止。
+    /// 修复前用 read_line（严格 UTF-8）：第 3 行非法字节 → InvalidData → break，
+    /// 第 4/5 行永远收不到；修复后 read_until + lossy 解码，全部 5 行到达。
+    #[tokio::test]
+    async fn forward_pipe_survives_invalid_utf8() {
+        let mut rx = subscribe_game_log();
+        let pid = 987_654;
+
+        let mut data: Vec<u8> = Vec::new();
+        data.extend_from_slice(b"line1 ok\n");
+        data.extend_from_slice(b"line2 ok\n");
+        // GBK 字节（非 UTF-8）：模拟 [JEI<中文>] 文件名
+        data.extend_from_slice(b"[JEI]\xCE\xD2\xB5\xC4\xCA\xC0\xBD\xE7.jar\n");
+        data.extend_from_slice(b"line4 after-bad\n");
+        data.extend_from_slice(b"line5 after-bad\n");
+
+        forward_pipe(std::io::Cursor::new(data), true, pid).await;
+
+        let mut got: Vec<String> = Vec::new();
+        while let Ok(line) = rx.try_recv() {
+            if line.pid == pid {
+                got.push(line.text);
+            }
+        }
+        assert_eq!(got.len(), 5, "非 UTF-8 行后仍应读到全部 5 行: {got:?}");
+        assert_eq!(got[0], "line1 ok");
+        assert_eq!(got[3], "line4 after-bad", "坏字节行之后的行必须到达");
+        assert_eq!(got[4], "line5 after-bad");
+        // 非法字节以 U+FFFD 替换，行其余内容保留
+        assert!(
+            got[2].contains("JEI"),
+            "坏字节行的可解码部分应保留: {:?}",
+            got[2]
+        );
+        assert!(
+            got[2].contains('\u{FFFD}'),
+            "非法字节应替换为 U+FFFD: {:?}",
+            got[2]
+        );
     }
 
     /// 退出事件总线连通性：订阅后发送，接收方应按序收到事件
