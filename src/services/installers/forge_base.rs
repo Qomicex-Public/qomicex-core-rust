@@ -501,7 +501,13 @@ impl ForgeInstallerBase {
     /// 正则 `\[(.+?)\]`（源 `"\\[(.+?)\\]"`，非贪婪）匹配全部内联坐标，逐个替换为
     /// `ResolveLibraryPath(gameDir, 组1)` 结果（源 `Replace(match.Value, replacement, Ordinal)`
     /// 全局替换，Rust `str::replace` 同语义；遍历基于原始 value 的匹配集，替换作用于 result，
-    /// 与源一致——替换结果中新增的 `[...]` 不会被再次匹配）。坐标非法 → 报错传播（源 throw）。
+    /// 与源一致——替换结果中新增的 `[...]` 不会被再次匹配）。
+    ///
+    /// ⚠️ 偏离源（修复）：仅替换**形如 Maven 坐标**（`:` 分段 ≥3 且无空段）的方括号片段。
+    /// 替换发生在占位符展开之后，版本目录名等路径片段会含方括号（整合包名如
+    /// `Better MC [NEOFORGE] BMC5` 注入 `{MINECRAFT_JAR}`/`{BINPATCH}` 路径），源无条件
+    /// 把任意 `[...]` 当坐标 → `无效的Maven坐标: NEOFORGE` → 安装失败。此处对非坐标片段
+    /// 原样保留（不解析、不报错）。
     pub(crate) fn replace_inline_maven_coordinates(&self, value: &str) -> Result<String, Error> {
         if value.trim().is_empty() {
             return Ok(value.to_string());
@@ -510,6 +516,13 @@ impl ForgeInstallerBase {
         let bracket_re = bracket_regex();
         for capture in bracket_re.captures_iter(value) {
             let coordinate = capture.get(1).map(|g| g.as_str()).unwrap_or_default();
+            // 结构校验（≥3 段且无空段）近似 maven_to_path 的合法性判定；不调用
+            // maven_to_path 以避免对路径方括号（非坐标）打印误导性的「无效的Maven坐标」日志。
+            if coordinate.split(':').count() < 3
+                || coordinate.split(':').any(|p| p.trim().is_empty())
+            {
+                continue;
+            }
             let replacement = Self::resolve_library_path(&self.game_dir, coordinate)?;
             let matched = capture.get(0).map(|g| g.as_str()).unwrap_or_default();
             result = result.replace(matched, &replacement);
@@ -872,6 +885,42 @@ mod tests {
                 .get(..r"C:\Games\.minecraft".len())
                 .is_some_and(|h| h.eq_ignore_ascii_case(r"C:\Games\.minecraft")),
             "应以 gameDir 为前缀：{populated_key}"
+        );
+    }
+
+    #[test]
+    fn inline_maven_replacement_ignores_brackets_in_version_dir_name() {
+        // 回归：整合包名含方括号（如 `Better MC [NEOFORGE] BMC5`）时，版本目录名会经
+        // `{MINECRAFT_JAR}`/`{BINPATCH}` 等占位符注入 processor 参数。源
+        // ReplaceInlineMavenCoordinates 把任意 `[...]` 当 Maven 坐标 →
+        // `无效的Maven坐标: NEOFORGE` → `处理NeoForge处理器失败`。修复后仅替换能解析
+        // 为 Maven 坐标的片段，路径中的 `[NEOFORGE]` 原样保留。
+        let base = base_with(r"C:\.minecraft");
+        let lzma_path =
+            r"C:\.minecraft\libraries\net\neoforged\neoforge\Better MC [NEOFORGE] BMC5\client.lzma";
+        let ip_obj = serde_json::json!({
+            "data": {
+                "BINPATCH": { "client": lzma_path },
+                "PATCHED": { "client": "[net.neoforged:neoforge:21.1.176:client]" }
+            }
+        });
+        let processor = serde_json::json!({
+            "args": ["--clean", "{MINECRAFT_JAR}", "--apply", "{BINPATCH}", "--output", "{PATCHED}"]
+        });
+
+        let args = base
+            .build_processor_args(ip_obj.as_object().unwrap(), processor.as_object().unwrap())
+            .expect("含方括号的版本目录名不应导致安装失败");
+
+        // 路径中的 `[NEOFORGE]` 原样保留，不得被当作坐标解析/替换
+        assert!(
+            args.contains("[NEOFORGE]"),
+            "版本目录名中的方括号应原样保留: {args}"
+        );
+        // 真正的内联 Maven 坐标仍须被解析为绝对库路径
+        assert!(
+            args.contains("neoforge-21.1.176-client.jar"),
+            "合法内联坐标仍应被解析: {args}"
         );
     }
 
