@@ -1,7 +1,7 @@
 //! B2 批次验证：工具层（MurmurHash2 / NBT / 时间解析 / 库坐标 / class 常量池）
 //! MurmurHash2 向量由 dotnet 10 参考实现（与源同逻辑）生成
 
-use qomicex_core_rust::models::version_metadata::Library;
+use qomicex_core_rust::models::version_metadata::{Artifact, Library, LibraryDownloads};
 use qomicex_core_rust::util::file_helper::normalize_separators;
 use qomicex_core_rust::util::json_helper::{format_minecraft_datetime, parse_minecraft_datetime};
 use qomicex_core_rust::util::lib_helper::{
@@ -132,6 +132,97 @@ fn check_libs_ver_keeps_highest() {
     let deduped = check_libs_ver(vec![lib("g:a:1.0"), lib("g:a:2.0"), lib("g:a:1.5")]);
     assert_eq!(deduped.len(), 1);
     assert_eq!(deduped[0].name, "g:a:2.0");
+}
+
+/// 回归（1.16.5 启动 `Failed to locate library: lwjgl.dll`）：
+/// Mojang 官方 JSON 为同一坐标列出两条条目——普通 jar 与 natives 分类器 jar，
+/// name 完全相同（如 org.lwjgl:lwjgl:3.2.2）。旧分组键只按 name 分组，两者版本相同
+/// → 折叠成一条并保留先出现的普通条目 → natives 条目丢失 → natives jar 永不下载。
+/// 修复后按 natives 角色分组，两者各自成组、都保留。
+#[test]
+fn check_libs_ver_keeps_natives_twin_with_same_maven_name() {
+    let plain = Library {
+        name: "org.lwjgl:lwjgl:3.2.2".to_string(),
+        downloads: Some(LibraryDownloads {
+            artifact: Some(Artifact {
+                path: Some("org/lwjgl/lwjgl/3.2.2/lwjgl-3.2.2.jar".to_string()),
+                url: "https://example.invalid/lwjgl-3.2.2.jar".to_string(),
+                sha1: "a".to_string(),
+                size: 1,
+            }),
+            classifiers: None,
+        }),
+        rules: None,
+        natives: None,
+        extract: None,
+    };
+    let native = Library {
+        name: "org.lwjgl:lwjgl:3.2.2".to_string(),
+        downloads: Some(LibraryDownloads {
+            artifact: Some(Artifact {
+                path: Some("org/lwjgl/lwjgl/3.2.2/lwjgl-3.2.2.jar".to_string()),
+                url: "https://example.invalid/lwjgl-3.2.2.jar".to_string(),
+                sha1: "a".to_string(),
+                size: 1,
+            }),
+            classifiers: Some(
+                [(
+                    "natives-windows".to_string(),
+                    Artifact {
+                        path: Some(
+                            "org/lwjgl/lwjgl/3.2.2/lwjgl-3.2.2-natives-windows.jar".to_string(),
+                        ),
+                        url: "https://example.invalid/lwjgl-3.2.2-natives-windows.jar".to_string(),
+                        sha1: "b".to_string(),
+                        size: 2,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            ),
+        }),
+        rules: None,
+        natives: Some(
+            [("windows".to_string(), "natives-windows".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+        extract: None,
+    };
+
+    let deduped = check_libs_ver(vec![plain, native]);
+    assert_eq!(
+        deduped.len(),
+        2,
+        "普通条目与同名 natives 条目必须都保留（旧实现折叠成 1 条）"
+    );
+    assert_eq!(deduped.iter().filter(|l| is_natives(l)).count(), 1);
+}
+
+/// 回归：natives 角色只加后缀，不改变普通条目的按版本取高语义
+/// （1.12.2 的 lwjgl-platform 2.9.4 必须仍胜过 2.9.2）。
+#[test]
+fn check_libs_ver_still_upgrades_natives_version() {
+    let mk = |v: &str| Library {
+        name: format!("org.lwjgl.lwjgl:lwjgl-platform:{v}"),
+        downloads: None,
+        rules: None,
+        natives: Some(
+            [("windows".to_string(), "natives-windows".to_string())]
+                .into_iter()
+                .collect(),
+        ),
+        extract: None,
+    };
+    let deduped = check_libs_ver(vec![
+        mk("2.9.4-nightly-20150209"),
+        mk("2.9.2-nightly-20140822"),
+    ]);
+    assert_eq!(deduped.len(), 1);
+    assert_eq!(
+        deduped[0].name,
+        "org.lwjgl.lwjgl:lwjgl-platform:2.9.4-nightly-20150209"
+    );
 }
 
 #[test]

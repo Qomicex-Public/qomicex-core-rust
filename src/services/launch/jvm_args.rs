@@ -37,7 +37,8 @@ use crate::models::version_metadata::Library;
 use crate::services::version::locator::DefaultVersionLocator;
 use crate::util::file_helper::format_dir_path;
 use crate::util::lib_helper::{
-    check_libs_ver, is_class_path, is_rule_suitable, maven_to_path, remove_conflicting_libraries,
+    check_libs_ver, dedup_libs_by_path, is_class_path, is_rule_suitable, maven_to_path,
+    remove_conflicting_libraries,
 };
 use crate::util::platform::{generate_uuid, get_separator};
 
@@ -363,7 +364,14 @@ impl LaunchExecutor {
         }
 
         // 源：LibHelper.RemoveConflictingLibraries(LibHelper.CheckLibsVer(LibList))
-        Ok(remove_conflicting_libraries(check_libs_ver(lib_list)))
+        // ⚠️ 偏差（bug 修复）：check_libs_ver 现按 natives 角色分组（lib_helper.rs
+        // get_lib_group_key），使 natives 分类器条目不再被普通条目折叠——但 Mojang 官方
+        // JSON（如 1.16.5）的 natives 条目同样带 artifact，且与普通条目指向**同一个 jar**，
+        // 两者都满足 is_class_path → classpath 会出现重复路径。再按路径去重，保证
+        // 每个 jar 只出现一次（保留首次出现顺序）。
+        Ok(dedup_libs_by_path(remove_conflicting_libraries(
+            check_libs_ver(lib_list),
+        )))
     }
 
     /// 获取主类名（源：GetMainClass，540-554 行）

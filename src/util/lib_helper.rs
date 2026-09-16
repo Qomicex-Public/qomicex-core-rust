@@ -112,7 +112,7 @@ pub fn is_rules_suitable(rules: &[Rule]) -> bool {
 pub fn check_libs_ver(libs: Vec<Library>) -> Vec<Library> {
     let mut best: Vec<(String, Library)> = Vec::new();
     for lib in libs {
-        let key = get_lib_group_key(&lib.name);
+        let key = get_lib_group_key(&lib);
         match best.iter_mut().find(|(k, _)| *k == key) {
             Some((_, newest)) => {
                 if version_sort_integer(&get_lib_version(&lib), &get_lib_version(newest)) > 0 {
@@ -123,6 +123,23 @@ pub fn check_libs_ver(libs: Vec<Library>) -> Vec<Library> {
         }
     }
     best.into_iter().map(|(_, lib)| lib).collect()
+}
+
+/// 按解析后的库文件路径去重（保留首次出现）。
+///
+/// 用于 classpath：同一坐标的「普通 jar 条目」与「natives 分类器条目」共享同一个
+/// `downloads.artifact` 路径（Mojang 官方 JSON 的写法，见 `get_lib_group_key` 说明）。
+/// 二者都需保留（natives 条目供解压原生库），但 classpath 只需出现一次该 jar，
+/// 否则命令行长串重复且徒增 Windows 命令行长度压力。
+pub fn dedup_libs_by_path(libs: Vec<Library>) -> Vec<Library> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut result: Vec<Library> = Vec::new();
+    for lib in libs {
+        if seen.insert(maven_to_path(&lib.name)) {
+            result.push(lib);
+        }
+    }
+    result
 }
 
 /// 移除 -all 聚合库与其独立拆分库之间的版本冲突（对应 LibHelper.RemoveConflictingLibraries）
@@ -195,15 +212,51 @@ pub fn get_lib_version(library: &Library) -> String {
 }
 
 /// 库分组键（对应 LibHelper.GetLibGroupKey，private）：group:artifact[:classifier]
-fn get_lib_group_key(name: &str) -> String {
+///
+/// ⚠️ 偏差（bug 修复）：源只按 Maven 名分组，而 Mojang 官方 JSON（如 1.16.5）
+/// 为同一坐标列出**两条**条目——普通 jar 与 natives 分类器 jar，二者 name 完全相同。
+/// 源按名分组会把两者折叠成一条（版本相同 → 保留先出现的普通条目），导致
+/// natives 分类器条目丢失 → `GetLibraryCheckItems` 永不产出 natives jar →
+/// 缺失扫描漏报 → natives jar 从不下载 → 游戏启动 `Failed to locate library: lwjgl.dll`。
+/// 修复：把 natives 角色并入分组键，使普通条目与 natives 条目各成一组、互不折叠
+/// （分组键的 classifier 语义在源中即已存在，此处只是把 natives 映射中的 classifier 一并纳入）。
+fn get_lib_group_key(library: &Library) -> String {
+    let name = library.name.as_str();
     let parts: Vec<&str> = name.split(':').collect();
-    if parts.len() < 3 {
-        return name.to_string();
-    }
-    let mut key = format!("{}:{}", parts[0], parts[1]);
-    if parts.len() >= 4 {
-        key.push(':');
-        key.push_str(parts[3]);
+    let mut key = if parts.len() < 3 {
+        name.to_string()
+    } else {
+        let mut key = format!("{}:{}", parts[0], parts[1]);
+        if parts.len() >= 4 {
+            key.push(':');
+            key.push_str(parts[3]);
+        }
+        key
+    };
+
+    // natives 角色后缀：优先取 natives 映射值（如 windows→natives-windows），
+    // 缺失时回退 downloads.classifiers 的键集合；排序保证跨平台/跨次运行稳定。
+    // 仅 natives 角色条目加后缀——普通 classpath 条目保持源的纯名分组语义不变，
+    // 故同一 natives 库的不同版本仍按版本取高（如 1.12.2 lwjgl-platform 2.9.4 > 2.9.2）。
+    if is_natives(library) {
+        let mut roles: Vec<String> = library
+            .natives
+            .as_ref()
+            .map(|m| m.values().cloned().collect())
+            .unwrap_or_default();
+        if roles.is_empty()
+            && let Some(classifiers) = library
+                .downloads
+                .as_ref()
+                .and_then(|d| d.classifiers.as_ref())
+        {
+            roles = classifiers.keys().cloned().collect();
+        }
+        if !roles.is_empty() {
+            roles.sort();
+            key.push('\u{1}');
+            key.push_str(&roles.join(","));
+        }
     }
     key
 }
