@@ -7,9 +7,10 @@
 //! - `InstallerFactory` 的 3 个 create_modpack 方法签名：src/api/installer.rs（B9）
 //! - Modrinth API 客户端：src/services/expansion/modrinth/query.rs（B13，并行批次已存在，本文件未直接引用）
 //!
-//! 流程要点（逐字保留源）：
-//! - `InstallAsync`：仅解压整合包 `override/` 目录（固定前缀，非 manifest 配置）到版本目录
-//!   （版本隔离时 `{gameDir}/versions/{versionId}`），返回 CompletedTask；
+//! 流程要点：
+//! - `InstallAsync`：解压整合包 `overrides/` 目录（固定前缀，非 manifest 配置）到版本目录
+//!   （版本隔离时 `{gameDir}/versions/{versionId}`），再叠加 `client-overrides/`
+//!   （后者覆盖前者；`server-overrides/` 仅服务端生效，客户端不释放），返回 CompletedTask；
 //!   缺失库查询恒返回空列表（依赖下载不在本安装器，与源一致）；
 //! - `GetModpackInfo(versionId)`：读 zip 内 `modrinth.index.json`，校验 `game == "minecraft"`；
 //!   解析 name/summary/versionId；dependencies 对象逐键：`minecraft` → GameVersion，
@@ -64,10 +65,16 @@ impl ModrinthModpackInstaller {
     /// 解析 zip 内 `modrinth.index.json` 并提取名称/描述/版本/游戏版本/加载器/文件列表；
     /// 文件路径已按版本隔离规则拼接 `{gameDir}` 或 `{gameDir}/versions/{versionId}` 基路径。
 
-    /// 解压整合包 override 目录到版本目录（源：`ReleaseFiles(string versionId)`）。
+    /// 解压整合包覆盖目录到版本目录（源：`ReleaseFiles(string versionId)`）。
     ///
-    /// 与 CurseForge 版差异：目录前缀固定为 `override/`（非 manifest 配置），
-    /// 逐条保留源逻辑（大小写不敏感匹配、目录条目建目录、文件条目覆盖写入）。
+    /// ⚠️ 与源的差异（有意修正）：C# 源固定匹配 `override/`（单数），而 Modrinth 规范
+    /// （support.modrinth.com/en/articles/8802351）为 `overrides/`——官方包与本站导出
+    /// 均用复数，此前实现会静默跳过全部覆盖文件（配置/options.txt/资源包全丢）。
+    /// 另按规范叠加客户端层 `client-overrides/`（后写覆盖先写）；
+    /// `server-overrides/` 仅服务端生效，客户端安装不释放。
+    ///
+    /// 与 CurseForge 版差异：目录前缀固定（非 manifest 配置），逐条保留源逻辑
+    /// （大小写不敏感匹配、目录条目建目录、文件条目覆盖写入）。
     fn release_files(&self, version_id: &str) -> Result<(), Error> {
         // 源：var versionDir = _versionIsolation ? Path.Combine(_gameDir, "versions", versionId) : _gameDir;
         let version_dir = if self.version_isolation {
@@ -84,21 +91,32 @@ impl ModrinthModpackInstaller {
         let mut archive =
             zip::ZipArchive::new(file).map_err(|e| zip_io_err(&self.modpack_file_path, e))?;
 
+        // 规范层次：overrides/ 之后叠加 client-overrides/（后者覆盖前者）
+        for prefix in ["overrides/", "client-overrides/"] {
+            Self::extract_prefixed(&mut archive, &version_dir, prefix, &self.modpack_file_path)?;
+        }
+        Ok(())
+    }
+
+    /// 把 zip 内 `{prefix}**` 条目释放到 `version_dir`（大小写不敏感匹配）。
+    fn extract_prefixed(
+        archive: &mut zip::ZipArchive<std::fs::File>,
+        version_dir: &std::path::Path,
+        prefix: &str,
+        zip_path: &str,
+    ) -> Result<(), Error> {
         for i in 0..archive.len() {
-            let mut entry = archive
-                .by_index(i)
-                .map_err(|e| zip_io_err(&self.modpack_file_path, e))?;
+            let mut entry = archive.by_index(i).map_err(|e| zip_io_err(zip_path, e))?;
             let full_name = entry.name();
-            // 源：entry.FullName.StartsWith("override/", OrdinalIgnoreCase)
-            const PREFIX: &str = "override/";
+            // 源：entry.FullName.StartsWith(prefix, OrdinalIgnoreCase)
             if !full_name
-                .get(..PREFIX.len())
-                .is_some_and(|head| head.eq_ignore_ascii_case(PREFIX))
+                .get(..prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
             {
                 continue;
             }
-            // 源：string relativePath = entry.FullName.Substring("override/".Length);
-            let relative_path = &full_name[PREFIX.len()..];
+            // 源：string relativePath = entry.FullName.Substring(prefix.Length);
+            let relative_path = &full_name[prefix.len()..];
             // 源：string destinationPath = Path.Combine(versionDir, relativePath);
             let destination_path = version_dir.join(relative_path);
 
@@ -107,19 +125,16 @@ impl ModrinthModpackInstaller {
             let last_segment = full_name.rsplit('/').next().unwrap_or("");
             if last_segment.is_empty() {
                 // 源：Directory.CreateDirectory(destinationPath)
-                std::fs::create_dir_all(&destination_path)
-                    .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
+                std::fs::create_dir_all(&destination_path).map_err(|e| file_io_err(zip_path, e))?;
             } else {
                 // 源：Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!) 后
                 //      entry.ExtractToFile(destinationPath, overwrite: true)
                 if let Some(parent) = destination_path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
+                    std::fs::create_dir_all(parent).map_err(|e| file_io_err(zip_path, e))?;
                 }
                 let mut out = std::fs::File::create(&destination_path)
-                    .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
-                std::io::copy(&mut entry, &mut out)
-                    .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
+                    .map_err(|e| file_io_err(zip_path, e))?;
+                std::io::copy(&mut entry, &mut out).map_err(|e| file_io_err(zip_path, e))?;
             }
         }
         Ok(())
@@ -129,7 +144,7 @@ impl ModrinthModpackInstaller {
 #[async_trait]
 impl Installer for ModrinthModpackInstaller {
     /// 执行安装（源：`Task IInstaller.InstallAsync(string versionId, string inheritsFromJson,
-    /// string? para1..para4)`；para1-4 均未使用——本安装器只解压 override 目录）。
+    /// string? para1..para4)`；para1-4 均未使用——本安装器只释放 overrides 覆盖目录）。
     async fn install(
         &self,
         version_id: &str,
@@ -187,5 +202,91 @@ fn file_io_err(path: &str, e: std::io::Error) -> Error {
     Error::Params {
         message: format!("读取ZIP失败（{path}）：{e}"),
         source: Some(Box::new(e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// 构造含 `overrides/` + `client-overrides/` + `server-overrides/` 的 mrpack，
+    /// 断言只释放前两层且 client 层覆盖 overrides 层（Modrinth 规范）。
+    #[test]
+    fn release_files_extracts_spec_override_layers() {
+        let root = std::env::temp_dir().join(format!("qcore-mrpack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("src");
+        std::fs::create_dir_all(src.join("overrides/config")).unwrap();
+        std::fs::create_dir_all(src.join("overrides/mods")).unwrap();
+        std::fs::create_dir_all(src.join("client-overrides/config")).unwrap();
+        std::fs::create_dir_all(src.join("server-overrides/config")).unwrap();
+        std::fs::write(src.join("overrides/config/opt.toml"), b"base=1").unwrap();
+        std::fs::write(src.join("overrides/options.txt"), b"base-opts").unwrap();
+        std::fs::write(src.join("overrides/mods/keep.jar"), b"jar").unwrap();
+        // client 层覆盖 overrides 层的同名文件；server 层不应被释放
+        std::fs::write(src.join("client-overrides/config/opt.toml"), b"client=1").unwrap();
+        std::fs::write(src.join("server-overrides/config/opt.toml"), b"server=1").unwrap();
+        std::fs::write(src.join("modrinth.index.json"), b"{}").unwrap();
+
+        let zip_path = root.join("pack.mrpack");
+        let file = std::fs::File::create(&zip_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts = zip::write::SimpleFileOptions::default();
+        fn add_tree(
+            zip: &mut zip::ZipWriter<std::fs::File>,
+            dir: &std::path::Path,
+            base: &str,
+            opts: &zip::write::SimpleFileOptions,
+        ) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                let rel = if base.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{base}/{name}")
+                };
+                if path.is_dir() {
+                    zip.add_directory(format!("{rel}/"), *opts).unwrap();
+                    add_tree(zip, &path, &rel, opts);
+                } else {
+                    zip.start_file(rel, *opts).unwrap();
+                    zip.write_all(&std::fs::read(&path).unwrap()).unwrap();
+                }
+            }
+        }
+        add_tree(&mut zip, &src, "", &opts);
+        zip.finish().unwrap();
+
+        // 版本隔离：释放到 {gameDir}/versions/{versionId}
+        let game_dir = root.join("game");
+        let inst = ModrinthModpackInstaller::new(
+            game_dir.to_str().unwrap(),
+            true,
+            zip_path.to_str().unwrap(),
+        );
+        inst.release_files("1.20.1-fabric-0.16.0").unwrap();
+        let vdir = game_dir.join("versions").join("1.20.1-fabric-0.16.0");
+        assert_eq!(
+            std::fs::read_to_string(vdir.join("config/opt.toml")).unwrap(),
+            "client=1",
+            "client-overrides/ 应覆盖 overrides/ 同名文件"
+        );
+        assert_eq!(
+            std::fs::read_to_string(vdir.join("options.txt")).unwrap(),
+            "base-opts"
+        );
+        assert!(vdir.join("mods/keep.jar").is_file());
+        assert!(
+            !vdir.join("modrinth.index.json").exists(),
+            "清单文件不应被释放"
+        );
+        assert!(
+            !game_dir.join("config/opt.toml").exists(),
+            "server-overrides/ 不应被释放"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
