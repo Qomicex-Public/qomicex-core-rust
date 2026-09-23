@@ -125,12 +125,19 @@ fn known_version(hash: &str) -> Option<&'static str> {
 
 /// 从 JAR 文件读取 Minecraft 版本号
 /// 依次尝试：JAR 内 version.json → Minecraft.class 常量池 → MinecraftServer.class 常量池
+/// → 已知 SHA1 映射表（流式哈希，不整包读入）
+///
+/// 第 4 级（SHA1）是成本最高的一级：要读整个 jar。启动器把它按版本目录缓存
+/// （`qomicex-backend` 的 `services::scan_cache.rs`），只在缓存未命中时才走到这里。
 pub fn from_jar(jar_path: &str) -> Option<String> {
     if !Path::new(jar_path).is_file() {
         return None;
     }
 
     let file = File::open(jar_path).ok()?;
+    // 复制句柄给 zip：第 4 级还要从 offset 0 重新流式读整个文件算 SHA1。
+    // （若直接 `into_inner()`，上次 `by_name` 的读取会把句柄留在了中间位置。）
+    let mut file_for_hash = file.try_clone().ok()?;
     let mut jar = ZipArchive::new(file).ok()?;
 
     // 1. 尝试 JAR 内的 version.json（Minecraft 1.14+）
@@ -175,20 +182,43 @@ pub fn from_jar(jar_path: &str) -> Option<String> {
         }
     }
 
-    // 4. 尝试已知版本号映射
-    let bytes = std::fs::read(jar_path).ok()?;
+    // 4. 尝试已知版本号映射：流式 SHA1。
+    //    ⚠️ 之前是 `std::fs::read(jar_path)` 整包读入再哈希：集成包 jar 单个 25-60MB，
+    //    单次峰值堆分配就那么大，且整包读完又丢了元数据。改成 64KiB 块流式喂给 hasher，
+    //    内存占用与 jar 大小解耦；并用另一份句柄 + `seek(0)`，避免二次 open/read。
     let mut hasher = sha1::Sha1::new();
-    hasher.update(&bytes);
-    let digest = hasher.finalize();
-    let hash = digest
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<String>();
+    {
+        use std::io::{Read, Seek, SeekFrom};
+        // 从 offset 0 开始：上面几级可能已经把句柄读到中间了。
+        if file_for_hash.seek(SeekFrom::Start(0)).is_err() {
+            return None;
+        }
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            match file_for_hash.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => hasher.update(&buf[..n]),
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => return None,
+            }
+        }
+    }
+    let hash = to_hex(hasher.finalize().into());
     if let Some(known) = known_version(&hash) {
         return Some(known.to_string());
     }
 
     None
+}
+
+/// SHA1 digest → 小写十六进制串（与原 `format!("{:02x}")` 逐字节等价）。
+fn to_hex(bytes: [u8; 20]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(40);
+    for b in bytes {
+        let _ = write!(s, "{b:02x}");
+    }
+    s
 }
 
 /// 从 JAR 内的 version.json 读取 id 字段
