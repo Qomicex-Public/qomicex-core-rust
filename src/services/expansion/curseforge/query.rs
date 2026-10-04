@@ -181,6 +181,30 @@ impl CurseForgeBase {
         })
     }
 
+    /// 带连接层重试的批次请求（`post_data` 包装，issue #176 新增）。
+    ///
+    /// 仅连接层错误重试 [`CF_REQUEST_RETRIES`] 次，退避 1s / 2s（与 completer.rs
+    /// `download_file_with_retry` 同节奏）。400 Bad Request 不在此重试——由调用方
+    /// `is_bad_request` 分支跳批（源语义：BadRequest 视为该批 id 非法，重发同样 400）。
+    async fn post_data_with_retry(&self, url: &str, body: &str) -> Result<String, Error> {
+        for attempt in 0..CF_REQUEST_RETRIES {
+            match self.post_data(url, body).await {
+                Ok(text) => return Ok(text),
+                Err(e) if is_bad_request(&e) => return Err(e),
+                Err(e) if is_connect_layer_error(&e) && attempt + 1 < CF_REQUEST_RETRIES => {
+                    println!(
+                        "[CurseForge] POST {url} 第 {} 次连接失败（{e}），{}ms 后重试",
+                        attempt + 1,
+                        1000 * (attempt as u64 + 1)
+                    );
+                    tokio::time::sleep(Duration::from_millis(1000 * (attempt as u64 + 1))).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        unreachable!("重试循环内必然 return")
+    }
+
     /// 批量获取文件信息内部实现（源：`GetFilesBatchAsync`）。
     ///
     /// 每批最多 100 个 fileId（`MaxBatchFileIds`）；过滤非正整数/超出 int32 范围的无效 id；
@@ -244,7 +268,11 @@ impl CurseForgeBase {
                     .join(",")
             );
 
-            let response_text = match self.post_data("/v1/mods/files", &json_data).await {
+            // issue #176：连接层重试包装（400 语义不变，仍由下方 is_bad_request 跳批）
+            let response_text = match self
+                .post_data_with_retry("/v1/mods/files", &json_data)
+                .await
+            {
                 Ok(text) => text,
                 Err(e) if is_bad_request(&e) => {
                     println!(
@@ -845,6 +873,36 @@ fn is_bad_request(e: &Error) -> bool {
             ..
         }
     )
+}
+
+/// 连接层错误判定 + 重试常量（issue #176 用户实测：整合包安装的 CF 批量解析
+/// 一次网络抖动即整单失败——「批量获取 CurseForge 文件信息失败: error sending
+/// request」。374 文件 ≈ 4 批，任一批单发失败即全盘皆输，重试收益直接）。
+///
+/// 与 services/version/manifest.rs 的 `get_json_with_retry` 同策略：仅连接层
+/// 错误（DNS/TLS/超时/连接被拒，reqwest `is_connect|is_request|is_timeout`）
+/// 重试 3 次、退避 1s/2s；状态码错误不重试（4xx 无意义，5xx 由调用方语义决定）。
+const CF_REQUEST_RETRIES: usize = 3;
+
+/// 判定是否为连接层错误（可重试）。
+fn is_connect_layer_error(e: &Error) -> bool {
+    let Error::Http {
+        source: Some(s), ..
+    } = e
+    else {
+        return false;
+    };
+    let mut cur: &(dyn std::error::Error + 'static) = s.as_ref();
+    for _ in 0..3 {
+        if let Some(r) = cur.downcast_ref::<reqwest::Error>() {
+            return r.is_connect() || r.is_request() || r.is_timeout();
+        }
+        match cur.source() {
+            Some(next) => cur = next,
+            None => return false,
+        }
+    }
+    false
 }
 
 /// 解析 JSON 文本（源：`JsonNode.Parse` —— 非法 JSON → JsonException → Error::Http，B6 语义）
