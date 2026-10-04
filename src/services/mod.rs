@@ -3,6 +3,7 @@ pub mod auth;
 pub mod download;
 pub mod expansion;
 pub mod installers;
+pub mod jarmod;
 pub mod java;
 pub mod launch;
 pub mod local;

@@ -53,12 +53,14 @@ use serde_json::{Map, Value};
 
 use crate::error::Error;
 use crate::models::download::DownloadMirror;
+use crate::models::version_metadata::Rule;
 use crate::services::installers::forge_base::{
     ForgeInstallerBase, SourcesList, main_jar_relative_path,
 };
 use crate::services::installers::installer::MissFileData;
 use crate::services::installers::installer::{Installer, InstallerBase};
 use crate::util::file_helper::normalize_separators;
+use crate::util::lib_helper::is_rules_suitable;
 
 /// Forge 安装器（源：`internal class ForgeInstaller : ForgeInstallerBase, IInstaller`）。
 ///
@@ -771,12 +773,53 @@ impl ForgeInstaller {
                 continue;
             }
             // 源：var libInfo = new LibInfo { FullName = libObj["name"]?.ToString() ?? string.Empty };
+            // 修复②（1.6.4 官方 JSON 语义）：带 `rules` 且当前 OS 不满足的条目跳过
+            // （实证：1.6.4 installer 的 lwjgl-platform 2.9.1-nightly 仅允许 osx 10.5，
+            // 官方 launcher 在 Windows 上根本不下载它，其 natives-windows classifier
+            // jar 也不存在 → 必须在扫描期排除，否则 404）。
+            if let Some(rules) = lib_obj.get("rules").and_then(|r| r.as_array())
+                && !rules.is_empty()
+            {
+                let rules: Vec<Rule> = serde_json::from_value(Value::Array(rules.clone()))
+                    .map_err(|e| Error::Params {
+                        message: format!("rules 解析失败: {e}"),
+                        source: None,
+                    })?;
+                if !is_rules_suitable(&rules) {
+                    continue;
+                }
+            }
             let mut lib_info = LibInfo::new(
                 lib_obj
                     .get("name")
                     .map(json_node_to_string)
                     .unwrap_or_default(),
             );
+            // 修复（issue #123 期1 实测 Agrarian Skies 1.6.4）：带 `natives` 映射但
+            // 无 `downloads` 的库（lwjgl-platform / jinput-platform 等），其**裸 jar**
+            // 在任何库源都不存在（实证 404），只有 classifier jar（
+            // `-natives-{os}.jar`）存在。此类条目按当前 OS 改写为 classifier 坐标，
+            // 使路径/URL 落在真实存在的 classifier jar 上（对齐官方 launcher 从
+            // natives 映射取分类器的行为）。
+            if let Some(natives) = lib_obj.get("natives").and_then(|n| n.as_object()) {
+                if lib_obj
+                    .get("downloads")
+                    .and_then(|d| d.as_object())
+                    .is_none()
+                    && let Some(classifier) = natives
+                        .get(crate::util::platform::get_current_os_name())
+                        .and_then(|v| v.as_str())
+                {
+                    let classifier =
+                        classifier.replace("${arch}", crate::util::platform::get_current_arch());
+                    let parts: Vec<&str> = lib_info.full_name.split(':').collect();
+                    if parts.len() >= 3 {
+                        lib_info.full_name =
+                            format!("{}:{}:{}:{}", parts[0], parts[1], parts[2], classifier);
+                        lib_info.path = InstallerBase::maven_to_path(&lib_info.full_name);
+                    }
+                }
+            }
             // 偏离源：新版 install_profile.json（1.16.5+）自带 downloads.artifact.{url,sha1}
             // 权威下载信息（源 C# 恒丢弃，仅靠逐源探测兜底）。探测在网络抖动时全失败会
             // 回退最后基地址 libraries.minecraft.net，而该源不含 Forge 专属依赖（如
@@ -1158,6 +1201,118 @@ mod tests {
     /// 旧实现按 Name 去重取最高 Version，会丢弃 processor classpath 显式需要的旧版本
     /// （NeoForge 需 asm-commons:9.3，libraries 里同时有 9.5/9.7 → 旧实现只留 9.7，
     /// 9.3 缺失后由 run_processor 另行下载并拼出含 '|' 的畸形 URL → 404）。
+    /// 回归（issue #123 期1 实测 Agrarian Skies 1.6.4）：带 `natives` 映射但无
+    /// `downloads` 的库（lwjgl-platform / jinput-platform），裸 jar 在所有库源
+    /// 都不存在（404），必须按当前 OS 改写为 classifier 坐标。
+    #[tokio::test]
+    async fn miss_forge_libraries_rewrites_natives_only_libs_to_classifier() {
+        let dir =
+            std::env::temp_dir().join(format!("qml-forge-natives-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let installer = dir.join("installer.jar");
+        {
+            let file = std::fs::File::create(&installer).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts: zip::write::SimpleFileOptions = Default::default();
+            let profile = r#"{
+                "install": { "path": "net.minecraftforge:forge:1.6.4-9.11.1.965" },
+                "libraries": [
+                    {
+                        "name": "net.java.jinput:jinput-platform:2.0.5",
+                        "natives": { "windows": "natives-windows", "osx": "natives-osx", "linux": "natives-linux" }
+                    },
+                    { "name": "net.minecraft:launchwrapper:1.8" }
+                ]
+            }"#;
+            zip.start_file("install_profile.json", opts).unwrap();
+            std::io::Write::write_all(&mut zip, profile.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let installer_obj =
+            ForgeInstaller::new(0, dir.to_string_lossy().into_owned(), "1.6.4".into());
+        let miss = installer_obj
+            .get_miss_forge_libraries(installer.to_str().unwrap(), "1.6.4-Forge9.11.1.965")
+            .await
+            .unwrap();
+
+        // natives-only 库 → classifier jar 路径（不存在裸 jar 路径）
+        let jip = miss
+            .iter()
+            .find(|m| m.name.contains("jinput-platform"))
+            .expect("jinput-platform 应在缺失列表");
+        assert!(
+            jip.path.contains("jinput-platform-2.0.5-natives-"),
+            "path 应为 classifier jar，实际: {}",
+            jip.path
+        );
+        assert!(
+            !jip.path.ends_with("jinput-platform-2.0.5.jar"),
+            "不得生成裸 jar 路径（404 根因）"
+        );
+
+        // 普通无 downloads 库 → 保持源行为（裸坐标）
+        let lw = miss
+            .iter()
+            .find(|m| m.name.contains("launchwrapper"))
+            .expect("launchwrapper 应在缺失列表");
+        assert!(lw.path.ends_with("launchwrapper-1.8.jar"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归②（issue #123 期1 实测）：带 `rules` 且当前 OS 不满足的库必须被排除
+    /// （1.6.4 installer 的 lwjgl-platform 2.9.1-nightly 仅允许 osx 10.5，Windows 上
+    /// 官方 launcher 不下载它，其 natives-windows classifier jar 不存在 → 404）。
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn miss_forge_libraries_skips_rules_excluded_libs() {
+        let dir = std::env::temp_dir().join(format!("qml-forge-rules-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let installer = dir.join("installer.jar");
+        {
+            let file = std::fs::File::create(&installer).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts: zip::write::SimpleFileOptions = Default::default();
+            let profile = r#"{
+                "install": { "path": "net.minecraftforge:forge:1.6.4-9.11.1.965" },
+                "libraries": [
+                    {
+                        "name": "org.lwjgl.lwjgl:lwjgl-platform:2.9.1-nightly-20130708-debug3",
+                        "natives": { "windows": "natives-windows", "osx": "natives-osx", "linux": "natives-linux" },
+                        "rules": [ { "action": "allow", "os": { "name": "osx", "version": "^10\\\\.5\\\\.\\\\d$" } } ]
+                    }
+                ]
+            }"#;
+            zip.start_file("install_profile.json", opts).unwrap();
+            std::io::Write::write_all(&mut zip, profile.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let installer_obj =
+            ForgeInstaller::new(0, dir.to_string_lossy().into_owned(), "1.6.4".into());
+        let miss = installer_obj
+            .get_miss_forge_libraries(installer.to_str().unwrap(), "1.6.4-Forge9.11.1.965")
+            .await
+            .unwrap();
+
+        assert!(
+            miss.is_empty(),
+            "osx-only 库在 Windows 上必须被排除，实际: {:?}",
+            miss.iter().map(|m| &m.name).collect::<Vec<_>>()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归：安装期库去重必须只去掉完全相同的坐标，保留所有不同版本。
+    /// 旧实现按 Name 去重取最高 Version，会丢弃 processor classpath 显式需要的旧版本
+    /// （NeoForge 需 asm-commons:9.3，libraries 里同时有 9.5/9.7 → 旧实现只留 9.7，
+    /// 9.3 缺失后由 run_processor 另行下载并拼出含 '|' 的畸形 URL → 404）。
     #[test]
     fn check_libs_ver_static_keeps_all_distinct_versions() {
         let libs = vec![
@@ -1165,7 +1320,6 @@ mod tests {
             LibInfo::new("org.ow2.asm:asm-commons:9.5@jar".to_string()),
             LibInfo::new("org.ow2.asm:asm-commons:9.7@jar".to_string()),
             // 完全相同的坐标 → 只保留一条
-            LibInfo::new("org.ow2.asm:asm-commons:9.3@jar".to_string()),
             LibInfo::new("net.neoforged.installertools:installertools:2.1.2".to_string()),
         ];
         let deduped = check_libs_ver_static(libs);
