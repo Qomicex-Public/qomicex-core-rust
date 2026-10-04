@@ -33,6 +33,22 @@ pub struct DataPackInfo {
     pub cf_hash: i64,
 }
 
+/// 模组声明的一条强制依赖（issue #165）。
+/// 数据源：`fabric.mod.json` 的 `depends` 对象（键 = mod id，值 = 版本谓词）
+/// 与 Forge/NeoForge `META-INF/mods.toml` 的 `[[dependencies.<自身modid>]]` 表数组。
+/// 仅收录「强制依赖」（mandatory / NeoForge type="required"）——可选依赖
+/// （fabric `recommends`/`suggests`、forge `mandatory=false`）缺失不影响启动，
+/// 收录进来只会产生误报。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ModDependencyInfo {
+    /// 被依赖的 mod id（fabric：`depends` 的键；forge：`modId`）
+    pub mod_id: String,
+    /// 版本约束谓词：fabric 为原始字符串/数组拼接，forge 为 `versionRange`；
+    /// 无约束（如 fabric `"*"` 或键值缺失）→ 空串
+    pub version_range: String,
+}
+
 /// 表示一个本地 Mod 的信息
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -61,6 +77,19 @@ pub struct ModInfo {
     pub modrinth_version_id: String,
     /// CurseForge 文件 ID：指纹反查 `FingerprintsFilesMeta.id`（C# 响应里有但未落盘）
     pub curse_forge_file_id: i64,
+    /// 模组自身声明的 mod id（fabric.mod.json `id` / mods.toml `modId`）；
+    /// 解析不到 → 空串（如纯 mcmod.info 老模组）。用于 issue #165 的依赖闭包判定。
+    #[serde(default)]
+    pub mod_id: String,
+    /// 强制前置依赖列表（issue #165）；无声明 → 空列表。
+    #[serde(default)]
+    pub dependencies: Vec<ModDependencyInfo>,
+    /// 本 jar 额外提供的 mod id（issue #165：嵌套 Jar-in-Jar 子模块）。
+    /// 容器 jar（典型：`fabric-api`）顶层只声明自己的 id，但其 `META-INF/jars/`
+    /// 或 `META-INF/jarjar/` 下的嵌套 jar 提供了大量子模块 id；依赖判定必须把它们
+    /// 一并算作「已提供」，否则会出现「装了前置却报缺失」的误报。不含自身 mod_id。
+    #[serde(default)]
+    pub provides_ids: Vec<String>,
 }
 
 impl ModInfo {

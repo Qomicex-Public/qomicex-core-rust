@@ -27,7 +27,7 @@ use zip::ZipArchive;
 use crate::api::expansion::{CurseForgeSource, ModrinthSource};
 use crate::api::local::ModsManager;
 use crate::error::Error;
-use crate::models::expansion::local::ModInfo;
+use crate::models::expansion::local::{ModDependencyInfo, ModInfo};
 use crate::services::download::checksum::sha1_hex;
 use crate::services::expansion::curseforge::query::CurseForgeBase;
 use crate::services::expansion::modrinth::query::ModrinthBase;
@@ -94,6 +94,11 @@ impl Mods {
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CachedModMeta {
+    /// 缓存结构版本。缺省 0 = 引入该字段之前的旧缓存。
+    /// 仅靠 size+mtime 无法发现「jar 没变但解析逻辑升级了」——旧缓存会把新字段
+    /// 一律读成空（`#[serde(default)]`），导致 issue #165 的依赖数据静默缺失。
+    #[serde(default)]
+    v: u32,
     size: u64,
     mtime: u64,
     sha1: String,
@@ -103,11 +108,27 @@ struct CachedModMeta {
     version: String,
     authors: Vec<String>,
     icon_sha1: Option<String>,
+    /// 模组自身 mod id（issue #165）
+    #[serde(default)]
+    mod_id: String,
+    /// 强制前置依赖（issue #165）
+    #[serde(default)]
+    dependencies: Vec<ModDependencyInfo>,
+    /// 嵌套 jar 提供的额外 mod id（issue #165）
+    #[serde(default)]
+    provides_ids: Vec<String>,
 }
+
+/// 当前 per-jar 缓存结构版本（v2 起含 issue #165 的依赖字段）。
+const MOD_META_CACHE_VERSION: u32 = 2;
 
 fn load_cached_mod(cache_file: &Path, size: u64, mtime: u64) -> Option<CachedModMeta> {
     let bytes = std::fs::read(cache_file).ok()?;
     let meta: CachedModMeta = serde_json::from_slice(&bytes).ok()?;
+    // 结构版本不符 → 视为未命中，强制重新解析（旧的 size+mtime 判断发现不了逻辑升级）
+    if meta.v != MOD_META_CACHE_VERSION {
+        return None;
+    }
     if meta.size == size && meta.mtime == mtime {
         Some(meta)
     } else {
@@ -255,6 +276,9 @@ impl Mods {
                                 cf_hash: cached.cf_hash,
                                 modrinth_version_id: String::new(),
                                 curse_forge_file_id: 0,
+                                mod_id: cached.mod_id,
+                                dependencies: cached.dependencies,
+                                provides_ids: cached.provides_ids,
                             },
                         ));
                     }
@@ -283,6 +307,9 @@ impl Mods {
                     cf_hash,
                     modrinth_version_id: String::new(),
                     curse_forge_file_id: 0,
+                    mod_id: String::new(),
+                    dependencies: Vec::new(),
+                    provides_ids: Vec::new(),
                 };
 
                 parse_metadata(&bytes, &mut info);
@@ -316,6 +343,7 @@ impl Mods {
 
                     let cache_file = dir.join(format!("{path_hash}.json"));
                     let meta = CachedModMeta {
+                        v: MOD_META_CACHE_VERSION,
                         size: file_size,
                         mtime: file_mtime_millis,
                         sha1: hash.clone(),
@@ -325,6 +353,9 @@ impl Mods {
                         version: info.version.clone(),
                         authors: info.authors.clone(),
                         icon_sha1,
+                        mod_id: info.mod_id.clone(),
+                        dependencies: info.dependencies.clone(),
+                        provides_ids: info.provides_ids.clone(),
                     };
                     let _ = save_cached_mod(&cache_file, &meta);
                 }
@@ -434,6 +465,97 @@ fn call_progress(cb: &mut (dyn FnMut(i32, i32) + Send), current: i32, total: i32
     cb(current, total);
 }
 
+/// 收集嵌套（Jar-in-Jar, JiJ）jar 里声明的全部 mod id（issue #165）。
+///
+/// **为什么必须做**：容器 jar 只声明自身 id，子模块 id 在嵌套 jar 里。真实案例：
+/// `fabric-api-0.161.0.jar` 顶层 `fabric.mod.json` 的 `id` 只有 `fabric-api`，
+/// 但它在 `META-INF/jars/` 下嵌了 44 个 jar，分别提供 `fabric-lifecycle-events-v1`、
+/// `fabric-resource-loader-v0` 等。若只看顶层 id，依赖这些子模块的模组（Fabric API
+/// 生态里极普遍，实测 Fabulously Optimized 38 个 mod 中有 7 个）会被全部误报「缺失依赖」。
+///
+/// 两种真实布局（均由真实整合包样本确认）：
+/// 1. **Fabric**：`META-INF/jars/*.jar`，逐个读其内部 `fabric.mod.json` 的 `id`；
+/// 2. **Forge/NeoForge JarJar**：`META-INF/jarjar/metadata.json` 的 `jars[].path`
+///    指向嵌套 jar（同样是读其 `fabric.mod.json` / `META-INF/mods.toml` 的 id）。
+///
+/// 只做**一层**嵌套：JiJ 规范本身即一层，真实样本（含 44 个嵌套 jar 的 fabric-api）
+/// 未出现二级嵌套；限定深度可避免恶意/异常 jar 造成解压炸弹式递归。
+/// 任何单步失败都静默跳过该项（与既有解析的 catch{} 吞错约定一致）。
+fn collect_nested_ids<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Vec<String> {
+    // 先收集待处理条目的索引（不能在遍历时再借 archive 读其它条目）
+    let mut nested_paths: Vec<String> = Vec::new();
+
+    // ① Fabric：META-INF/jars/*.jar
+    for name in archive.file_names() {
+        let lower = name.to_ascii_lowercase();
+        if lower.starts_with("meta-inf/jars/") && lower.ends_with(".jar") {
+            nested_paths.push(name.to_string());
+        }
+    }
+
+    // ② Forge/NeoForge JarJar：META-INF/jarjar/metadata.json → jars[].path
+    if let Ok(Some(meta)) = read_zip_entry(archive, "META-INF/jarjar/metadata.json")
+        && let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(&meta)
+        && let Some(Value::Array(jars)) = obj.get("jars")
+    {
+        for entry in jars {
+            if let Some(path) = entry.get("path").and_then(|p| p.as_str())
+                && !path.is_empty()
+            {
+                nested_paths.push(path.to_string());
+            }
+        }
+    }
+
+    let mut ids: Vec<String> = Vec::new();
+    for path in nested_paths {
+        let Some(index) = find_entry_index(archive, &path) else {
+            continue;
+        };
+        let mut bytes = Vec::new();
+        let Ok(mut entry) = archive.by_index(index) else {
+            continue;
+        };
+        if entry.read_to_end(&mut bytes).is_err() {
+            continue;
+        }
+        drop(entry);
+
+        if let Some(id) = nested_jar_id(&bytes)
+            && !ids.iter().any(|x| x.eq_ignore_ascii_case(&id))
+        {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// 从一个嵌套 jar 的字节里读出它的 mod id（fabric.mod.json `id`，回退 mods.toml `modId`）。
+fn nested_jar_id(bytes: &[u8]) -> Option<String> {
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).ok()?;
+    if let Ok(Some(content)) = read_zip_entry(&mut archive, "fabric.mod.json")
+        && let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(&content)
+        && let Some(id) = json_str(&obj, "id").filter(|s| !s.trim().is_empty())
+    {
+        return Some(id);
+    }
+    let toml_content = read_zip_entry(&mut archive, "META-INF/mods.toml")
+        .ok()
+        .flatten()
+        .or_else(|| {
+            read_zip_entry(&mut archive, "META-INF/neoforge.mods.toml")
+                .ok()
+                .flatten()
+        })?;
+    let value: toml::Value = toml_content.parse().ok()?;
+    let mods = value.as_table()?.get("mods")?.as_array()?;
+    let first = mods.first()?.as_table()?;
+    match first.get("modId") {
+        Some(toml::Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        _ => None,
+    }
+}
+
 /// 解析单个 Mod 文件元数据（对应源 GetModList 中 try/catch 包裹的解析块）：
 /// fabric.mod.json → META-INF/mods.toml（回退 neoforge.mods.toml）→ mcmod.info，
 /// 任一环节失败静默跳过（同源 catch{} 吞错，且不尝试后续格式），
@@ -443,6 +565,10 @@ fn parse_metadata(file_bytes: &[u8], info: &mut ModInfo) {
         Ok(a) => a,
         Err(_) => return,
     };
+
+    // issue #165：先收集嵌套（Jar-in-Jar）模组 id——容器 jar 只声明自己的 id，
+    // 真正的子模块 id 在嵌套 jar 里（见 collect_nested_ids 文档）。
+    info.provides_ids = collect_nested_ids(&mut archive);
 
     let fabric = match read_zip_entry(&mut archive, "fabric.mod.json") {
         Err(_) => return,
@@ -544,6 +670,7 @@ fn base64_encode(data: &[u8]) -> String {
 
 /// 解析 fabric.mod.json（源：`JsonNode.Parse(content)!.AsObject()`）：
 /// JSON 无效或非对象 → 跳过（同源异常被 catch 吞掉，不尝试后续格式）
+/// issue #165 扩展：额外读取 `id`（模组自身 id）与 `depends`（强制前置依赖）。
 fn parse_fabric_json<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     content: &str,
@@ -560,6 +687,50 @@ fn parse_fabric_json<R: Read + Seek>(
     if let Some(icon_path) = json_str(&obj, "icon").filter(|p| !p.is_empty()) {
         info.icon = extract_icon_from_archive(archive, &icon_path);
     }
+    info.mod_id = json_str(&obj, "id").unwrap_or_default();
+    info.dependencies = extract_fabric_depends(obj.get("depends"));
+}
+
+/// 提取 Fabric 强制依赖（issue #165）：`depends` 为 `{ "<modid>": <版本谓词> }` 对象。
+/// - 非对象（缺失 / null / 数组 / 标量）→ 空列表；
+/// - 值为字符串 → 原样（如 `">=1.20"`、`"*"`）；`"*"` 视为「无版本约束」→ 空串；
+/// - 值为数组 → 逐元素文本以 ` || ` 连接（Fabric 语义为「任一满足即可」）；
+/// - 值为其它（数字/布尔/null）→ 紧凑 JSON 文本（与 `json_value_text` 一致）。
+///
+/// 仅收 `depends`：`recommends` / `suggests` / `breaks` / `conflicts` 不是启动阻塞项，
+/// 收录会产生误报（缺失的 suggests 不影响游戏启动）。
+fn extract_fabric_depends(depends: Option<&Value>) -> Vec<ModDependencyInfo> {
+    let Some(Value::Object(map)) = depends else {
+        return Vec::new();
+    };
+    map.iter()
+        .filter(|(id, _)| !id.trim().is_empty())
+        .map(|(id, v)| {
+            let version_range = match v {
+                Value::String(s) => {
+                    if s.trim() == "*" {
+                        String::new()
+                    } else {
+                        s.clone()
+                    }
+                }
+                Value::Array(arr) => arr
+                    .iter()
+                    .map(|a| match a {
+                        Value::Null => String::new(),
+                        other => json_value_text(other),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" || "),
+                Value::Null => String::new(),
+                other => json_value_text(other),
+            };
+            ModDependencyInfo {
+                mod_id: id.clone(),
+                version_range,
+            }
+        })
+        .collect()
 }
 
 /// 提取 Fabric 作者列表（源：ExtractFabricAuthors）：
@@ -672,6 +843,76 @@ fn parse_forge_toml<R: Read + Seek>(
             info.icon = extract_icon_from_archive(archive, logo);
         }
     }
+
+    // issue #165：Forge/NeoForge 的依赖声明位于**顶层** `[[dependencies.<自身modid>]]`
+    // 表数组（不在 mods[0] 里）。modId 取自 mods[0].modId（缺失时回退依赖表键本身）。
+    let self_id = toml_get("modId", "");
+    if !self_id.is_empty() {
+        info.mod_id = self_id.clone();
+    }
+    let dep_key = if self_id.is_empty() {
+        // 无 modId 时无法定位依赖表归属 → 不猜，直接放弃（宁可漏报也不误报）
+        None
+    } else {
+        Some(self_id)
+    };
+    if let Some(key) = dep_key {
+        info.dependencies = extract_forge_dependencies(table.get("dependencies"), &key);
+    }
+}
+
+/// 提取 Forge/NeoForge 强制依赖（issue #165）：
+/// TOML 里 `[[dependencies.<自身modid>]]` 展开为 `dependencies` 表 → `<自身modid>` 键
+/// → **表数组**（无额外中间层），每项含 `modId` / `mandatory` / `versionRange` /
+/// `type`（NeoForge 用 `type = "required" | "optional" | ...`）。
+/// 收录口径（只收启动阻塞项，避免误报）：
+/// - Forge：`mandatory` 非 false 才算（缺省为 true，与 Forge 语义一致）；
+/// - NeoForge：若存在 `type` 字符串，则仅 `"required"` 收录；`"optional"` /
+///   `"required_but_not_integrated"` 等一律排除；
+/// - `modId` 缺失/空 → 跳过该项；`versionRange` 缺失或 `*` → 空串。
+///
+/// 内置依赖（`minecraft` / `forge` / `neoforge` / `fabricloader` 等平台自身条目）由
+/// **前端**统一过滤——它们在 Forge 元数据里普遍声明为 mandatory，但恒被加载器满足。
+fn extract_forge_dependencies(
+    dependencies: Option<&toml::Value>,
+    self_id: &str,
+) -> Vec<ModDependencyInfo> {
+    let Some(toml::Value::Table(dep_table)) = dependencies else {
+        return Vec::new();
+    };
+    let Some(toml::Value::Array(entries)) = dep_table.get(self_id) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let toml::Value::Table(t) = entry else {
+                return None;
+            };
+            let mod_id = match t.get("modId") {
+                Some(toml::Value::String(s)) if !s.trim().is_empty() => s.trim().to_string(),
+                _ => return None,
+            };
+            // mandatory 缺省 true；显式 false → 非启动阻塞项
+            if let Some(false) = t.get("mandatory").and_then(|v| v.as_bool()) {
+                return None;
+            }
+            // NeoForge 的 type 优先级高于 mandatory
+            if let Some(toml::Value::String(ty)) = t.get("type")
+                && !ty.eq_ignore_ascii_case("required")
+            {
+                return None;
+            }
+            let version_range = match t.get("versionRange") {
+                Some(toml::Value::String(s)) if s.trim() != "*" => s.clone(),
+                _ => String::new(),
+            };
+            Some(ModDependencyInfo {
+                mod_id,
+                version_range,
+            })
+        })
+        .collect()
 }
 
 /// 解析 mcmod.info（源：`JsonNode.Parse(content)!.AsArray()`，`Count > 0` 取首元素对象）。
@@ -760,5 +1001,686 @@ impl ModsManager for Mods {
         if let Err(e) = std::fs::rename(mod_file_path, target) {
             eprintln!("启用 Mod 失败: {mod_file_path}: {e}");
         }
+    }
+}
+
+/// issue #165 依赖解析单元测试。这些函数是模块私有（`fn parse_*`），
+/// 只能内联测——外部 `tests/` 集成测试无法触及。
+#[cfg(test)]
+mod dependency_tests {
+    use super::*;
+
+    fn empty_info() -> ModInfo {
+        ModInfo {
+            name: String::new(),
+            description: String::new(),
+            version: String::new(),
+            authors: Vec::new(),
+            file_path: String::new(),
+            icon: String::new(),
+            curse_forge_id: 0,
+            modrinth_id: String::new(),
+            sha1_hash: String::new(),
+            cf_hash: 0,
+            modrinth_version_id: String::new(),
+            curse_forge_file_id: 0,
+            mod_id: String::new(),
+            dependencies: Vec::new(),
+            provides_ids: Vec::new(),
+        }
+    }
+
+    // ── fabric ────────────────────────────────────────────────
+
+    #[test]
+    fn fabric_parses_mod_id_and_depends() {
+        let json = r#"{
+            "id": "create",
+            "name": "Create",
+            "version": "0.5.1f",
+            "depends": {
+                "minecraft": ">=1.20.1",
+                "fabricloader": ">=0.14.21",
+                "flywheel": ">=0.6.10"
+            }
+        }"#;
+        let mut info = empty_info();
+        parse_fabric_json(&mut dummy_archive(), json, &mut info);
+
+        assert_eq!(info.mod_id, "create");
+        let deps: Vec<(&str, &str)> = info
+            .dependencies
+            .iter()
+            .map(|d| (d.mod_id.as_str(), d.version_range.as_str()))
+            .collect();
+        assert!(deps.contains(&("minecraft", ">=1.20.1")));
+        assert!(deps.contains(&("fabricloader", ">=0.14.21")));
+        assert!(deps.contains(&("flywheel", ">=0.6.10")));
+        assert_eq!(deps.len(), 3);
+    }
+
+    #[test]
+    fn fabric_wildcard_version_becomes_empty_range() {
+        let json = r#"{"id":"a","depends":{"other":"*"}}"#;
+        let mut info = empty_info();
+        parse_fabric_json(&mut dummy_archive(), json, &mut info);
+        assert_eq!(info.dependencies.len(), 1);
+        assert_eq!(info.dependencies[0].mod_id, "other");
+        assert_eq!(info.dependencies[0].version_range, "");
+    }
+
+    #[test]
+    fn fabric_array_version_joins_with_or() {
+        let json = r#"{"id":"a","depends":{"other":[">=1.0","<2.0"]}}"#;
+        let mut info = empty_info();
+        parse_fabric_json(&mut dummy_archive(), json, &mut info);
+        assert_eq!(info.dependencies[0].version_range, ">=1.0 || <2.0");
+    }
+
+    #[test]
+    fn fabric_ignores_non_blocking_relations() {
+        // recommends / suggests / breaks / conflicts 不是启动阻塞项 → 不收录
+        let json = r#"{
+            "id": "a",
+            "depends": {"required_mod": "*"},
+            "recommends": {"nice_to_have": "*"},
+            "suggests": {"maybe": "*"},
+            "breaks": {"incompatible": "*"},
+            "conflicts": {"also_bad": "*"}
+        }"#;
+        let mut info = empty_info();
+        parse_fabric_json(&mut dummy_archive(), json, &mut info);
+        assert_eq!(info.dependencies.len(), 1);
+        assert_eq!(info.dependencies[0].mod_id, "required_mod");
+    }
+
+    #[test]
+    fn fabric_missing_depends_is_empty() {
+        let json = r#"{"id":"a","name":"A"}"#;
+        let mut info = empty_info();
+        parse_fabric_json(&mut dummy_archive(), json, &mut info);
+        assert!(info.dependencies.is_empty());
+        assert_eq!(info.mod_id, "a");
+    }
+
+    #[test]
+    fn fabric_invalid_json_leaves_fields_untouched() {
+        let mut info = empty_info();
+        parse_fabric_json(&mut dummy_archive(), "not json", &mut info);
+        assert!(info.mod_id.is_empty());
+        assert!(info.dependencies.is_empty());
+    }
+
+    // ── forge / neoforge ──────────────────────────────────────
+
+    #[test]
+    fn forge_parses_mandatory_dependencies() {
+        let toml = r#"
+modLoader="javafml"
+[[mods]]
+modId="mekanism"
+displayName="Mekanism"
+version="10.4.5"
+[[dependencies.mekanism]]
+    modId="minecraft"
+    mandatory=true
+    versionRange="[1.20.1,1.21)"
+[[dependencies.mekanism]]
+    modId="forge"
+    mandatory=true
+    versionRange="[47,)"
+[[dependencies.mekanism]]
+    modId="optionalmod"
+    mandatory=false
+    versionRange="[1.0,)"
+"#;
+        let mut info = empty_info();
+        parse_forge_toml(&mut dummy_archive(), toml, &mut info);
+
+        assert_eq!(info.mod_id, "mekanism");
+        let deps: Vec<(&str, &str)> = info
+            .dependencies
+            .iter()
+            .map(|d| (d.mod_id.as_str(), d.version_range.as_str()))
+            .collect();
+        assert_eq!(deps.len(), 2, "mandatory=false 不应收录: {deps:?}");
+        assert!(deps.contains(&("minecraft", "[1.20.1,1.21)")));
+        assert!(deps.contains(&("forge", "[47,)")));
+    }
+
+    #[test]
+    fn forge_mandatory_defaults_true_when_absent() {
+        let toml = r#"
+[[mods]]
+modId="m"
+[[dependencies.m]]
+    modId="needed"
+    versionRange="[1,)"
+"#;
+        let mut info = empty_info();
+        parse_forge_toml(&mut dummy_archive(), toml, &mut info);
+        assert_eq!(info.dependencies.len(), 1);
+        assert_eq!(info.dependencies[0].mod_id, "needed");
+    }
+
+    #[test]
+    fn neoforge_type_optional_excluded() {
+        let toml = r#"
+[[mods]]
+modId="m"
+[[dependencies.m]]
+    modId="req"
+    type="required"
+    versionRange="[1,)"
+[[dependencies.m]]
+    modId="opt"
+    type="optional"
+    versionRange="[1,)"
+[[dependencies.m]]
+    modId="notintegrated"
+    type="required_but_not_integrated"
+    versionRange="[1,)"
+"#;
+        let mut info = empty_info();
+        parse_forge_toml(&mut dummy_archive(), toml, &mut info);
+        let ids: Vec<&str> = info
+            .dependencies
+            .iter()
+            .map(|d| d.mod_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["req"], "只有 type=required 收录，实际: {ids:?}");
+    }
+
+    #[test]
+    fn forge_deps_ignored_when_mod_id_absent() {
+        // 无 mods[0].modId 时无法定位依赖表归属 → 不猜（宁可漏报不误报）
+        let toml = r#"
+[[mods]]
+displayName="Mystery"
+[[dependencies.something]]
+    modId="x"
+    mandatory=true
+"#;
+        let mut info = empty_info();
+        parse_forge_toml(&mut dummy_archive(), toml, &mut info);
+        assert!(info.mod_id.is_empty());
+        assert!(info.dependencies.is_empty());
+    }
+
+    #[test]
+    fn forge_deps_not_read_from_other_mod_id_table() {
+        // 依赖表键与自身 modId 不符 → 不取（避免把别人的依赖表算到自己头上）
+        let toml = r#"
+[[mods]]
+modId="m"
+[[dependencies.other]]
+    modId="x"
+    mandatory=true
+"#;
+        let mut info = empty_info();
+        parse_forge_toml(&mut dummy_archive(), toml, &mut info);
+        assert_eq!(info.mod_id, "m");
+        assert!(info.dependencies.is_empty());
+    }
+
+    #[test]
+    fn forge_wildcard_range_becomes_empty() {
+        let toml = r#"
+[[mods]]
+modId="m"
+[[dependencies.m]]
+    modId="x"
+    mandatory=true
+    versionRange="*"
+"#;
+        let mut info = empty_info();
+        parse_forge_toml(&mut dummy_archive(), toml, &mut info);
+        assert_eq!(info.dependencies[0].version_range, "");
+    }
+
+    // ── 缓存 round-trip（新字段必须能持久化并读回） ──────────────
+
+    #[test]
+    fn cached_meta_roundtrips_dependency_fields() {
+        let meta = CachedModMeta {
+            v: MOD_META_CACHE_VERSION,
+            size: 10,
+            mtime: 20,
+            sha1: "abc".to_string(),
+            cf_hash: 1,
+            name: "N".to_string(),
+            description: "D".to_string(),
+            version: "V".to_string(),
+            authors: vec!["A".to_string()],
+            icon_sha1: None,
+            mod_id: "self".to_string(),
+            dependencies: vec![ModDependencyInfo {
+                mod_id: "dep".to_string(),
+                version_range: ">=1".to_string(),
+            }],
+            provides_ids: vec!["nested-sub".to_string()],
+        };
+        let json = serde_json::to_vec(&meta).unwrap();
+        let back: CachedModMeta = serde_json::from_slice(&json).unwrap();
+        assert_eq!(back.mod_id, "self");
+        assert_eq!(back.dependencies.len(), 1);
+        assert_eq!(back.dependencies[0].mod_id, "dep");
+        assert_eq!(back.provides_ids, vec!["nested-sub".to_string()]);
+    }
+
+    #[test]
+    fn cached_meta_accepts_legacy_json_without_new_fields() {
+        // 升级前写的缓存文件没有新字段 → 必须仍能反序列化（serde default），
+        // 否则每个 jar 的缓存都会失效并回落到全量重扫。
+        let legacy = r#"{"size":1,"mtime":2,"sha1":"s","cfHash":3,"name":"n",
+            "description":"d","version":"v","authors":[],"iconSha1":null}"#;
+        let meta: CachedModMeta = serde_json::from_str(legacy).unwrap();
+        assert!(meta.mod_id.is_empty());
+        assert!(meta.dependencies.is_empty());
+        assert!(meta.provides_ids.is_empty());
+    }
+
+    #[test]
+    fn legacy_cache_version_forces_rescan() {
+        // 核心回归：旧缓存（无 v 字段 / v 不匹配）即使 size+mtime 完全一致，
+        // 也必须判为未命中。否则升级后 jar 未变 → 复用旧缓存 → 新的依赖字段
+        // 被 serde default 读成空 → issue #165 功能静默失效（真实踩过）。
+        let dir = std::env::temp_dir().join(format!("qomicex-cachever-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("m.json");
+
+        // v=0（缺省，等价于老缓存）
+        let old = r#"{"size":100,"mtime":200,"sha1":"s","cfHash":0,"name":"n",
+            "description":"d","version":"v","authors":[],"iconSha1":null,
+            "modId":"m","dependencies":[]}"#;
+        std::fs::write(&f, old).unwrap();
+        assert!(
+            load_cached_mod(&f, 100, 200).is_none(),
+            "旧版本缓存必须判为未命中（否则新字段读不到）"
+        );
+
+        // v 匹配 → 命中
+        let ok = format!(
+            r#"{{"v":{MOD_META_CACHE_VERSION},"size":100,"mtime":200,"sha1":"s","cfHash":0,
+                "name":"n","description":"d","version":"v","authors":[],"iconSha1":null,
+                "modId":"m","dependencies":[],"providesIds":["sub"]}}"#
+        );
+        std::fs::write(&f, ok).unwrap();
+        let hit = load_cached_mod(&f, 100, 200).expect("版本一致应命中");
+        assert_eq!(hit.provides_ids, vec!["sub".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 这些解析函数只在「图标路径为空」时才需要读 zip；测试数据均不带 icon 字段，
+    /// 因此传一个空归档即可（任何读取都会因找不到条目而返回空串）。
+    fn dummy_archive() -> ZipArchive<Cursor<Vec<u8>>> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(Cursor::new(&mut buf));
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+            w.start_file("placeholder.txt", opts).unwrap();
+            w.write_all(b"x").unwrap();
+            w.finish().unwrap();
+        }
+        ZipArchive::new(Cursor::new(buf)).unwrap()
+    }
+
+    // ── 端到端：真实 jar → 完整扫描管线（scan_local）────────────────
+    // 上面的测试直接调 `parse_*`，只证明解析函数本身对。这里构造**真实 zip**，
+    // 走 `Mods::new(...).get_mod_list_light()`，证明数据确实能从磁盘上的 jar
+    // 一路流到 `Vec<ModInfo>`（即 backend metadata 端点的数据来源）。
+
+    /// 把 (条目名, 内容) 写成真实 zip 文件。
+    fn write_jar(path: &std::path::Path, entries: &[(&str, &str)]) {
+        use std::io::Write;
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+        for (name, content) in entries {
+            zip.start_file(*name, opts).unwrap();
+            zip.write_all(content.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    /// 创建临时 gameDir（含 mods/ 子目录），返回 (gameDir, modsDir)。
+    fn temp_game_dir(tag: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "qomicex-dep-e2e-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mods_dir = dir.join("mods");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+        (dir, mods_dir)
+    }
+
+    /// 用给定 gameDir 跑一次真实扫描（version_segmented=false → 读 {gameDir}/mods）。
+    fn scan(game_dir: &std::path::Path) -> Vec<ModInfo> {
+        let mods = Mods::new(
+            reqwest::Client::new(),
+            game_dir.to_string_lossy().into_owned(),
+            "1.20.1".to_string(),
+            false,
+            String::new(),
+            None,
+        );
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(mods.get_mod_list_light())
+            .unwrap()
+    }
+
+    fn find<'a>(list: &'a [ModInfo], file_name: &str) -> &'a ModInfo {
+        list.iter()
+            .find(|m| {
+                Path::new(&m.file_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    == Some(file_name.to_string())
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "未找到 {file_name}: {:?}",
+                    list.iter().map(|m| &m.file_path).collect::<Vec<_>>()
+                )
+            })
+    }
+
+    #[test]
+    fn e2e_fabric_jar_exposes_mod_id_and_dependencies() {
+        let (game_dir, mods_dir) = temp_game_dir("fabric");
+        write_jar(
+            &mods_dir.join("create-0.5.1f.jar"),
+            &[(
+                "fabric.mod.json",
+                r#"{"id":"create","name":"Create","version":"0.5.1f",
+                    "depends":{"minecraft":">=1.20.1","flywheel":">=0.6.10","missinglib":"*"}}"#,
+            )],
+        );
+        write_jar(
+            &mods_dir.join("flywheel-0.6.10.jar"),
+            &[(
+                "fabric.mod.json",
+                r#"{"id":"flywheel","name":"Flywheel","version":"0.6.10"}"#,
+            )],
+        );
+
+        let list = scan(&game_dir);
+        let create = find(&list, "create-0.5.1f.jar");
+        assert_eq!(create.mod_id, "create", "fabric id 必须落到 mod_id");
+        let ids: Vec<&str> = create
+            .dependencies
+            .iter()
+            .map(|d| d.mod_id.as_str())
+            .collect();
+        assert!(ids.contains(&"flywheel"), "deps: {ids:?}");
+        assert!(ids.contains(&"missinglib"), "deps: {ids:?}");
+        assert!(ids.contains(&"minecraft"), "deps: {ids:?}");
+        assert_eq!(
+            create
+                .dependencies
+                .iter()
+                .find(|d| d.mod_id == "missinglib")
+                .unwrap()
+                .version_range,
+            "",
+            "'*' 应归一化为空串"
+        );
+        assert_eq!(
+            create
+                .dependencies
+                .iter()
+                .find(|d| d.mod_id == "flywheel")
+                .unwrap()
+                .version_range,
+            ">=0.6.10"
+        );
+        // 前置自身也带 id → 前端判定才能匹配上
+        assert_eq!(find(&list, "flywheel-0.6.10.jar").mod_id, "flywheel");
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    // ── 嵌套 Jar-in-Jar（真实数据暴露的误报来源）─────────────────────
+    // 实测：Fabulously Optimized（Fabric，38 mod）中 `fabric-api` 顶层 id 只有
+    // `fabric-api`，但其 META-INF/jars/ 下嵌了 44 个 jar，提供
+    // `fabric-lifecycle-events-v1` 等子模块 id；只读顶层 id 会让 7 个 mod 误报缺失。
+
+    /// 构造一个嵌套 jar 的字节（内含 fabric.mod.json）。
+    fn nested_jar_bytes(id: &str) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(Cursor::new(&mut buf));
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+            w.start_file("fabric.mod.json", opts).unwrap();
+            w.write_all(format!(r#"{{"id":"{id}","name":"{id}"}}"#).as_bytes())
+                .unwrap();
+            w.finish().unwrap();
+        }
+        buf
+    }
+
+    /// 把嵌套 jar 作为一个条目写进外层容器 jar。
+    fn write_container_jar(
+        path: &std::path::Path,
+        top_id: &str,
+        nested: &[(&str, Vec<u8>)],
+        extra_entries: &[(&str, &str)],
+    ) {
+        use std::io::Write;
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+        zip.start_file("fabric.mod.json", opts).unwrap();
+        zip.write_all(format!(r#"{{"id":"{top_id}","name":"{top_id}"}}"#).as_bytes())
+            .unwrap();
+        for (name, bytes) in nested {
+            zip.start_file(name.to_string(), opts).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        for (name, content) in extra_entries {
+            zip.start_file(*name, opts).unwrap();
+            zip.write_all(content.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn e2e_fabric_nested_jars_expose_submodule_ids() {
+        let (game_dir, mods_dir) = temp_game_dir("jij-fabric");
+        // 容器 jar：模拟 fabric-api（顶层 id 是 fabric-api，子模块 id 在内层）
+        write_container_jar(
+            &mods_dir.join("fabric-api-0.161.0.jar"),
+            "fabric-api",
+            &[
+                (
+                    "META-INF/jars/fabric-lifecycle-events-v1-4.1.9.jar",
+                    nested_jar_bytes("fabric-lifecycle-events-v1"),
+                ),
+                (
+                    "META-INF/jars/fabric-resource-loader-v0-3.3.26.jar",
+                    nested_jar_bytes("fabric-resource-loader-v0"),
+                ),
+            ],
+            &[],
+        );
+        // 依赖子模块的使用者：修复前会被误报缺失
+        write_jar(
+            &mods_dir.join("modmenu-21.0.0.jar"),
+            &[(
+                "fabric.mod.json",
+                r#"{"id":"modmenu","name":"Mod Menu",
+                    "depends":{"fabric-lifecycle-events-v1":"*","fabric-resource-loader-v0":"*"}}"#,
+            )],
+        );
+
+        let list = scan(&game_dir);
+        let api = find(&list, "fabric-api-0.161.0.jar");
+        assert_eq!(api.mod_id, "fabric-api");
+        let provided: Vec<&str> = api.provides_ids.iter().map(|s| s.as_str()).collect();
+        assert!(
+            provided.contains(&"fabric-lifecycle-events-v1"),
+            "嵌套子模块 id 必须被收集: {provided:?}"
+        );
+        assert!(
+            provided.contains(&"fabric-resource-loader-v0"),
+            "{provided:?}"
+        );
+        // 自身 id 不应混进 provides_ids（避免重复计入）
+        assert!(!provided.contains(&"fabric-api"), "{provided:?}");
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_forge_jarjar_nested_jars_expose_submodule_ids() {
+        let (game_dir, mods_dir) = temp_game_dir("jij-forge");
+        // 模拟 Forge JarJar：metadata.json 指定嵌套 jar 路径
+        write_container_jar(
+            &mods_dir.join("create-1.20.1.jar"),
+            "create",
+            &[(
+                "META-INF/jarjar/flywheel-forge-0.6.11.jar",
+                nested_jar_bytes("flywheel"),
+            )],
+            &[(
+                "META-INF/jarjar/metadata.json",
+                r#"{"jars":[{"identifier":{"group":"g","artifact":"a"},
+                    "version":{"range":"[0.6.11,)","artifactVersion":"0.6.11-13"},
+                    "path":"META-INF/jarjar/flywheel-forge-0.6.11.jar",
+                    "isObfuscated":false}]}"#,
+            )],
+        );
+
+        let list = scan(&game_dir);
+        let create = find(&list, "create-1.20.1.jar");
+        assert_eq!(create.mod_id, "create");
+        assert_eq!(
+            create.provides_ids,
+            vec!["flywheel".to_string()],
+            "JarJar metadata.json 指向的嵌套 jar id 必须被收集"
+        );
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_jar_without_nested_jars_has_empty_provides_ids() {
+        let (game_dir, mods_dir) = temp_game_dir("no-jij");
+        write_jar(
+            &mods_dir.join("plain-1.0.jar"),
+            &[("fabric.mod.json", r#"{"id":"plain","name":"Plain"}"#)],
+        );
+        let list = scan(&game_dir);
+        assert!(list[0].provides_ids.is_empty(), "无嵌套 jar → 空列表");
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_corrupt_nested_jar_is_skipped_not_fatal() {
+        // 异常：嵌套 jar 数据损坏 → 跳过该项，不影响外层解析
+        let (game_dir, mods_dir) = temp_game_dir("jij-corrupt");
+        write_container_jar(
+            &mods_dir.join("broken-1.0.jar"),
+            "broken",
+            &[
+                ("META-INF/jars/corrupt.jar", b"not a zip at all".to_vec()),
+                ("META-INF/jars/good.jar", nested_jar_bytes("good-submodule")),
+            ],
+            &[],
+        );
+        let list = scan(&game_dir);
+        let broken = find(&list, "broken-1.0.jar");
+        assert_eq!(broken.mod_id, "broken", "损坏的嵌套 jar 不应影响外层 id");
+        assert_eq!(
+            broken.provides_ids,
+            vec!["good-submodule".to_string()],
+            "损坏项被跳过，其余正常项仍要收集"
+        );
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_forge_jar_exposes_mandatory_dependencies_only() {
+        let (game_dir, mods_dir) = temp_game_dir("forge");
+        write_jar(
+            &mods_dir.join("mekanism-10.4.5.jar"),
+            &[(
+                "META-INF/mods.toml",
+                r#"
+modLoader="javafml"
+[[mods]]
+modId="mekanism"
+displayName="Mekanism"
+version="10.4.5"
+[[dependencies.mekanism]]
+    modId="minecraft"
+    mandatory=true
+    versionRange="[1.20.1,1.21)"
+[[dependencies.mekanism]]
+    modId="forge"
+    mandatory=true
+    versionRange="[47,)"
+[[dependencies.mekanism]]
+    modId="optional_extra"
+    mandatory=false
+    versionRange="[1.0,)"
+"#,
+            )],
+        );
+
+        let list = scan(&game_dir);
+        let mek = find(&list, "mekanism-10.4.5.jar");
+        assert_eq!(mek.mod_id, "mekanism");
+        let ids: Vec<&str> = mek.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
+        assert!(
+            ids.contains(&"minecraft") && ids.contains(&"forge"),
+            "mandatory 依赖应解析: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"optional_extra"),
+            "mandatory=false 不应收录: {ids:?}"
+        );
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_disabled_jar_is_still_scanned_with_dependency_data() {
+        // 边界：`.disabled` 文件同样要解析出 id/依赖——前端「严格口径」靠
+        // active=false 把被禁用的前置排除出「已提供」集合，数据必须齐全。
+        let (game_dir, mods_dir) = temp_game_dir("disabled");
+        write_jar(
+            &mods_dir.join("disabledlib-1.0.jar.disabled"),
+            &[(
+                "fabric.mod.json",
+                r#"{"id":"disabledlib","name":"DisabledLib","version":"1.0"}"#,
+            )],
+        );
+
+        let list = scan(&game_dir);
+        assert_eq!(list.len(), 1, "禁用文件也应被扫描");
+        assert_eq!(list[0].mod_id, "disabledlib", "禁用文件仍需解析 mod_id");
+        assert!(!list[0].is_active(), "应以 .disabled 后缀判定为非激活");
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_jar_without_dependency_metadata_is_not_an_error() {
+        // 异常/边界：无 fabric.mod.json / mods.toml 的 jar → 不报错，deps 为空，
+        // 名称回退文件名，id 保持空串（不伪造）。
+        let (game_dir, mods_dir) = temp_game_dir("nodeps");
+        write_jar(
+            &mods_dir.join("mystery-1.0.jar"),
+            &[("META-INF/MANIFEST.MF", "Manifest-Version: 1.0\n")],
+        );
+
+        let list = scan(&game_dir);
+        assert_eq!(list.len(), 1, "无元数据 jar 仍应列出");
+        assert!(list[0].dependencies.is_empty(), "无依赖声明 → 空列表");
+        assert!(list[0].mod_id.is_empty(), "无法解析 id → 空串（不伪造）");
+        assert_eq!(list[0].name, "mystery-1.0", "名称回退文件名主干");
+        let _ = std::fs::remove_dir_all(&game_dir);
     }
 }
