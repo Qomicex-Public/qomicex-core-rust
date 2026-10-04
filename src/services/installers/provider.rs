@@ -707,6 +707,11 @@ impl InstallerProviderService {
 
     /// 源 `GetForgeVersions`（镜像分派 GetForgeVersionsFromBmclApi / GetForgeVersionsFromOfficialHtml，
     /// 含 HTML 正则解析与 ForgeVersionCacheDir 缓存；实现在 provider_forge.rs，B13 接线）
+    ///
+    /// issue #176：官方源的「Maven 元数据 → HTML」链路**任一环节失败或返回空**时，
+    /// 在 provider_forge.rs 内自动回退 BMCLAPI（与 [`Self::get_neoforge_versions`] 同策略）。
+    /// 修复前官方抓取一旦失败整链返回空，用户下载源为「官方源」时前端表现为
+    /// 「暂无可加载器版本，无法下载」、整合包安装报「找不到 forge <版本> 的安装器」。
     async fn get_forge_versions(&self, minecraft_version: &str) -> Vec<ModLoaderResult> {
         crate::services::installers::provider_forge::get_forge_versions(
             &self.http,

@@ -27,6 +27,17 @@
 //! - ⚠️ UNMAPPED U3：`System.Version.TryParse` → 私有 `version_try_parse` 近似（见日志 U3）；
 //! - ⚠️ UNMAPPED U4：`DateTimeOffset.TryParse(modified)` 门控用 chrono rfc3339 近似
 //!   （C# TryParse 更宽松；解析成功仍存原始文本，见日志 U4）。
+//!
+//! ## 有意偏离源逻辑（issue #176 修复，勿当作移植误差回退）
+//!
+//! - `GetForgeVersions` 的 Official 分支：源在「HTML 抓取失败/解析为空」时直接返回空；
+//!   本实现改为 **Maven 元数据优先 → HTML 末位回退 → BMCLAPI 兜底** 三级链。
+//!   起因：用户下载源为「官方源」时，HTML 链路一旦失败，前端表现为「暂无可加载器版本，
+//!   无法下载」、整合包安装报「找不到 forge <版本> 的安装器」。（#176 实测日志与截图）
+//! - 缓存读取：源「命中缓存即无条件采信解析结果」；本实现要求**解析非空**才采信，
+//!   否则一份坏缓存会在 24h 内持续续命（回归用例见 tests::cache_with_unparseable_content_is_rejected）。
+//! - 回退 BMCLAPI 时必须显式传 `DownloadMirror::Bmclapi`：该分支用 mirror 拼安装器直链，
+//!   透传 Official 会拼出 build 号当版本号的坏链（列表非空但下载必败）。
 
 use std::path::Path;
 use std::sync::OnceLock;
@@ -42,6 +53,25 @@ use crate::models::installer::{ModLoaderResult, ModLoaderType};
 /// 源 `DateTimeOffset.MinValue` 的字符串化文本（System.Text.Json round-trip：
 /// "0001-01-01T00:00:00+00:00"）。
 const MIN_RELEASE_TIME: &str = "0001-01-01T00:00:00+00:00";
+
+/// Forge Maven 元数据（issue #176 新增主路径）。
+///
+/// 取代对 `files.minecraftforge.net` 下载页 HTML 表格的抓取：同一份版本信息，
+/// XML 结构化（无渲染/无 adfoc 跳转/无表格 class 依赖），体积约为 HTML 的 1/10
+/// （实测 211KB vs 2.27MB），且 `1.12.2-*` 条目与 HTML 分页逐条一致（实测各 355 条）。
+const FORGE_MAVEN_METADATA_URL: &str =
+    "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml";
+
+/// Forge 官方 Maven 仓库该 artifact 的根地址（拼安装器 jar 直链）。
+const FORGE_MAVEN_BASE_URL: &str = "https://maven.minecraftforge.net/net/minecraftforge/forge";
+
+/// Forge 推荐版本清单（约 4KB）。`maven-metadata.xml` 不含 promo 标记，推荐状态
+/// 由此补齐，取代「在 HTML 行里匹配 `promo-latest`/`promo-recommended` class」。
+const FORGE_PROMOTIONS_URL: &str =
+    "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json";
+
+/// Forge 版本信息缓存有效期（小时）。元数据 / HTML / 推荐清单三种缓存共用。
+const FORGE_CACHE_EXPIRY_HOURS: u64 = 24;
 
 /// 获取 Cleanroom 版本列表（源：`GetCleanroomVersions(string minecraftVersion)`）。
 ///
@@ -169,8 +199,13 @@ pub(crate) fn parse_neoforge_minecraft_version(neo_forge_version: &str) -> Strin
 
 /// 获取 Forge 版本列表（源：`GetForgeVersions(string minecraftVersion)`）。
 ///
-/// 按下载源分发：BMCLAPI → `get_forge_versions_from_bmcl_api`；Official →
-/// `get_forge_versions_from_official_html`（源 `_mirror == DownloadMirror.BMCLAPI ? ... : ...`）。
+/// 按下载源分发（源 `_mirror == DownloadMirror.BMCLAPI ? ... : ...`）：
+/// - BMCLAPI → [`get_forge_versions_from_bmcl_api`]；
+/// - Official → [`get_forge_versions_from_official`]（Maven 元数据优先 → HTML 末位回退），
+///   拿到空列表时再回退 BMCLAPI。
+///
+/// ⚠️ 与源的差异（issue #176）：源在 Official 分支失败即返回空；此处增加了两级回退，
+/// 因为「拿不到版本列表」在用户侧等于「无法安装该加载器」，不能由单一上游决定。
 pub(crate) async fn get_forge_versions(
     http: &reqwest::Client,
     mirror: DownloadMirror,
@@ -179,9 +214,52 @@ pub(crate) async fn get_forge_versions(
     match mirror {
         DownloadMirror::Bmclapi => get_forge_versions_from_bmcl_api(http, mirror, mc_version).await,
         DownloadMirror::Official => {
-            get_forge_versions_from_official_html(http, mirror, mc_version).await
+            // issue #176：官方源（Maven 元数据 → HTML 末位回退）**任一环节**失败或拿到空
+            // 列表，一律回退 BMCLAPI。此前无回退——官方抓取一旦失败整链就返回空，
+            // 用户下载源为「官方源」时表现为前端「暂无可加载器版本，无法下载」与整合包
+            // 「找不到 forge <版本> 的安装器」（#176 实测）。此处与 get_neoforge_versions
+            // 的既有回退策略对齐。
+            //
+            // 注意用 match 吞掉 Err 而不是 `?`：官方链路自身的错误（含缓存元数据读取
+            // 失败等）同样不得让整链失败，否则回退形同虚设。
+            let official = match get_forge_versions_from_official(http, mirror, mc_version).await {
+                Ok(versions) => versions,
+                Err(e) => {
+                    eprintln!("Forge 官方源获取失败: {e}");
+                    Vec::new()
+                }
+            };
+            if !official.is_empty() {
+                return Ok(official);
+            }
+            eprintln!("Forge 官方源未返回任何版本，回退 BMCLAPI");
+            // ⚠️ 必须显式传 Bmclapi：BMCLAPI 分支会用 mirror 拼安装器直链
+            // （get_forge_download_url）。若透传调用方的 Official，会拼出
+            // `maven.minecraftforge.net/.../forge-{mc}-{build}/...`（build 号当版本号，
+            // 必然 404）——列表非空但下载必败，比不回退更糟。实测：故障注入验证时
+            // 曾得到 `.../forge-1.12.2-2860/...` 这样的坏链。
+            get_forge_versions_from_bmcl_api(http, DownloadMirror::Bmclapi, mc_version).await
         }
     }
+}
+
+/// 官方源（非 BMCLAPI）的 Forge 版本获取：**Maven 元数据优先，HTML 抓取末位回退**。
+///
+/// issue #176：HTML 下载页表格抓取是本链路最不稳定的一环（依赖表格 class、
+/// 单页 2.27MB、行内还混着 adfoc.us 跳转链），而同一份版本信息在
+/// `maven-metadata.xml` 里是结构化且体积约 1/10 的。故主路径换成元数据，
+/// HTML 仅在其拿到空列表时才尝试（保留旧行为作为兜底，不直接删除）。
+async fn get_forge_versions_from_official(
+    http: &reqwest::Client,
+    mirror: DownloadMirror,
+    mc_version: &str,
+) -> Result<Vec<ModLoaderResult>, Error> {
+    let from_metadata = get_forge_versions_from_maven_metadata(http, mirror, mc_version).await?;
+    if !from_metadata.is_empty() {
+        return Ok(from_metadata);
+    }
+    eprintln!("Forge Maven 元数据未返回版本，回退官方 HTML 抓取");
+    get_forge_versions_from_official_html(http, mirror, mc_version).await
 }
 
 /// 从 BMCLAPI JSON 获取 Forge 版本列表（源：`GetForgeVersionsFromBmclApi`）。
@@ -213,6 +291,266 @@ pub(crate) async fn get_forge_versions_from_bmcl_api(
     }
 }
 
+/// 官方 Maven 元数据的 Forge 版本获取（issue #176 主路径）。
+///
+/// - 缓存：`%TEMP%/ForgeVersionCache/{mc}_forge_metadata.xml`，24h 内命中且**解析非空**
+///   才直接采用（空结果视为缓存不可用，继续走网络，防坏缓存续命）；
+/// - 网络：GET [`FORGE_MAVEN_METADATA_URL`]，非 2xx / 读取失败 → Err（由本函数吞为
+///   空列表，交由 [`get_forge_versions_from_official`] 继续回退）；
+/// - 解析见 [`parse_forge_metadata_versions`]；推荐标记由 [`fetch_forge_promotions`] 补齐。
+pub(crate) async fn get_forge_versions_from_maven_metadata(
+    http: &reqwest::Client,
+    _mirror: DownloadMirror,
+    mc_version: &str,
+) -> Result<Vec<ModLoaderResult>, Error> {
+    match forge_versions_from_maven_metadata_inner(http, mc_version).await {
+        Ok(versions) => Ok(versions),
+        Err(e) => {
+            eprintln!("Forge Maven 元数据获取失败: {e}");
+            Ok(Vec::new())
+        }
+    }
+}
+
+/// 从 `maven-metadata.xml` 正文提取指定 MC 版本的 Forge 版本列表（降序）。
+///
+/// 逐条 `<version>` 文本形如 `{forge_mc_version}-{forge_version}`（如
+/// `1.12.2-14.23.5.2860`），前缀不匹配的丢弃（严格前缀 + `-` 分隔，故 `1.12.2`
+/// 不会误吃 `1.12.20-*`）；返回值取前缀之后的 Forge 版本号，`url` 按 Maven
+/// artifact 规则拼接。
+///
+/// ⚠️ 匹配前缀使用 `mc_version.replace('-', "_")` 归一化（与 [`get_forge_download_url`]
+/// 及旧 HTML 路径的 `index_{forgeMcVersion}` 同一约定）：Maven artifact 的 MC 段是
+/// 下划线形态（`1.7.10_pre4-10.12.2.1149-prerelease`），若用原始 `mc_version`
+/// （`1.7.10-pre4`）做前缀将匹配不到任何条目，列表恒空。`game_version` 字段
+/// 仍回填调用方原始版本，保持三条路径（HTML/BMCLAPI/元数据）行为一致。
+///
+/// 实测与旧 HTML 分页的一致性：1.12.2 / 1.16.5 / 1.20.1 / 1.21 / 1.6.4 逐条相同；
+/// 1.7.10 处元数据为超集（多出 `1.7.10_pre4-*` 预发布，旧 HTML 需 `index_1.7.10_pre4`
+/// 另一页才看得到）。
+///
+/// 安装器命名统一为 `forge-{artifactId}-installer.jar`，对 `1.7.10-10.13.4.1614-1.7.10`、
+/// `1.7.10_pre4-10.12.2.1149-prerelease` 等古怪 artifact 同样成立（已 HEAD 实测 200）。
+pub(crate) fn parse_forge_metadata_versions(xml: &str, mc_version: &str) -> Vec<ModLoaderResult> {
+    let forge_mc_version = mc_version.replace('-', "_");
+    let prefix = format!("{forge_mc_version}-");
+    let mut versions: Vec<String> = Vec::new();
+
+    for cap in metadata_version_regex().captures_iter(xml) {
+        let artifact = cap.get(1).map(|m| m.as_str()).unwrap_or_default();
+        let Some(forge_version) = artifact.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        if forge_version.is_empty() || versions.iter().any(|v| v == forge_version) {
+            continue;
+        }
+        versions.push(forge_version.to_string());
+    }
+
+    let mut results: Vec<ModLoaderResult> = versions
+        .into_iter()
+        .map(|forge_version| {
+            let artifact = format!("{prefix}{forge_version}");
+            ModLoaderResult {
+                r#type: ModLoaderType::Forge,
+                version: forge_version,
+                game_version: mc_version.to_string(),
+                url: format!("{FORGE_MAVEN_BASE_URL}/{artifact}/forge-{artifact}-installer.jar"),
+                sha1: String::new(),
+                is_recommand: false,
+                release_time: MIN_RELEASE_TIME.to_string(),
+            }
+        })
+        .collect();
+
+    // 与 HTML 路径同序（VersionSortInteger 降序），保持前端「最新版」展示一致。
+    results.sort_by(|a, b| version_sort_integer(&b.version, &a.version).cmp(&0));
+    results
+}
+
+/// 解析 `promotions_slim.json`，返回指定 MC 版本的 latest + recommended 版本号。
+///
+/// 结构：`{"homepage":"...","promos":{"1.12.2-latest":"14.23.5.2864",
+/// "1.12.2-recommended":"14.23.5.2859",...}}`。
+/// 键的 MC 段采用 Forge 归一化形态（`-`→`_`，实测 117 个键的 MC 部分从不含
+/// 连字符），故查询键同样先归一化——与 [`parse_forge_metadata_versions`] 的
+/// 前缀约定保持一致。
+/// 非 JSON / 缺 `promos` / 值非字符串 → None（调用方据此保留默认标记，不阻断版本列表）；
+/// 值重复（latest == recommended）只保留一份。
+pub(crate) fn parse_forge_promotions(json: &str, mc_version: &str) -> Option<Vec<String>> {
+    let value: Value = serde_json::from_str(json).ok()?;
+    let promos = value.get("promos")?.as_object()?;
+
+    let forge_mc_version = mc_version.replace('-', "_");
+    let mut out: Vec<String> = Vec::new();
+    for key in [
+        format!("{forge_mc_version}-latest"),
+        format!("{forge_mc_version}-recommended"),
+    ] {
+        if let Some(Value::String(v)) = promos.get(key.as_str())
+            && !v.trim().is_empty()
+            && !out.iter().any(|x| x == v)
+        {
+            out.push(v.clone());
+        }
+    }
+    // 契约统一：拿不到该 MC 的推荐信息一律 None（调用方据此保留默认标记，
+    // 也令 `read_usable_cached_versions` 把空的推荐缓存判为不可用）。
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
+}
+
+/// 拉取并解析推荐版本清单；失败返回 None（调用方保留默认标记）。带 24h 缓存。
+async fn fetch_forge_promotions(http: &reqwest::Client, mc_version: &str) -> Option<Vec<String>> {
+    // 缓存键与元数据路径同约定：MC 段 `-`→`_` 归一化。
+    let cache_path = get_promotions_cache_file_path(&mc_version.replace('-', "_"));
+    if let Some(promos) = read_usable_cached_versions(&cache_path, FORGE_CACHE_EXPIRY_HOURS, |j| {
+        parse_forge_promotions(j, mc_version).unwrap_or_default()
+    }) {
+        return Some(promos);
+    }
+
+    let response = match http.get(FORGE_PROMOTIONS_URL).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Forge 推荐版本清单请求失败: {e}（推荐标记回退默认值）");
+            return None;
+        }
+    };
+    if !response.status().is_success() {
+        eprintln!(
+            "Forge 推荐版本清单请求失败: {}（推荐标记回退默认值）",
+            response.status()
+        );
+        return None;
+    }
+    let body = match response.text().await {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Forge 推荐版本清单读取失败: {e}（推荐标记回退默认值）");
+            return None;
+        }
+    };
+    write_cache(&cache_path, &body);
+    parse_forge_promotions(&body, mc_version)
+}
+
+/// 用推荐版本清单给列表打 `is_recommand`（清单拿不到则原样返回）。
+async fn with_promotions(
+    http: &reqwest::Client,
+    mc_version: &str,
+    versions: Vec<ModLoaderResult>,
+) -> Vec<ModLoaderResult> {
+    let Some(promos) = fetch_forge_promotions(http, mc_version).await else {
+        return versions;
+    };
+    versions
+        .into_iter()
+        .map(|mut v| {
+            v.is_recommand = promos.iter().any(|p| p.eq_ignore_ascii_case(&v.version));
+            v
+        })
+        .collect()
+}
+
+/// 元数据主流程：缓存 → 网络 → 解析 → 补推荐标记。
+async fn forge_versions_from_maven_metadata_inner(
+    http: &reqwest::Client,
+    mc_version: &str,
+) -> Result<Vec<ModLoaderResult>, Error> {
+    // 缓存键与 HTML 路径的 GetCacheFilePath 同约定：MC 段 `-`→`_` 归一化，
+    // 避免 `1.7.10-pre4` 与 `1.7.10_pre4` 各存一份等价缓存。
+    let cache_path = get_metadata_cache_file_path(&mc_version.replace('-', "_"));
+
+    if let Some(parsed) = read_usable_cached_versions(&cache_path, FORGE_CACHE_EXPIRY_HOURS, |t| {
+        parse_forge_metadata_versions(t, mc_version)
+    }) {
+        eprintln!("Forge 元数据缓存命中: {} 个版本", parsed.len());
+        return Ok(with_promotions(http, mc_version, parsed).await);
+    }
+
+    let response = http
+        .get(FORGE_MAVEN_METADATA_URL)
+        .send()
+        .await
+        .map_err(|e| Error::Http {
+            message: format!("Forge Maven 元数据请求失败: {e}"),
+            status: None,
+            source: Some(Box::new(e)),
+        })?;
+    let response = response.error_for_status().map_err(|e| Error::Http {
+        message: format!("Forge Maven 元数据请求失败: {e}"),
+        status: None,
+        source: Some(Box::new(e)),
+    })?;
+    let body = response.text().await.map_err(|e| Error::Http {
+        message: format!("Forge Maven 元数据响应读取失败: {e}"),
+        status: None,
+        source: Some(Box::new(e)),
+    })?;
+
+    write_cache(&cache_path, &body);
+
+    let parsed = parse_forge_metadata_versions(&body, mc_version);
+    if parsed.is_empty() {
+        eprintln!("Forge 元数据中未找到 {mc_version} 的版本");
+        return Ok(Vec::new());
+    }
+    eprintln!("Forge 元数据解析到 {} 个版本", parsed.len());
+    Ok(with_promotions(http, mc_version, parsed).await)
+}
+
+/// 读 24h 内的缓存文本；文件缺失 / 超期 / 读取失败 → None（调用方走网络）。
+fn read_fresh_cache(cache_path: &str, expiry_hours: u64) -> Option<String> {
+    if !Path::new(cache_path).is_file() {
+        return None;
+    }
+    let modified = std::fs::metadata(cache_path)
+        .and_then(|m| m.modified())
+        .ok()?;
+    let age = SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or_default();
+    if age >= Duration::from_secs(expiry_hours * 3600) {
+        return None;
+    }
+    std::fs::read_to_string(cache_path).ok()
+}
+
+/// 读取有效期内缓存并解析，**解析结果为空则视为缓存不可用**（issue #176）。
+///
+/// 修复前两条路径都是「命中缓存即无条件采信解析结果」：一份残缺 / 被上游改版 / 中断
+/// 写入的缓存会在 24h 内持续续命，把用户锁死在「无可用加载器版本」。抽成独立函数后
+/// 该约束可被单测直接覆盖（见本文件 tests 模块 `cache_*` 用例）。
+fn read_usable_cached_versions<T>(
+    cache_path: &str,
+    expiry_hours: u64,
+    parse: impl Fn(&str) -> Vec<T>,
+) -> Option<Vec<T>> {
+    let raw = read_fresh_cache(cache_path, expiry_hours)?;
+    let parsed = parse(&raw);
+    if parsed.is_empty() {
+        return None;
+    }
+    Some(parsed)
+}
+
+/// 写缓存（目录不存在则创建）；失败仅告警，不阻断主流程。
+fn write_cache(cache_path: &str, content: &str) {
+    let write = (|| -> std::io::Result<()> {
+        if let Some(dir) = Path::new(cache_path).parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(cache_path, content)
+    })();
+    match write {
+        Ok(()) => eprintln!("已缓存到{cache_path}"),
+        Err(e) => eprintln!("缓存写入失败: {e}"),
+    }
+}
+
 /// 从 files.minecraftforge.net 官方 HTML 获取 Forge 版本列表（源：
 /// `GetForgeVersionsFromOfficialHtml`）。
 ///
@@ -235,31 +573,16 @@ pub(crate) async fn get_forge_versions_from_official_html(
     // 源：`minecraftVersion.Replace('-', '_')`
     let forge_mc_version = mc_version.replace('-', "_");
     let cache_file_path = get_cache_file_path(&forge_mc_version);
-    const CACHE_EXPIRY_HOURS: u64 = 24;
 
     // 源：`File.Exists(cacheFilePath) && (DateTime.Now - File.GetLastWriteTime(...)).TotalHours < 24`
-    if Path::new(&cache_file_path).is_file() {
-        let modified = std::fs::metadata(&cache_file_path)
-            .and_then(|m| m.modified())
-            .map_err(|e| Error::Params {
-                message: format!("读取 Forge 版本缓存文件时间失败: {e}"),
-                source: Some(Box::new(e)),
-            })?;
-        let age = SystemTime::now()
-            .duration_since(modified)
-            .unwrap_or_default();
-        if age < Duration::from_secs(CACHE_EXPIRY_HOURS * 3600) {
-            match std::fs::read_to_string(&cache_file_path) {
-                Ok(cached_html) => {
-                    return Ok(parse_forge_versions(
-                        mc_version,
-                        &forge_mc_version,
-                        &cached_html,
-                    ));
-                }
-                Err(e) => eprintln!("使用缓存失败: {e}，将重新获取"),
-            }
-        }
+    // issue #176：命中缓存还须**解析非空**才采用——否则一份坏 HTML（残缺页 / 上游
+    // 改版 / 中断写入）会在 24h 内持续续命，把用户锁死在「无可用版本」。
+    if let Some(parsed) =
+        read_usable_cached_versions(&cache_file_path, FORGE_CACHE_EXPIRY_HOURS, |html| {
+            parse_forge_versions(mc_version, &forge_mc_version, html)
+        })
+    {
+        return Ok(parsed);
     }
 
     // 源 sourceUrls 列表（当前仅一个官方 URL，保留循环结构）
@@ -290,16 +613,7 @@ pub(crate) async fn get_forge_versions_from_official_html(
         let html_content = String::from_utf8_lossy(&html_bytes).to_string();
 
         // 源：缓存写入（try/catch → "缓存写入失败"）
-        let cache_write = (|| -> std::io::Result<()> {
-            if let Some(cache_dir) = Path::new(&cache_file_path).parent() {
-                std::fs::create_dir_all(cache_dir)?;
-            }
-            std::fs::write(&cache_file_path, &html_content)
-        })();
-        match cache_write {
-            Ok(()) => eprintln!("已缓存html到{cache_file_path}"),
-            Err(e) => eprintln!("缓存写入失败: {e}"),
-        }
+        write_cache(&cache_file_path, &html_content);
 
         let result = parse_forge_versions(mc_version, &forge_mc_version, &html_content);
         if !result.is_empty() {
@@ -524,11 +838,31 @@ pub(crate) fn is_recommended_version(
 ///
 /// `Path.Combine(Path.GetTempPath(), "ForgeVersionCache", $"{minecraftVersion}_forge.html")`。
 pub(crate) fn get_cache_file_path(minecraft_version: &str) -> String {
-    std::env::temp_dir()
-        .join("ForgeVersionCache")
+    forge_cache_dir()
         .join(format!("{minecraft_version}_forge.html"))
         .to_string_lossy()
         .to_string()
+}
+
+/// Forge `maven-metadata.xml` 缓存路径（issue #176 新增主路径）。
+pub(crate) fn get_metadata_cache_file_path(minecraft_version: &str) -> String {
+    forge_cache_dir()
+        .join(format!("{minecraft_version}_forge_metadata.xml"))
+        .to_string_lossy()
+        .to_string()
+}
+
+/// Forge 推荐版本清单缓存路径（issue #176 新增主路径）。
+pub(crate) fn get_promotions_cache_file_path(minecraft_version: &str) -> String {
+    forge_cache_dir()
+        .join(format!("{minecraft_version}_forge_promotions.json"))
+        .to_string_lossy()
+        .to_string()
+}
+
+/// `%TEMP%/ForgeVersionCache`（三种 Forge 版本信息缓存的公共目录）。
+fn forge_cache_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join("ForgeVersionCache")
 }
 
 /// Cleanroom GitHub Releases 请求与解析（源 `GetCleanroomVersions` 的 try 块）。
@@ -1204,4 +1538,190 @@ fn maven_jar_regex() -> &'static Regex {
     MAVEN_JAR_RE.get_or_init(|| {
         Regex::new(r"https://maven\.minecraftforge\.net/.*?\.jar").expect("静态正则编译失败")
     })
+}
+
+/// `maven-metadata.xml` 的 `<version>` 条目正则（issue #176）。
+///
+/// 只取 `<versions>` 列表里的直接文本；`<latest>` / `<release>` 等兄弟节点不匹配
+/// （它们的标签名不是 `version`），故不会污染结果。`(?s)` 容忍节点间换行缩进。
+fn metadata_version_regex() -> &'static Regex {
+    static METADATA_VERSION_RE: OnceLock<Regex> = OnceLock::new();
+    METADATA_VERSION_RE.get_or_init(|| {
+        Regex::new(r"(?s)<version>\s*([^<\s][^<]*?)\s*</version>").expect("静态正则编译失败")
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 真实 `maven-metadata.xml` 节选（含 `<latest>`/`<release>` 干扰节点与多 MC 前缀）。
+    const METADATA_SAMPLE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<metadata>
+  <groupId>net.minecraftforge</groupId>
+  <artifactId>forge</artifactId>
+  <versioning>
+    <latest>1.20.1-47.4.26</latest>
+    <release>1.20.1-47.4.26</release>
+    <versions>
+      <version>1.20.1-47.4.26</version>
+      <version>1.12.2-14.23.5.2864</version>
+      <version>1.12.2-14.23.5.2860</version>
+      <version>1.12.2-14.23.5.2859</version>
+      <version>1.7.10-10.13.4.1614-1.7.10</version>
+      <version>1.7.10_pre4-10.12.2.1149-prerelease</version>
+      <version>1.12.20-99.9.9</version>
+    </versions>
+  </versioning>
+</metadata>"#;
+
+    fn version_of<'a>(results: &'a [ModLoaderResult], v: &str) -> Option<&'a ModLoaderResult> {
+        results.iter().find(|r| r.version == v)
+    }
+
+    /// issue #176 主用例：模组包所需的 14.23.5.2860 必须能定位到可下载的安装器直链。
+    #[test]
+    fn metadata_parses_issue_176_version_with_installer_url() {
+        let results = parse_forge_metadata_versions(METADATA_SAMPLE, "1.12.2");
+
+        let hit = version_of(&results, "14.23.5.2860")
+            .expect("14.23.5.2860 必须从 maven-metadata 中解析出来");
+        assert_eq!(hit.r#type, ModLoaderType::Forge);
+        assert_eq!(hit.game_version, "1.12.2");
+        assert_eq!(
+            hit.url,
+            "https://maven.minecraftforge.net/net/minecraftforge/forge/\
+             1.12.2-14.23.5.2860/forge-1.12.2-14.23.5.2860-installer.jar"
+        );
+    }
+
+    /// 严格「{mc}-」前缀：1.12.2 不得吃掉 1.12.20，也不得带上 1.7.10_pre4。
+    #[test]
+    fn metadata_prefix_filter_is_exact() {
+        let results = parse_forge_metadata_versions(METADATA_SAMPLE, "1.12.2");
+        let versions: Vec<&str> = results.iter().map(|r| r.version.as_str()).collect();
+
+        assert!(
+            !versions.contains(&"99.9.9"),
+            "1.12.2 不得匹配 1.12.20-99.9.9"
+        );
+        assert!(
+            !versions.contains(&"10.12.2.1149-prerelease"),
+            "1.12.2 不得匹配 1.7.10_pre4-*"
+        );
+        assert_eq!(results.len(), 3, "样例中 1.12.2 恰有 3 个版本");
+    }
+
+    /// `<latest>`/`<release>` 是兄弟节点，不能混进版本列表。
+    #[test]
+    fn metadata_ignores_latest_and_release_nodes() {
+        let results = parse_forge_metadata_versions(METADATA_SAMPLE, "1.20.1");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].version, "47.4.26");
+        assert!(!version_of(&results, "47.4.26").unwrap().is_recommand);
+    }
+
+    /// 与 HTML 路径同序：降序，前端「最新版」取首项。
+    #[test]
+    fn metadata_sorted_descending() {
+        let results = parse_forge_metadata_versions(METADATA_SAMPLE, "1.12.2");
+        assert_eq!(results[0].version, "14.23.5.2864");
+        assert_eq!(results[2].version, "14.23.5.2859");
+    }
+
+    /// MC 版本含连字符时按 Forge 约定归一化匹配（代码评审 bug_risk 回归守卫）。
+    ///
+    /// 修复前用原始 `mc_version`（`1.7.10-pre4`）做前缀，而 Maven artifact 的 MC 段
+    /// 是下划线形态（`1.7.10_pre4-...`）→ 匹配不到任何条目，列表恒空。
+    #[test]
+    fn metadata_normalizes_hyphenated_mc_version() {
+        let results = parse_forge_metadata_versions(METADATA_SAMPLE, "1.7.10-pre4");
+        assert_eq!(results.len(), 1, "1.7.10-pre4 必须匹配 1.7.10_pre4-* 条目");
+        assert_eq!(results[0].version, "10.12.2.1149-prerelease");
+        assert_eq!(
+            results[0].url,
+            "https://maven.minecraftforge.net/net/minecraftforge/forge/\
+             1.7.10_pre4-10.12.2.1149-prerelease/forge-1.7.10_pre4-10.12.2.1149-prerelease-installer.jar"
+        );
+        // game_version 回填调用方原始版本，与 HTML/BMCLAPI 路径一致
+        assert_eq!(results[0].game_version, "1.7.10-pre4");
+    }
+
+    /// promotions 查询键同样按 `-`→`_` 归一化（与元数据前缀约定一致）。
+    #[test]
+    fn promotions_normalize_hyphenated_mc_version_key() {
+        let json = r#"{"promos":{"1.7.10_pre4-latest":"10.12.2.1149-prerelease"}}"#;
+        let promos = parse_forge_promotions(json, "1.7.10-pre4").expect("归一化后应命中");
+        assert_eq!(promos, vec!["10.12.2.1149-prerelease"]);
+    }
+
+    /// 推荐标记：latest + recommended 都要打上（#176 记录的 1.12.2 = 2864/2859）。
+    #[test]
+    fn promotions_marks_latest_and_recommended() {
+        let json = r#"{"homepage":"https://files.minecraftforge.net/","promos":{
+            "1.12.2-latest":"14.23.5.2864",
+            "1.12.2-recommended":"14.23.5.2859",
+            "1.20.1-latest":"47.4.26"}}"#;
+
+        let mut promos = parse_forge_promotions(json, "1.12.2").expect("应解析出推荐清单");
+        promos.sort();
+        assert_eq!(promos, vec!["14.23.5.2859", "14.23.5.2864"]);
+    }
+
+    /// 推荐清单异常不得阻断版本列表（宁可不标推荐，也不能整链失败）。
+    #[test]
+    fn promotions_tolerates_malformed_payload() {
+        assert!(parse_forge_promotions("not json", "1.12.2").is_none());
+        assert!(parse_forge_promotions(r#"{"promos":{}}"#, "1.12.2").is_none());
+        assert!(parse_forge_promotions(r#"{"promos":{"1.12.2-latest":123}}"#, "1.12.2").is_none());
+    }
+
+    /// 坏缓存不得被采用（issue #176 回归守卫）。
+    ///
+    /// 修复前是「命中缓存 → 无条件采信解析结果」，因此本用例在修复前必然失败：
+    /// 空 / 残缺缓存会被当成有效结果返回，导致 24h 内持续「无可用版本」。
+    #[test]
+    fn cache_with_unparseable_content_is_rejected() {
+        let dir = std::env::temp_dir().join(format!("qmx-forge-cache-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("1.12.2_forge_metadata.xml");
+        let path_str = path.to_string_lossy().to_string();
+
+        // 坏缓存：HTTP 错误页 / 残缺内容
+        std::fs::write(&path, "<html>502 Bad Gateway</html>").unwrap();
+        assert!(
+            read_usable_cached_versions(&path_str, FORGE_CACHE_EXPIRY_HOURS, |t| {
+                parse_forge_metadata_versions(t, "1.12.2")
+            })
+            .is_none(),
+            "解析为空的缓存必须被拒绝（否则坏缓存续命 24h）"
+        );
+
+        // 完好缓存：同一函数必须采信
+        std::fs::write(&path, METADATA_SAMPLE).unwrap();
+        let parsed = read_usable_cached_versions(&path_str, FORGE_CACHE_EXPIRY_HOURS, |t| {
+            parse_forge_metadata_versions(t, "1.12.2")
+        })
+        .expect("可解析的缓存必须被采用");
+        assert_eq!(parsed.len(), 3);
+
+        // 超期缓存：即便内容完好也不采用
+        assert!(
+            read_usable_cached_versions(&path_str, 0, |t| parse_forge_metadata_versions(
+                t, "1.12.2"
+            ))
+            .is_none(),
+            "过期缓存必须被拒绝"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 有下载源兜底：官方全挂时 BMCLAPI 分支仍能给出可下载直链（结构断言）。
+    #[test]
+    fn bmclapi_forge_download_url_shape() {
+        let url = get_forge_download_url(DownloadMirror::Bmclapi, "1.12.2", "2860");
+        assert_eq!(url, "https://bmclapi2.bangbang93.com/forge/download/2860");
+        assert!(get_forge_download_url(DownloadMirror::Bmclapi, "1.12.2", "").is_empty());
+    }
 }
