@@ -314,9 +314,16 @@ pub(crate) async fn get_forge_versions_from_maven_metadata(
 
 /// 从 `maven-metadata.xml` 正文提取指定 MC 版本的 Forge 版本列表（降序）。
 ///
-/// 逐条 `<version>` 文本形如 `{mc_version}-{forge_version}`（如 `1.12.2-14.23.5.2860`），
-/// 前缀不匹配的丢弃（严格前缀 + `-` 分隔，故 `1.12.2` 不会误吃 `1.12.20-*`）；
-/// 返回值取前缀之后的 Forge 版本号，`url` 按 Maven artifact 规则拼接。
+/// 逐条 `<version>` 文本形如 `{forge_mc_version}-{forge_version}`（如
+/// `1.12.2-14.23.5.2860`），前缀不匹配的丢弃（严格前缀 + `-` 分隔，故 `1.12.2`
+/// 不会误吃 `1.12.20-*`）；返回值取前缀之后的 Forge 版本号，`url` 按 Maven
+/// artifact 规则拼接。
+///
+/// ⚠️ 匹配前缀使用 `mc_version.replace('-', "_")` 归一化（与 [`get_forge_download_url`]
+/// 及旧 HTML 路径的 `index_{forgeMcVersion}` 同一约定）：Maven artifact 的 MC 段是
+/// 下划线形态（`1.7.10_pre4-10.12.2.1149-prerelease`），若用原始 `mc_version`
+/// （`1.7.10-pre4`）做前缀将匹配不到任何条目，列表恒空。`game_version` 字段
+/// 仍回填调用方原始版本，保持三条路径（HTML/BMCLAPI/元数据）行为一致。
 ///
 /// 实测与旧 HTML 分页的一致性：1.12.2 / 1.16.5 / 1.20.1 / 1.21 / 1.6.4 逐条相同；
 /// 1.7.10 处元数据为超集（多出 `1.7.10_pre4-*` 预发布，旧 HTML 需 `index_1.7.10_pre4`
@@ -325,7 +332,8 @@ pub(crate) async fn get_forge_versions_from_maven_metadata(
 /// 安装器命名统一为 `forge-{artifactId}-installer.jar`，对 `1.7.10-10.13.4.1614-1.7.10`、
 /// `1.7.10_pre4-10.12.2.1149-prerelease` 等古怪 artifact 同样成立（已 HEAD 实测 200）。
 pub(crate) fn parse_forge_metadata_versions(xml: &str, mc_version: &str) -> Vec<ModLoaderResult> {
-    let prefix = format!("{mc_version}-");
+    let forge_mc_version = mc_version.replace('-', "_");
+    let prefix = format!("{forge_mc_version}-");
     let mut versions: Vec<String> = Vec::new();
 
     for cap in metadata_version_regex().captures_iter(xml) {
@@ -364,16 +372,20 @@ pub(crate) fn parse_forge_metadata_versions(xml: &str, mc_version: &str) -> Vec<
 ///
 /// 结构：`{"homepage":"...","promos":{"1.12.2-latest":"14.23.5.2864",
 /// "1.12.2-recommended":"14.23.5.2859",...}}`。
+/// 键的 MC 段采用 Forge 归一化形态（`-`→`_`，实测 117 个键的 MC 部分从不含
+/// 连字符），故查询键同样先归一化——与 [`parse_forge_metadata_versions`] 的
+/// 前缀约定保持一致。
 /// 非 JSON / 缺 `promos` / 值非字符串 → None（调用方据此保留默认标记，不阻断版本列表）；
 /// 值重复（latest == recommended）只保留一份。
 pub(crate) fn parse_forge_promotions(json: &str, mc_version: &str) -> Option<Vec<String>> {
     let value: Value = serde_json::from_str(json).ok()?;
     let promos = value.get("promos")?.as_object()?;
 
+    let forge_mc_version = mc_version.replace('-', "_");
     let mut out: Vec<String> = Vec::new();
     for key in [
-        format!("{mc_version}-latest"),
-        format!("{mc_version}-recommended"),
+        format!("{forge_mc_version}-latest"),
+        format!("{forge_mc_version}-recommended"),
     ] {
         if let Some(Value::String(v)) = promos.get(key.as_str())
             && !v.trim().is_empty()
@@ -392,7 +404,8 @@ pub(crate) fn parse_forge_promotions(json: &str, mc_version: &str) -> Option<Vec
 
 /// 拉取并解析推荐版本清单；失败返回 None（调用方保留默认标记）。带 24h 缓存。
 async fn fetch_forge_promotions(http: &reqwest::Client, mc_version: &str) -> Option<Vec<String>> {
-    let cache_path = get_promotions_cache_file_path(mc_version);
+    // 缓存键与元数据路径同约定：MC 段 `-`→`_` 归一化。
+    let cache_path = get_promotions_cache_file_path(&mc_version.replace('-', "_"));
     if let Some(promos) = read_usable_cached_versions(&cache_path, FORGE_CACHE_EXPIRY_HOURS, |j| {
         parse_forge_promotions(j, mc_version).unwrap_or_default()
     }) {
@@ -447,7 +460,9 @@ async fn forge_versions_from_maven_metadata_inner(
     http: &reqwest::Client,
     mc_version: &str,
 ) -> Result<Vec<ModLoaderResult>, Error> {
-    let cache_path = get_metadata_cache_file_path(mc_version);
+    // 缓存键与 HTML 路径的 GetCacheFilePath 同约定：MC 段 `-`→`_` 归一化，
+    // 避免 `1.7.10-pre4` 与 `1.7.10_pre4` 各存一份等价缓存。
+    let cache_path = get_metadata_cache_file_path(&mc_version.replace('-', "_"));
 
     if let Some(parsed) = read_usable_cached_versions(&cache_path, FORGE_CACHE_EXPIRY_HOURS, |t| {
         parse_forge_metadata_versions(t, mc_version)
@@ -1612,6 +1627,32 @@ mod tests {
         let results = parse_forge_metadata_versions(METADATA_SAMPLE, "1.12.2");
         assert_eq!(results[0].version, "14.23.5.2864");
         assert_eq!(results[2].version, "14.23.5.2859");
+    }
+
+    /// MC 版本含连字符时按 Forge 约定归一化匹配（代码评审 bug_risk 回归守卫）。
+    ///
+    /// 修复前用原始 `mc_version`（`1.7.10-pre4`）做前缀，而 Maven artifact 的 MC 段
+    /// 是下划线形态（`1.7.10_pre4-...`）→ 匹配不到任何条目，列表恒空。
+    #[test]
+    fn metadata_normalizes_hyphenated_mc_version() {
+        let results = parse_forge_metadata_versions(METADATA_SAMPLE, "1.7.10-pre4");
+        assert_eq!(results.len(), 1, "1.7.10-pre4 必须匹配 1.7.10_pre4-* 条目");
+        assert_eq!(results[0].version, "10.12.2.1149-prerelease");
+        assert_eq!(
+            results[0].url,
+            "https://maven.minecraftforge.net/net/minecraftforge/forge/\
+             1.7.10_pre4-10.12.2.1149-prerelease/forge-1.7.10_pre4-10.12.2.1149-prerelease-installer.jar"
+        );
+        // game_version 回填调用方原始版本，与 HTML/BMCLAPI 路径一致
+        assert_eq!(results[0].game_version, "1.7.10-pre4");
+    }
+
+    /// promotions 查询键同样按 `-`→`_` 归一化（与元数据前缀约定一致）。
+    #[test]
+    fn promotions_normalize_hyphenated_mc_version_key() {
+        let json = r#"{"promos":{"1.7.10_pre4-latest":"10.12.2.1149-prerelease"}}"#;
+        let promos = parse_forge_promotions(json, "1.7.10-pre4").expect("归一化后应命中");
+        assert_eq!(promos, vec!["10.12.2.1149-prerelease"]);
     }
 
     /// 推荐标记：latest + recommended 都要打上（#176 记录的 1.12.2 = 2864/2859）。
