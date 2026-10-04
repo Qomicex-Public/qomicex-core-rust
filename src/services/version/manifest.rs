@@ -30,9 +30,11 @@ use crate::util::json_helper::{
 /// 版本清单下载地址（源：`private const string ManifestUrl`，逐字保留）
 const MANIFEST_URL: &str = "https://launchermeta.mojang.com/mc/game/version_manifest.json";
 
-/// BMCLAPI meta 镜像前缀（与 `DefaultDownloadSourceManager::generate_mirror_urls`
-/// 对 meta 类 URL 的改写形态一致，见 mirror.rs 的 bug-for-bug 测试）。
-const BMCLAPI_META_PREFIX: &str = "https://bmclapi2.bangbang93.com/meta/";
+/// BMCLAPI 版本清单镜像（**实测确认的原生路径**，非 `/meta/{URL}` 代理形态——
+/// mirror.rs 的 `/meta/` 前缀约定适用于库/资源文件，对 `version_manifest.json`
+/// 该代理实测 404；BMCLAPI 自有镜像路径返回与官方同构的 JSON，versions[].url
+/// 仍指向 piston-meta.mojang.com，故 version.json 拉取不受影响）。
+const BMCLAPI_MANIFEST_URL: &str = "https://bmclapi2.bangbang93.com/mc/game/version_manifest.json";
 
 /// 连接层错误重试次数（含首次；与 completer.rs 的 `DownloadFileWithRetryAsync`
 /// maxRetries 默认 3 对齐）。
@@ -105,8 +107,7 @@ impl VersionManifest for VersionManifestService {
             Err(e) => e,
         };
         eprintln!("版本清单官方源获取失败（{official_err}），切换 BMCLAPI 镜像重试");
-        let mirror_url = format!("{BMCLAPI_META_PREFIX}{MANIFEST_URL}");
-        let body = get_json_with_retry(&self.http, &mirror_url)
+        let body = get_json_with_retry(&self.http, BMCLAPI_MANIFEST_URL)
             .await
             .map_err(|e| Error::Http {
                 message: format!(
@@ -234,14 +235,17 @@ fn is_connect_layer_error(e: &Error) -> bool {
 mod tests {
     use super::*;
 
-    /// 镜像 URL 形态与 mirror.rs 的 bug-for-bug 约定一致（meta 前缀整串拼接）。
+    /// BMCLAPI 镜像走**原生路径**（`/mc/game/version_manifest.json`）。
+    ///
+    /// 回归守卫（审计实测）：`/meta/{完整URL}` 代理形态对该目标实测 404——
+    /// mirror.rs 的 `/meta/` 前缀约定只适用于库/资源文件，不适用于版本清单。
     #[test]
     fn bmclapi_manifest_mirror_url_shape() {
-        let mirror_url = format!("{BMCLAPI_META_PREFIX}{MANIFEST_URL}");
         assert_eq!(
-            mirror_url,
-            "https://bmclapi2.bangbang93.com/meta/https://launchermeta.mojang.com/mc/game/version_manifest.json"
+            BMCLAPI_MANIFEST_URL,
+            "https://bmclapi2.bangbang93.com/mc/game/version_manifest.json"
         );
+        assert!(!BMCLAPI_MANIFEST_URL.contains("/meta/"));
     }
 
     /// 状态码错误（无 source）不得触发重试——4xx/5xx 重试无意义且放大请求量。
