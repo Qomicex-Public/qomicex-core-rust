@@ -39,11 +39,16 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Error;
 
-/// 版本 JSON 里的 jarmod 列表键名（对齐 MMC/Prism 的 `jarMods` 语义）。
+/// 版本 JSON 里的 jarmod 列表键名。
 ///
-/// 同时接受 MMC 的 `jarMods`（MultiMC patch 字段）与 QML 的 `jarmods`，因为
-/// MultiMC 导入路径（`services/multimc.rs` 的 `apply_patch`）会把未知键原样透传，
-/// 而 MMC 生态里该键叫 `jarMods`。
+/// `jarmods` 是本仓库（后端 technic 导入）写入的形态；`jarMods` 是 MultiMC/Prism
+/// 组件 patch 的字段名，由 `services/multimc.rs` 的 `apply_patch` 以「未知键」透传
+/// 进合并后的版本 JSON。
+///
+/// ⚠️ **只支持字符串数组形态**（`["jarmods/x.jar"]`，路径相对版本目录）。MMC 原生
+/// 写的是**库对象**（带 `name`/`MMC-hint`/`MMC-filename`，需按 maven 规则解析落盘
+/// 路径），那种形态**尚未支持**——见 [`jarmods_from_json`] 的告警处理：遇到对象元素
+/// 会打印明确原因而不是静默忽略（静默忽略会让用户以为 jarmod 生效了）。
 pub const JARMOD_KEYS: [&str; 2] = ["jarmods", "jarMods"];
 
 /// 单次合并允许读取的 jarmod 数量上限（防御性：畸形 JSON 塞入上千条会拖垮启动）。
@@ -56,10 +61,19 @@ const DERIVED_SUFFIX: &str = "-jarmod.jar";
 ///
 /// 返回 `None` 表示**无 jarmod**（键缺失/为 null/空数组/非数组），调用方据此跳过
 /// 整条派生逻辑——这正是「对期1 标准包零影响」的保证点。
+///
+/// 对象元素（MMC 原生形态）**不被消费**，但会打一条告警说明原因：静默丢弃会让人误以为
+/// MultiMC 实例的 jarmod 已生效，而那属于「装作支持」，比明确说不支持更糟。
 pub fn jarmods_from_json(root: &serde_json::Value) -> Option<Vec<String>> {
     for key in JARMOD_KEYS {
         let Some(v) = root.get(key) else { continue };
         let Some(arr) = v.as_array() else { continue };
+        if arr.iter().any(|x| x.is_object()) {
+            eprintln!(
+                "版本 JSON 的 `{key}` 含库对象元素（MultiMC 原生 jarMods 形态），当前仅支持\
+                 字符串路径数组，该 jarmod 不会被注入；如需支持请将其转换为相对路径字符串"
+            );
+        }
         let list: Vec<String> = arr
             .iter()
             .filter_map(|x| x.as_str())
@@ -118,19 +132,19 @@ pub fn ensure_derived_jar(
         return Ok(None);
     }
 
-    // 新鲜度：派生 jar 存在且不早于主 jar 与全部 jarmod
-    if let Ok(meta) = std::fs::metadata(&dest) {
-        if let Ok(dest_time) = meta.modified() {
-            let newest_input = std::iter::once(base_jar)
-                .chain(inputs.iter().map(PathBuf::as_path))
-                .filter_map(|p| std::fs::metadata(p).ok())
-                .filter_map(|m| m.modified().ok())
-                .max();
-            if let Some(t) = newest_input {
-                if dest_time >= t {
-                    return Ok(Some(dest));
-                }
-            }
+    // 新鲜度：派生 jar 存在且不早于主 jar 与全部 jarmod。
+    // 合并嵌套 `if let`（clippy::collapsible_if）：语义等价且更易读。
+    let dest_time = std::fs::metadata(&dest)
+        .ok()
+        .and_then(|m| m.modified().ok());
+    if let Some(dest_time) = dest_time {
+        let newest_input = std::iter::once(base_jar)
+            .chain(inputs.iter().map(PathBuf::as_path))
+            .filter_map(|p| std::fs::metadata(p).ok())
+            .filter_map(|m| m.modified().ok())
+            .max();
+        if newest_input.is_some_and(|t| dest_time >= t) {
+            return Ok(Some(dest));
         }
     }
 
@@ -379,7 +393,7 @@ mod tests {
             ],
         );
 
-        merge_jars(&base, &[jm.clone()], &out).unwrap();
+        merge_jars(&base, std::slice::from_ref(&jm), &out).unwrap();
         let got = read_jar(&out);
 
         // jarmod 覆盖同名类
@@ -600,5 +614,33 @@ mod tests {
             serde_json::from_str(r#"{"id":"X","mainClass":"net.minecraft.client.main.Main"}"#)
                 .unwrap();
         assert!(jarmods_from_json(&root).is_none());
+    }
+
+    /// MMC 原生 `jarMods` 是**库对象**数组，当前不支持 → 必须返回 None（不静默当成
+    /// 空路径去拼文件系统），且不能 panic。
+    ///
+    /// 这条测试固化「如实不支持」的口径：与其把 `{"name":...}` 误当路径拼进文件系统，
+    /// 不如不产生派生 jar，并在 stderr 说明原因（`jarmods_from_json` 内的告警）。
+    #[test]
+    fn mmc_object_form_is_not_silently_treated_as_path() {
+        let root: serde_json::Value = serde_json::from_str(
+            r#"{"jarMods":[{"name":"com.example:jarmod:1.0","MMC-hint":"local","MMC-filename":"x.jar"}]}"#,
+        )
+        .unwrap();
+        assert!(
+            jarmods_from_json(&root).is_none(),
+            "MMC 对象形态不应被当成路径（否则会拿 JSON 文本去拼文件路径）"
+        );
+    }
+
+    /// 混合形态：对象元素被跳过，字符串元素仍正常工作（不因一个坏元素丢掉好元素）。
+    #[test]
+    fn mixed_form_keeps_string_entries() {
+        let root: serde_json::Value =
+            serde_json::from_str(r#"{"jarmods":[{"name":"obj"}, "jarmods/real.jar"]}"#).unwrap();
+        assert_eq!(
+            jarmods_from_json(&root),
+            Some(vec!["jarmods/real.jar".to_string()])
+        );
     }
 }
