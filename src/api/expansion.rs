@@ -45,7 +45,9 @@ use crate::models::expansion::ftb::{
 use crate::models::expansion::modrinth::{
     ModrinthTag, ProjectInfo, ProjectVersionInfo, SearchResult, VersionInfo as ModrinthVersionInfo,
 };
-use crate::models::expansion::technic::{TechnicPackDetail, TechnicPackSummary};
+use crate::models::expansion::technic::{
+    TechnicPackDetail, TechnicPackSummary, TechnicSolderBuild, TechnicSolderPack,
+};
 use async_trait::async_trait;
 use std::collections::HashMap;
 
@@ -261,4 +263,26 @@ pub trait TechnicSource: Send + Sync {
     ///
     /// 不存在的 slug → `Ok(None)`（服务端 404 且响应体为 `{"error":"Modpack does not exist"}`）。
     async fn get_pack_detail(&self, slug: &str) -> Result<Option<TechnicPackDetail>, Error>;
+
+    /// Solder build 列表（`GET {solder}/modpack/{slug}`，issue #181 期3）。
+    ///
+    /// `solder` 基地址来自 [`TechnicPackDetail::solder`]（仅 Solder 分发包有值）。
+    /// Solder 无 `build` 参数要求（与 api.technicpack.net 不同，期1 实测）。
+    /// build 列表为空 / 响应畸形 → `Ok(None)`（「无可安装内容」语义，与 404 对齐）。
+    async fn get_solder_pack(
+        &self,
+        solder_base: &str,
+        slug: &str,
+    ) -> Result<Option<TechnicSolderPack>, Error>;
+
+    /// Solder build 详情（`GET {solder}/modpack/{slug}/{build}`，issue #181 期3）。
+    ///
+    /// 返回该 build 的完整 mod 清单（含逐文件 MD5 与 CDN 直链）。
+    /// build 不存在 → `Ok(None)`。
+    async fn get_solder_build(
+        &self,
+        solder_base: &str,
+        slug: &str,
+        build: &str,
+    ) -> Result<Option<TechnicSolderBuild>, Error>;
 }

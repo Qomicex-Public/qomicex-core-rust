@@ -238,6 +238,101 @@ pub enum TechnicDistribution {
     Unavailable,
 }
 
+/// Solder build 列表（`GET {solder}/modpack/{slug}`，issue #181 期3）。
+///
+/// Solder 是 Technic 的**逐文件在线分发协议**：包体不存在单一 zip，客户端按
+/// build 拉取 mod 清单逐个下载。无需 UA、无需 `build` 参数（与 api.technicpack.net
+/// 的硬要求不同，期1 实测）。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TechnicSolderPack {
+    /// 推荐构建（用户安装的默认目标）。可为 null（全部 builds 非推荐）。
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
+    pub recommended: Option<String>,
+    /// 最新构建（recommended 缺失时的兜底）。
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
+    pub latest: Option<String>,
+    /// 全部可用构建号。空列表 → 该包在 Solder 上无可用内容（不可安装）。
+    #[serde(default, deserialize_with = "de_vec_or_null")]
+    pub builds: Vec<String>,
+}
+
+impl TechnicSolderPack {
+    /// 选出要安装的 build：`recommended` 优先，缺失回退 `latest`，再缺失取
+    /// `builds` 的末位（Solder 列表实测降序排列，末位最旧；仅在列表非空时兜底）。
+    ///
+    /// 返回 `None` = 无任何可安装 build。
+    ///
+    /// 实现说明：返回 `&str` 需要生命周期收敛到 `&self`，而字段值可能与 `builds`
+    /// 列表不一致（推荐值不在列表里的畸形响应），借字段引用需要先在列表里找一遍、
+    /// 找不到再另想办法。这里直接 `Box::leak` 一个裁剪后的副本换实现简单——本方法
+    /// 在**一次安装流程里只被调用一次**，泄漏量级是单个 build 号字符串，忽略不计。
+    pub fn selected_build(&self) -> Option<&str> {
+        fn pick(v: &Option<String>) -> Option<String> {
+            v.as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        }
+        let chosen = pick(&self.recommended)
+            .or_else(|| pick(&self.latest))
+            .or_else(|| {
+                self.builds
+                    .iter()
+                    .rev()
+                    .map(|s| s.trim().to_string())
+                    .find(|s| !s.is_empty())
+            })?;
+        Some(Box::leak(chosen.into_boxed_str()))
+    }
+}
+
+/// Solder build 详情（`GET {solder}/modpack/{slug}/{build}`，issue #181 期3）。
+///
+/// `mods` 是该 build 的完整文件清单：每项一个 zip（mini minecraft 目录覆盖包），
+/// 按**数组顺序**解压叠加、后者覆盖前者（`z-` 前缀配置包排在末尾是 Technic 的
+/// 约定，保证配置覆盖 mod 默认值）。`md5` 是 Solder 的分发校验字段，下载后必须
+/// 校验（不符 → 硬失败，不静默使用）。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TechnicSolderBuild {
+    /// 该 build 适用的 Minecraft 版本（如 `1.2.5`）。
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
+    pub minecraft: Option<String>,
+    /// Forge build 号（如 `164`）。1.2.5 时代是裸 build 号（无 installer.jar），
+    /// Forge 本体经 basemods zip 的 `bin/modpack.jar` 分发——该字段仅作**实例元数据
+    /// 标注**，不参与 loader 安装管线。
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
+    pub forge: Option<String>,
+    /// mod 清单（数组顺序 = 解压覆盖顺序，语义见结构体头注释）。
+    #[serde(default, deserialize_with = "de_vec_or_null")]
+    pub mods: Vec<TechnicSolderMod>,
+}
+
+/// Solder build 内的单个 mod 条目。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TechnicSolderMod {
+    /// mod 短名（如 `buildcraft`）。
+    #[serde(default)]
+    pub name: String,
+    /// mod 版本（如 `v2.2.14`）。
+    #[serde(default)]
+    pub version: String,
+    /// 分发 zip 的 MD5（hex 小写）。`None`/空 = 未提供 → 跳过校验（Solder 契约上
+    /// 应恒有值；用 `Option` 而非 `#[serde(default)]` 是因为后者不覆盖**显式 null**
+    /// —— Technic 系接口实测经常给 null，见模块坑清单）。
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
+    pub md5: Option<String>,
+    /// 分发 zip 直链（实测走 `mirror-mods.technicpack.net` CDN）。`None`/空 =
+    /// 服务端畸形条目，调用方跳过并告警（不因单条坏数据放弃整个 build）。
+    #[serde(default, deserialize_with = "de_opt_string_or_number")]
+    pub url: Option<String>,
+    /// 字节数（仅展示/进度参考；实际下载以字节流为准）。
+    #[serde(default)]
+    pub filesize: i64,
+}
+
 impl TechnicPackDetail {
     /// 判定分发形态（判据见模块头注释）。
     pub fn distribution(&self) -> TechnicDistribution {

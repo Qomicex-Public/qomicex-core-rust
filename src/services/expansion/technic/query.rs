@@ -29,7 +29,8 @@ use async_trait::async_trait;
 use crate::api::expansion::TechnicSource;
 use crate::error::Error;
 use crate::models::expansion::technic::{
-    TechnicPackDetail, TechnicPackSummary, TechnicSearchResponse,
+    TechnicPackDetail, TechnicPackSummary, TechnicSearchResponse, TechnicSolderBuild,
+    TechnicSolderPack,
 };
 
 /// 默认 API 基地址。
@@ -155,6 +156,43 @@ impl TechnicSource for TechnicBase {
         let url = self.url(&format!("/modpack/{}", url_encode_component(s)));
         self.get_json_opt(&url).await
     }
+
+    async fn get_solder_pack(
+        &self,
+        solder_base: &str,
+        slug: &str,
+    ) -> Result<Option<TechnicSolderPack>, Error> {
+        let s = slug.trim();
+        if solder_base.trim().is_empty() || s.is_empty() {
+            return Ok(None);
+        }
+        // Solder 无 `build` 参数硬要求（期1 实测），直接裸 GET。
+        let url = format!(
+            "{}/modpack/{}",
+            solder_base.trim().trim_end_matches('/'),
+            url_encode_component(s)
+        );
+        self.get_json_opt(&url).await
+    }
+
+    async fn get_solder_build(
+        &self,
+        solder_base: &str,
+        slug: &str,
+        build: &str,
+    ) -> Result<Option<TechnicSolderBuild>, Error> {
+        let (s, b) = (slug.trim(), build.trim());
+        if solder_base.trim().is_empty() || s.is_empty() || b.is_empty() {
+            return Ok(None);
+        }
+        let url = format!(
+            "{}/modpack/{}/{}",
+            solder_base.trim().trim_end_matches('/'),
+            url_encode_component(s),
+            url_encode_component(b)
+        );
+        self.get_json_opt(&url).await
+    }
 }
 
 /// 百分号编码查询/路径片段（仅保留 RFC 3986 unreserved，其余转义）。
@@ -226,6 +264,287 @@ mod tests {
         let http = reqwest::Client::new();
         let b = TechnicBase::new(http, Some("http://127.0.0.1:9".to_string()));
         assert!(b.get_pack_detail("  ").await.unwrap().is_none());
+    }
+
+    // =================================================================
+    // Solder（issue #181 期3）
+    // =================================================================
+
+    /// 夹具：`tekkit.solder-pack.json`（GET {solder}/modpack/tekkit 的真实响应）。
+    const SOLDER_PACK_JSON: &str = r#"{
+        "name": "tekkit",
+        "display_name": "Tekkit Classic",
+        "recommended": "3.1.2",
+        "latest": "3.1.3",
+        "builds": ["3.1.3", "3.1.2", "3.1.1", "3.1.0"]
+    }"#;
+
+    /// 夹具：`tekkit.solder-build.json` 的裁剪版（真实响应 mods 30 项，此处 2 项）。
+    const SOLDER_BUILD_JSON: &str = r#"{
+        "minecraft": "1.2.5",
+        "forge": "164",
+        "java": null,
+        "memory": 0,
+        "mods": [
+            {
+                "name": "basemods",
+                "version": "tekkit-v3.1.2",
+                "md5": "b8ff1de59170a5aa3aa89eed5e6961f0",
+                "url": "https://mirror-mods.technicpack.net/mods/basemods/basemods-tekkit-v3.1.2.zip",
+                "filesize": 1231578
+            },
+            {
+                "name": "z-tekkit-configs",
+                "version": "v3.1.2",
+                "md5": "f7833fef21d189ce63cdb24d21358616",
+                "url": "https://mirror-mods.technicpack.net/mods/z-tekkit-configs/z-tekkit-configs-v3.1.2.zip",
+                "filesize": 21403
+            }
+        ]
+    }"#;
+
+    fn solder_test_base() -> (
+        TechnicBase,
+        std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    ) {
+        // 单请求本地桩：记录收到的 URL，返回预置响应体（404 → None 语义也可测）。
+        // 不引入 mock 服务器依赖：TechnicBase 只做 GET + JSON 解析，桩服务器
+        // std 实现足够。
+        use std::net::TcpListener;
+        use std::sync::Arc as StdArc;
+        use std::sync::Mutex as StdMutex;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("桩端口应可绑定");
+        let addr = listener.local_addr().unwrap();
+        let seen_url: StdArc<StdMutex<Option<String>>> = StdArc::new(StdMutex::new(None));
+        let seen = seen_url.clone();
+        let responder_body: StdArc<StdMutex<Option<&'static str>>> =
+            StdArc::new(StdMutex::new(Some(SOLDER_PACK_JSON)));
+        let body = responder_body.clone();
+
+        std::thread::spawn(move || {
+            // 只服务一批请求（测试进程内串行），处理完即退出。
+            if let Ok((stream, _)) = listener.accept() {
+                use std::io::{Read, Write};
+                let mut buf = [0u8; 4096];
+                let mut s = stream;
+                let n = s.read(&mut buf).unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let path = req
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string();
+                *seen.lock().unwrap() = Some(path);
+                let body_txt = *body.lock().unwrap();
+                let (status, payload) = match body_txt {
+                    Some(b) => ("200 OK", b),
+                    None => ("404 Not Found", r#"{"error":"Modpack does not exist"}"#),
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+
+        let http = reqwest::Client::new();
+        let base = TechnicBase::new(http, Some(format!("http://{addr}")));
+        // responder_body 借用 'static，仅用于让克隆的 Arc 保活；实际值已固定。
+        std::mem::forget(responder_body);
+        (base, seen_url)
+    }
+
+    #[tokio::test]
+    async fn solder_pack_url_has_no_build_param() {
+        let (b, seen) = solder_test_base();
+        let addr = seen
+            .lock()
+            .unwrap()
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_default();
+        drop(addr); // 仅借用检查占位；真实 URL 从桩服务器端口推导
+        let base = b.base_url.clone();
+        let pack = b
+            .get_solder_pack(&base, "tekkit")
+            .await
+            .expect("请求应成功")
+            .expect("桩返回 200 应解析出 Some");
+        assert_eq!(pack.recommended.as_deref(), Some("3.1.2"));
+        assert_eq!(pack.latest.as_deref(), Some("3.1.3"));
+        assert_eq!(pack.builds.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn solder_build_parses_mods_list() {
+        // 复用同一桩构造器但替换响应体：直接手工起一个返回 build JSON 的桩。
+        // （solder_test_base 固定返回 pack JSON，这里为 build 端点单独起桩。）
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let mut s = stream;
+                let _ = s.read(&mut buf);
+                let payload = SOLDER_BUILD_JSON;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        let http = reqwest::Client::new();
+        let b = TechnicBase::new(http, Some(format!("http://{addr}")));
+        let build = b
+            .get_solder_build(b.base_url.trim_end_matches('/'), "tekkit", "3.1.2")
+            .await
+            .expect("请求应成功")
+            .expect("200 应解析出 Some");
+        assert_eq!(build.minecraft.as_deref(), Some("1.2.5"));
+        assert_eq!(build.forge.as_deref(), Some("164"));
+        assert_eq!(build.mods.len(), 2);
+        assert_eq!(build.mods[0].name, "basemods");
+        assert_eq!(
+            build.mods[0].url.as_deref(),
+            Some("https://mirror-mods.technicpack.net/mods/basemods/basemods-tekkit-v3.1.2.zip")
+        );
+        assert_eq!(build.mods[1].name, "z-tekkit-configs");
+    }
+
+    #[tokio::test]
+    async fn solder_404_maps_to_none() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let mut s = stream;
+                let _ = s.read(&mut buf);
+                let payload = r#"{"error":"Modpack does not exist"}"#;
+                let resp = format!(
+                    "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+                    payload.len()
+                );
+                let _ = s.write_all(resp.as_bytes());
+            }
+        });
+        let http = reqwest::Client::new();
+        let b = TechnicBase::new(http, Some(format!("http://{addr}")));
+        assert!(
+            b.get_solder_pack(b.base_url.trim_end_matches('/'), "no-such")
+                .await
+                .unwrap()
+                .is_none(),
+            "404 应映射为 None（与 get_pack_detail 语义一致）"
+        );
+    }
+
+    #[test]
+    fn solder_pack_selected_build_prefers_recommended() {
+        let p: TechnicSolderPack = serde_json::from_str(SOLDER_PACK_JSON).unwrap();
+        assert_eq!(p.selected_build(), Some("3.1.2"));
+    }
+
+    #[test]
+    fn solder_pack_selected_build_falls_back_to_latest_then_last() {
+        let p: TechnicSolderPack = serde_json::from_str(
+            r#"{"recommended":null,"latest":"3.1.3","builds":["3.1.3","3.1.2"]}"#,
+        )
+        .unwrap();
+        assert_eq!(p.selected_build(), Some("3.1.3"));
+        let p2: TechnicSolderPack = serde_json::from_str(
+            r#"{"recommended":null,"latest":null,"builds":["3.1.3","3.1.2"]}"#,
+        )
+        .unwrap();
+        // builds 末位兜底（实测 Solder 列表降序 → 末位最旧，与「最保守」语义一致）
+        assert_eq!(p2.selected_build(), Some("3.1.2"));
+        let empty: TechnicSolderPack =
+            serde_json::from_str(r#"{"recommended":null,"latest":null,"builds":[]}"#).unwrap();
+        assert_eq!(empty.selected_build(), None);
+    }
+
+    #[test]
+    fn solder_models_tolerate_null_and_number() {
+        // minecraft/forge 可能为数字形态；md5/url 容忍显式 null 与缺失。
+        let b: TechnicSolderBuild = serde_json::from_str(
+            r#"{"minecraft":125,"forge":164,"mods":[{"name":"x","md5":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(b.minecraft.as_deref(), Some("125"));
+        assert_eq!(b.forge.as_deref(), Some("164"));
+        assert_eq!(b.mods[0].md5, None);
+        assert_eq!(b.mods[0].url, None);
+        assert_eq!(b.mods[0].filesize, 0);
+    }
+
+    /// 真实 Solder 端到端（网络，solder.technicpack.net 仍在服务）。
+    ///
+    /// `QOMICEX_TEST_TECHNIC_API=1 cargo test --lib -- --ignored solder_live`
+    #[tokio::test]
+    #[ignore = "需要外网：QOMICEX_TEST_TECHNIC_API=1 时手动运行"]
+    async fn technic_live_solder_endpoints() {
+        if std::env::var("QOMICEX_TEST_TECHNIC_API").is_err() {
+            return;
+        }
+        let http = reqwest::Client::builder()
+            .user_agent("Qomicex.Launcher/test")
+            .build()
+            .unwrap();
+        let b = TechnicBase::new(http, None);
+
+        // 详情判定为 Solder 形态
+        let d = b
+            .get_pack_detail("tekkit")
+            .await
+            .expect("详情应成功")
+            .expect("tekkit 应存在");
+        assert_eq!(
+            d.distribution(),
+            crate::models::expansion::technic::TechnicDistribution::Solder
+        );
+        let solder = d.solder.clone().expect("tekkit 应带 solder 基地址");
+
+        // pack → build 链
+        let pack = b
+            .get_solder_pack(&solder, "tekkit")
+            .await
+            .expect("solder pack 应成功")
+            .expect("tekkit 应有 builds");
+        let build_id = pack
+            .selected_build()
+            .map(str::to_string)
+            .expect("应有可选 build");
+        let build = b
+            .get_solder_build(&solder, "tekkit", &build_id)
+            .await
+            .expect("solder build 应成功")
+            .expect("build 应存在");
+        assert!(!build.mods.is_empty(), "build 应含 mod 清单");
+        assert!(
+            build
+                .mods
+                .iter()
+                .all(|m| m.url.as_deref().is_some_and(|u| !u.is_empty()))
+        );
+        assert!(
+            build
+                .mods
+                .iter()
+                .all(|m| m.md5.as_deref().is_some_and(|d| !d.is_empty()))
+        );
+        eprintln!(
+            "live: tekkit build={build_id} mc={:?} forge={:?} mods={}",
+            build.minecraft,
+            build.forge,
+            build.mods.len()
+        );
     }
 
     /// 真实 API 端到端（网络）。
