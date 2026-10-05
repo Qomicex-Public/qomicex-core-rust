@@ -23,7 +23,7 @@
 //!   CompleteVersionMetadata。
 //! - 参数顺序 / 内容 / 替换令牌 / 分隔符逐字保留（特殊兼容点）。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
@@ -62,6 +62,11 @@ struct ParsedConfig {
     arguments: Option<RawArguments>,
     /// 旧版 minecraftArguments（源：`Config.MinecraftArguments`）
     minecraft_arguments: Option<String>,
+    /// JarMod 列表（issue #180；`jarmods` / `jarMods` 键，缺键 → None）。
+    ///
+    /// **非 Mojang 标准字段**：为 Qomicex 的 Technic 古董包支持而引入。缺失/空数组
+    /// 时行为与引入前逐字一致（这是「对标准包零影响」的保证点）。
+    jarmods: Option<Vec<String>>,
 }
 
 /// 新版 arguments 的 jvm/game 列表（对应源 ParamsJsonContent.Arguments）
@@ -189,6 +194,42 @@ impl LaunchExecutor {
             }
         } else {
             base_main_jar.to_string_lossy().into_owned()
+        };
+
+        // JarMod 注入（issue #180）：版本 JSON 声明 jarmods 时，把「主 jar + jarmods」
+        // 合并到一个**派生 jar**（`{VDN}-jarmod.jar`）并用它顶替主 jar 在 classpath
+        // 中的位置。
+        //
+        // 为什么不直接改主 jar：`locator.rs::get_miss_main_jar` 按 `downloads.client.sha1`
+        // 强校验主 jar，不匹配即重新下载覆盖（启动前与装完后各一次）→ 改动会被静默抹掉。
+        // 派生文件不是校验对象，因此该校验与重装/补全逻辑完全不受影响。
+        //
+        // 合并失败**不阻断启动**：回退到原主 jar（宁可少一层 jarmod，也不要因缓存写不
+        // 进去而完全起不来）；失败原因写入启动日志便于排查。
+        let jarmods = config.jarmods.as_deref().unwrap_or_default();
+        let main_jar_path = if jarmods.is_empty() {
+            main_jar_path
+        } else {
+            let base = PathBuf::from(&main_jar_path);
+            match crate::services::jarmod::ensure_derived_jar(
+                &game_dir,
+                &options.version,
+                &base,
+                jarmods,
+            ) {
+                Ok(Some(derived)) => derived.to_string_lossy().into_owned(),
+                Ok(None) => main_jar_path,
+                Err(e) => {
+                    // core 不依赖 tracing/log（与仓库内其它 core 模块一致用 eprintln!）；
+                    // 合并失败**不阻断启动**：回退原主 jar，宁可少一层 jarmod 也不要
+                    // 因缓存写不进去而完全起不来。
+                    eprintln!(
+                        "JarMod 合并失败（version={}）：{e}；回退到原版主 jar，该实例的 jarmod 内容不会生效",
+                        options.version
+                    );
+                    main_jar_path
+                }
+            }
         };
 
         // 拼接 classpath（源 420-428 行：每库后接路径分隔符，最后接主 jar）
@@ -725,11 +766,16 @@ impl LaunchExecutor {
             Some(_) => return Err(parse_json_failed()), // 源 JsonException
         };
 
+        // JarMod（issue #180）：解析失败**不报错**——它是 Qomicex 扩展字段，
+        // 畸形值不应让一个原本能启动的实例起不来；仅视为「无 jarmod」。
+        let jarmods = crate::services::jarmod::jarmods_from_json(&root);
+
         Ok(ParsedConfig {
             inherits_from,
             asset_index_id,
             arguments,
             minecraft_arguments,
+            jarmods,
         })
     }
 
