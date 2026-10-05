@@ -199,4 +199,15 @@ impl GameCore {
             None,
         ))
     }
+
+    /// 创建 Technic 扩展平台客户端（issue #151；**无 C# 源对应**）。
+    ///
+    /// `base_url` 为 `None` 时用官方 API 地址；测试可注入本地桩地址。
+    pub fn create_technic_source(
+        &self,
+    ) -> Box<dyn crate::api::expansion::TechnicSource + Send + Sync> {
+        Box::new(
+            crate::services::expansion::technic::query::TechnicBase::new(self.http.clone(), None),
+        )
+    }
 }
