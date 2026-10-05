@@ -45,6 +45,7 @@ use crate::models::expansion::ftb::{
 use crate::models::expansion::modrinth::{
     ModrinthTag, ProjectInfo, ProjectVersionInfo, SearchResult, VersionInfo as ModrinthVersionInfo,
 };
+use crate::models::expansion::technic::{TechnicPackDetail, TechnicPackSummary};
 use async_trait::async_trait;
 use std::collections::HashMap;
 
@@ -230,4 +231,34 @@ pub fn get_latest_version(pack: &ModpackInfo) -> Option<FtbVersionInfo> {
                 .max_by_key(|v| v.updated)
         })
         .cloned()
+}
+
+/// Technic 数据源（issue #151，**无 C# 源对应**）。
+///
+/// 提供 Technic 平台的整合包搜索/浏览与详情查询。
+///
+/// # 与其它三个源的语义差异（消费方必读）
+///
+/// - **无分页**：Technic API 的 `/search` 固定返回 15 条且忽略 `page`/`sort`；
+///   `/trending` 返回 20 条。因此本 trait 的 `search` **不接收** `page`/`page_size`，
+///   返回 `(Vec<TechnicPackSummary>, i32)` 中的总数即实际返回条数（如实回报，
+///   不伪造分页语义）。
+/// - **无版本/fileId 概念**：一个包只有一个直链（`url`），没有版本列表。
+///   故本 trait 不提供 `versions` / `downloads` 类方法。
+/// - **slug 是唯一键**：数字 id 在详情接口上 404（实测），详情按 slug 查询。
+#[async_trait]
+pub trait TechnicSource: Send + Sync {
+    /// 搜索整合包（`GET /search?q={kw}`）。
+    ///
+    /// `query` 为空时服务端返回 400，调用方应改走 [`TechnicSource::trending`]。
+    /// 返回 `(列表, 总数)`；总数即本次实际返回条数（服务端无独立 total 字段）。
+    async fn search(&self, query: &str) -> Result<(Vec<TechnicPackSummary>, i32), Error>;
+
+    /// 浏览热门整合包（`GET /trending`，搜索无关键词时的默认列表）。
+    async fn trending(&self) -> Result<(Vec<TechnicPackSummary>, i32), Error>;
+
+    /// 整合包详情（`GET /modpack/{slug}`）。
+    ///
+    /// 不存在的 slug → `Ok(None)`（服务端 404 且响应体为 `{"error":"Modpack does not exist"}`）。
+    async fn get_pack_detail(&self, slug: &str) -> Result<Option<TechnicPackDetail>, Error>;
 }
