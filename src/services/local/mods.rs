@@ -963,8 +963,9 @@ fn parse_mcmod_json<R: Read + Seek>(
             .collect();
     }
 
-    // 硬依赖 = 注解（权威）∪ requiredMods（useDependencyInformation=true 才生效）。
-    // 以注解为主：mcmod.info 的依赖字段只在 useMetadata 时被 FML 采用，注解恒在。
+    // 硬依赖 = 注解（权威）∪ requiredMods（useDependencyInformation=true 才生效；
+    // FML 完整条件另需 @Mod(useMetadata=true)，见 extract_legacy_required_mods 的
+    // 近似说明）。以注解为主：注解恒在，mcmod.info 依赖字段只在 useMetadata 时被采用。
     let mut deps = scan_legacy_forge_annotation_deps(archive);
     if first
         .get("useDependencyInformation")
@@ -1066,9 +1067,14 @@ fn parse_legacy_dep_spec(spec: &str) -> Option<ModDependencyInfo> {
 }
 
 /// 提取 mcmod.info `requiredMods`（1.12.2 硬依赖：缺失即崩溃）。
-/// 仅在 `useDependencyInformation=true` 时由 FML 采用（Forge 官方文档 structuring：
-/// requiredMods 缺失会崩溃，dependencies 只影响加载顺序）；`modid@[range]` /
-/// `modid` 混合格式逐项解析，无效项跳过。
+/// FML 完整采用条件：`useDependencyInformation=true` **且**该 mod 声明
+/// `@Mod(useMetadata=true)`（Forge 官方文档 structuring：requiredMods 缺失会崩溃，
+/// dependencies 只影响加载顺序；两开关缺省均为 false）。useMetadata 是注解属性、
+/// 缺省时不在常量池留字符串，无法可靠判定 → 以 `useDependencyInformation=true`
+/// 近似（CodeRabbit PR #219 评审指出，父仓 ADR-101 v1.4 同步记录）：极端「声明了
+/// requiredMods 却未开 useMetadata」的 jar 可能误报，为守住硬依赖告警覆盖接受
+/// （漏报 = 崩溃无提示，即 issue #165 原始痛点）；`modid@[range]` / `modid`
+/// 混合格式逐项解析，无效项跳过。
 fn extract_legacy_required_mods(required_mods: Option<&Value>) -> Vec<ModDependencyInfo> {
     let Some(Value::Array(arr)) = required_mods else {
         return Vec::new();
