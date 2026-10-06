@@ -119,8 +119,8 @@ struct CachedModMeta {
     provides_ids: Vec<String>,
 }
 
-/// 当前 per-jar 缓存结构版本（v2 起含 issue #165 的依赖字段）。
-const MOD_META_CACHE_VERSION: u32 = 2;
+/// 当前 per-jar 缓存结构版本（v3 起含 mcmod.info 世代的 modId/requiredMods/注解依赖）。
+const MOD_META_CACHE_VERSION: u32 = 3;
 
 fn load_cached_mod(cache_file: &Path, size: u64, mtime: u64) -> Option<CachedModMeta> {
     let bytes = std::fs::read(cache_file).ok()?;
@@ -600,7 +600,7 @@ fn parse_metadata(file_bytes: &[u8], info: &mut ModInfo) {
         Ok(c) => c,
     };
     if let Some(content) = mcmod {
-        parse_mcmod_json(&content, info);
+        parse_mcmod_json(&mut archive, &content, info);
     }
 }
 
@@ -916,8 +916,18 @@ fn extract_forge_dependencies(
 }
 
 /// 解析 mcmod.info（源：`JsonNode.Parse(content)!.AsArray()`，`Count > 0` 取首元素对象）。
-/// JSON 无效 / 非数组 / 空数组 / 首元素非对象 → 跳过（同源异常被吞或条件不成立）
-fn parse_mcmod_json(content: &str, info: &mut ModInfo) {
+/// JSON 无效 / 非数组 / 空数组 / 首元素非对象 → 元数据字段跳过（同源异常被吞或条件不成立）。
+///
+/// issue #165 后续（1.12.2 世代补全）：除源有的展示字段外，还补读
+/// `modid`、`useDependencyInformation=true` 时的 `requiredMods`（缺失即崩溃的硬依赖），
+/// 并扫描 @Mod 字节码注解（`required-after:` / `required-before:`）——Forge 运行时
+/// 强制检查的权威来源。`mcmod.info` 的 `dependencies` 列表刻意**不读**：Forge 官方
+/// 语义是纯加载顺序、缺失不影响启动，收进来会把可选软依赖误报成缺失。
+fn parse_mcmod_json<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    content: &str,
+    info: &mut ModInfo,
+) {
     let Ok(Value::Array(arr)) = serde_json::from_str::<Value>(content) else {
         return;
     };
@@ -931,6 +941,9 @@ fn parse_mcmod_json(content: &str, info: &mut ModInfo) {
     info.name = json_str(first, "name").unwrap_or_else(|| "Unknown".to_string());
     info.description = json_str(first, "description").unwrap_or_default();
     info.version = json_str(first, "version").unwrap_or_default();
+    if let Some(id) = json_str(first, "modid").filter(|s| !s.trim().is_empty()) {
+        info.mod_id = id.trim().to_string();
+    }
 
     // 源：authors 为 JsonArray → 各元素 `a!.ToString()`（元素为 null → NRE 被吞，
     // authors 保持未设置 → 仅当无 null 元素时赋值）；
@@ -949,6 +962,121 @@ fn parse_mcmod_json(content: &str, info: &mut ModInfo) {
             .map(|a| a.trim().to_string())
             .collect();
     }
+
+    // 硬依赖 = 注解（权威）∪ requiredMods（useDependencyInformation=true 才生效）。
+    // 以注解为主：mcmod.info 的依赖字段只在 useMetadata 时被 FML 采用，注解恒在。
+    let mut deps = scan_legacy_forge_annotation_deps(archive);
+    if first
+        .get("useDependencyInformation")
+        .and_then(|v| v.as_bool())
+        == Some(true)
+    {
+        for dep in extract_legacy_required_mods(first.get("requiredMods")) {
+            if !deps
+                .iter()
+                .any(|d| d.mod_id.eq_ignore_ascii_case(&dep.mod_id))
+            {
+                deps.push(dep);
+            }
+        }
+    }
+    info.dependencies = deps;
+}
+
+/// 扫描 jar 内 class 文件常量池中的 Forge @Mod 注解依赖声明
+/// （`required-after:<modid>[@<range>]` / `required-before:<modid>[@<range>]`）。
+/// 1.12.2 世代注解未经 LoaderMigration 处理时以该字符串形式留在常量池里，
+/// 是 FML 实际执行强制检查的权威数据源；只匹配带 `required-` 前缀的项，
+/// `after:` / `before:` 仅是加载顺序、缺失不崩溃，不收录（避免误报）。
+/// 任意单步失败静默跳过（与既有解析的 catch{} 吞错约定一致）。
+fn scan_legacy_forge_annotation_deps<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+) -> Vec<ModDependencyInfo> {
+    const MARKERS: [&str; 2] = ["required-after:", "required-before:"];
+
+    let mut deps: Vec<ModDependencyInfo> = Vec::new();
+    // 先收集条目索引（不能在遍历时再借 archive 读其它条目，同 collect_nested_ids）
+    let class_indices: Vec<usize> = archive
+        .file_names()
+        .filter(|n| n.to_ascii_lowercase().ends_with(".class"))
+        .map(|n| find_entry_index(archive, n))
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default();
+    for index in class_indices {
+        let Ok(mut entry) = archive.by_index(index) else {
+            continue;
+        };
+        let mut bytes = Vec::new();
+        if entry.read_to_end(&mut bytes).is_err() {
+            continue;
+        }
+        drop(entry);
+        // class 常量池字符串是修改版 UTF-8；依赖声明（modid/range）为 ASCII，
+        // lossy 解码足够，也天然容错非 UTF-8 字节
+        let text = String::from_utf8_lossy(&bytes);
+        for marker in MARKERS {
+            let mut from = 0;
+            while let Some(pos) = text[from..].find(marker) {
+                let start = from + pos + marker.len();
+                let tail = &text[start..];
+                let end = tail
+                    .find(|c: char| c == ';' || c == '\u{0}')
+                    .unwrap_or(tail.len());
+                if let Some(dep) = parse_legacy_dep_spec(tail[..end].trim()) {
+                    if !deps
+                        .iter()
+                        .any(|d| d.mod_id.eq_ignore_ascii_case(&dep.mod_id))
+                    {
+                        deps.push(dep);
+                    }
+                }
+                from = start + end;
+                if from >= text.len() {
+                    break;
+                }
+            }
+        }
+    }
+    deps
+}
+
+/// 解析 `modid` / `modid@<version-range>`（Forge 注解依赖声明格式；
+/// 空声明 / 空白 modid → None）。`*` 视为「无版本约束」→ 空串。
+fn parse_legacy_dep_spec(spec: &str) -> Option<ModDependencyInfo> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return None;
+    }
+    let (mod_id, version_range) = match spec.split_once('@') {
+        Some((id, range)) => (id, range),
+        None => (spec, ""),
+    };
+    let mod_id = mod_id.trim();
+    if mod_id.is_empty() {
+        return None;
+    }
+    let version_range = match version_range.trim() {
+        "*" | "" => String::new(),
+        r => r.to_string(),
+    };
+    Some(ModDependencyInfo {
+        mod_id: mod_id.to_string(),
+        version_range,
+    })
+}
+
+/// 提取 mcmod.info `requiredMods`（1.12.2 硬依赖：缺失即崩溃）。
+/// 仅在 `useDependencyInformation=true` 时由 FML 采用（Forge 官方文档 structuring：
+/// requiredMods 缺失会崩溃，dependencies 只影响加载顺序）；`modid@[range]` /
+/// `modid` 混合格式逐项解析，无效项跳过。
+fn extract_legacy_required_mods(required_mods: Option<&Value>) -> Vec<ModDependencyInfo> {
+    let Some(Value::Array(arr)) = required_mods else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|v| v.as_str())
+        .filter_map(parse_legacy_dep_spec)
+        .collect()
 }
 
 #[async_trait]
@@ -1664,6 +1792,190 @@ version="10.4.5"
         assert_eq!(list[0].mod_id, "disabledlib", "禁用文件仍需解析 mod_id");
         assert!(!list[0].is_active(), "应以 .disabled 后缀判定为非激活");
         let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    // ── mcmod.info（1.12.2 世代：modid + requiredMods + 注解依赖）──────────
+
+    #[test]
+    fn legacy_mcmod_reads_mod_id() {
+        let json = r#"[{"modid":"jeresources","name":"Just Enough Resources",
+            "version":"0.9.3","dependencies":["JEI"]}]"#;
+        let mut info = empty_info();
+        parse_mcmod_json(&mut dummy_archive(), json, &mut info);
+        assert_eq!(info.mod_id, "jeresources");
+        // mcmod.info 的 dependencies 是加载顺序软依赖 → 不收录
+        assert!(info.dependencies.is_empty(), "{:?}", info.dependencies);
+    }
+
+    #[test]
+    fn legacy_mcmod_required_mods_only_when_use_dependency_information() {
+        // useDependencyInformation 缺省 false → requiredMods 被 FML 忽略 → 不收录
+        let json = r#"[{"modid":"m","name":"M","requiredMods":["a@[1.0,)"]}]"#;
+        let mut info = empty_info();
+        parse_mcmod_json(&mut dummy_archive(), json, &mut info);
+        assert!(info.dependencies.is_empty(), "{:?}", info.dependencies);
+
+        // 显式 true → requiredMods 是硬依赖（缺失即崩溃）
+        let json = r#"[{"modid":"m","name":"M","useDependencyInformation":true,
+            "requiredMods":["a@[1.0,)"]}]"#;
+        let mut info = empty_info();
+        parse_mcmod_json(&mut dummy_archive(), json, &mut info);
+        assert_eq!(info.dependencies.len(), 1);
+        assert_eq!(info.dependencies[0].mod_id, "a");
+        assert_eq!(info.dependencies[0].version_range, "[1.0,)");
+    }
+
+    #[test]
+    fn legacy_annotation_deps_deduped_against_required_mods() {
+        // 同一依赖（大小写差异）同时出现在注解与 requiredMods → 只收一条，区间取注解
+        let mut info = empty_info();
+        let jar = test_jar_with_entries(&[
+            (
+                "mcmod.info",
+                r#"[{"modid":"m","name":"M","useDependencyInformation":true,
+                    "requiredMods":["jei@[4.6.0,)"]}]"#,
+            ),
+            ("com/x/Mod.class", "x required-after:JEI@[4.7.0,); y"),
+        ]);
+        let mut archive = ZipArchive::new(Cursor::new(jar)).unwrap();
+        let mcmod = read_zip_entry(&mut archive, "mcmod.info")
+            .ok()
+            .flatten()
+            .unwrap();
+        parse_mcmod_json(&mut archive, &mcmod, &mut info);
+        let jei = info
+            .dependencies
+            .iter()
+            .find(|d| d.mod_id.eq_ignore_ascii_case("jei"))
+            .expect("注解依赖应被收录");
+        assert_eq!(
+            jei.version_range, "[4.7.0,)",
+            "注解先入列，requiredMods 不覆盖"
+        );
+        assert_eq!(info.dependencies.len(), 1, "去重后只留一条");
+        assert_eq!(info.mod_id, "m");
+    }
+
+    #[test]
+    fn legacy_annotation_scanner_ignores_soft_ordering_markers() {
+        // after:/before: 是加载顺序声明，缺失不崩溃 → 不收录
+        let mut info = empty_info();
+        let jar = test_jar_with_entries(&[
+            ("mcmod.info", r#"[{"modid":"m","name":"M"}]"#),
+            (
+                "com/x/Mod.class",
+                "deps;after:someorder;before:otherorder;required-after:hard",
+            ),
+        ]);
+        let mut archive = ZipArchive::new(Cursor::new(jar)).unwrap();
+        let mcmod = read_zip_entry(&mut archive, "mcmod.info")
+            .ok()
+            .flatten()
+            .unwrap();
+        parse_mcmod_json(&mut archive, &mcmod, &mut info);
+        let ids: Vec<&str> = info
+            .dependencies
+            .iter()
+            .map(|d| d.mod_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["hard"], "{ids:?}");
+    }
+
+    #[test]
+    fn legacy_dep_spec_parses_id_and_range() {
+        let dep = parse_legacy_dep_spec("jei@[4.7.0,)").unwrap();
+        assert_eq!(dep.mod_id, "jei");
+        assert_eq!(dep.version_range, "[4.7.0,)");
+        let dep = parse_legacy_dep_spec("mekanism@[1.12.2-9.8.3.390]").unwrap();
+        assert_eq!(dep.mod_id, "mekanism");
+        assert_eq!(dep.version_range, "[1.12.2-9.8.3.390]");
+        let dep = parse_legacy_dep_spec("plain").unwrap();
+        assert_eq!(dep.mod_id, "plain");
+        assert_eq!(dep.version_range, "");
+        let dep = parse_legacy_dep_spec("x@*").unwrap();
+        assert_eq!(dep.version_range, "");
+        assert!(parse_legacy_dep_spec("").is_none());
+        assert!(parse_legacy_dep_spec("@[1.0,)").is_none());
+    }
+
+    #[test]
+    fn e2e_legacy_forge_mcmod_jar_reports_annotation_dependency() {
+        // 核心回归（用户场景）：1.12.2 Forge mod，硬依赖只写在 @Mod 注解里，
+        // mcmod.info 的 dependencies 是软列表。修复前 mod_id/dependencies 恒为空
+        // → 缺失依赖检测对该世代完全失效。
+        let (game_dir, mods_dir) = temp_game_dir("legacy-forge");
+        write_jar(
+            &mods_dir.join("JustEnoughResources-0.9.3.jar"),
+            &[
+                (
+                    "mcmod.info",
+                    r#"[{"modid":"jeresources","name":"Just Enough Resources",
+                        "version":"0.9.3","dependencies":["JEI"]}]"#,
+                ),
+                (
+                    "jeresources/JEResources.class",
+                    "trailing.required-after:jei@[4.7.0,);required-after:forge@[14.23.5.2779,);",
+                ),
+            ],
+        );
+        write_jar(
+            &mods_dir.join("VoxelMap-1.9.28.jar"),
+            &[(
+                "mcmod.info",
+                r#"[{"modid":"voxelmap","name":"VoxelMap","version":"1.9.28",
+                    "dependencies":[]}]"#,
+            )],
+        );
+
+        let list = scan(&game_dir);
+        let jer = find(&list, "JustEnoughResources-0.9.3.jar");
+        assert_eq!(jer.mod_id, "jeresources");
+        let ids: Vec<&str> = jer.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
+        assert!(ids.contains(&"jei"), "注解硬依赖必须解析: {ids:?}");
+        assert!(ids.contains(&"forge"), "{ids:?}");
+        assert!(!ids.contains(&"JEI"), "软依赖列表不得混入: {ids:?}");
+        assert_eq!(find(&list, "VoxelMap-1.9.28.jar").dependencies.len(), 0);
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_legacy_mekanism_required_mods_only() {
+        // Mekanism 1.12.2：useDependencyInformation=true，requiredMods 只有 forge
+        //（恒被加载器满足）；12 项 dependencies 是可选软依赖，收了会大面积误报。
+        let (game_dir, mods_dir) = temp_game_dir("legacy-mek");
+        write_jar(
+            &mods_dir.join("Mekanism-1.12.2.jar"),
+            &[(
+                "mcmod.info",
+                r#"[{"modid":"mekanism","name":"Mekanism","version":"9.8.3.390",
+                    "useDependencyInformation":true,
+                    "requiredMods":["forge@[14.23.5.2768,)"],
+                    "dependencies":["redstoneflux","mcmultipart","jei",
+                        "buildcraftcore","ic2","computercraft"]}]"#,
+            )],
+        );
+        let list = scan(&game_dir);
+        let mek = find(&list, "Mekanism-1.12.2.jar");
+        assert_eq!(mek.mod_id, "mekanism");
+        let ids: Vec<&str> = mek.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
+        assert_eq!(ids, vec!["forge"], "只收 requiredMods: {ids:?}");
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    /// 把 (条目名, 内容) 写成内存 zip 字节（单元测试用）。
+    fn test_jar_with_entries(entries: &[(&str, &str)]) -> Vec<u8> {
+        use std::io::Write;
+        let mut buf = Vec::new();
+        {
+            let mut w = zip::ZipWriter::new(Cursor::new(&mut buf));
+            let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+            for (name, content) in entries {
+                w.start_file(*name, opts).unwrap();
+                w.write_all(content.as_bytes()).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        buf
     }
 
     #[test]
