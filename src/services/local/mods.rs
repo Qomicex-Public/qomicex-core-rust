@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Mod 扫描 / 元数据 / 启用 / 禁用（B10，对应 Mods.cs）
 //!
 //! 对应源文件：Services/Expansion/Local/Mods.cs（`Mods : LocalResourceBase`）。

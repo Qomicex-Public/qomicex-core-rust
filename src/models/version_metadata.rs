@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 版本元数据模型（B1）
 //! 对应源：Models/VersionMetadata/*.cs（7 个文件）+ JsonConverters/VersionArgumentsConverter.cs
 //! 特殊兼容点：VersionArguments 的解析/序列化由手写 impl 完整保留源 converter 语义——

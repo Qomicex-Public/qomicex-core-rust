@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Forge 系版本查询（P61）：InstallerProvider.cs 的 Forge/NeoForge/Cleanroom 部分
 //!
 //! 对应源文件：Qomicex.Core.AOT/Services/InstallerProvider.cs（1106 行）中的以下方法：

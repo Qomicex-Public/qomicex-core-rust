@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 远程版本清单服务（B6，对应源：Services/VersionManifestService.cs）
 //!
 //! 说明：

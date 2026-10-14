@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Microsoft OAuth 设备码流认证（B5，对应源：Services/MicrosoftAuthProvider.cs）
 //!
 //! 协议端点清单（URL 逐字保留自源）：

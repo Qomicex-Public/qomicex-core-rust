@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Technic 模型（issue #151）
 //!
 //! 对应 Technic 平台 API `https://api.technicpack.net` 的响应结构。**无 C# 源对应**

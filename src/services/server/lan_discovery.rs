@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 局域网游戏发现（UDP 多播）+ SRV 解析 + 自定义 DNS 客户端（B11, P52）
 //!
 //! 对应源文件：Services/Options/ServerManager.cs（Qomicex.Core.AOT，`#region 局域网发现`、

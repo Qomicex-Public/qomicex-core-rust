@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! B2 批次验证：工具层（MurmurHash2 / NBT / 时间解析 / 库坐标 / class 常量池）
 //! MurmurHash2 向量由 dotnet 10 参考实现（与源同逻辑）生成
 

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 本地版本定位器——扫描部分（B6，对应源：Services/DefaultVersionLocator.cs）
 //!
 //! 拆分说明：DefaultVersionLocator 的"版本扫描"与"缺失文件检查"拆为两个文件：

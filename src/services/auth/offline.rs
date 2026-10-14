@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 离线认证实现（B5）：对应源文件 Services/DefaultAuthProvider.cs
 //!
 //! DefaultAuthProvider 为默认/离线认证提供方：任何请求直接成功返回，

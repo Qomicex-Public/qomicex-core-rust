@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 文件工具（对应源项目 Utils/FileHelper.cs）
 
 use std::fs;

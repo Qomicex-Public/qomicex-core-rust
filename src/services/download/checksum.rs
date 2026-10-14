@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 下载校验辅助（B6）
 //!
 //! 对应源实现：Utils/FileHelper.cs 的 `ValidateFileHash`（SHA1 文件校验，

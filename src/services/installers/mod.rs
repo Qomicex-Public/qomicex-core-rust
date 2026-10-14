@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! ModLoader 安装器实现 + 工厂
 pub mod babric;
 pub mod cleanroom;

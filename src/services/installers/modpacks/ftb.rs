@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! FTB 整合包安装器（B13）
 //!
 //! 对应源文件：Qomicex.Core.AOT/Services/Installers/Modpacks/FTBModpackInstaller.cs（77 行）

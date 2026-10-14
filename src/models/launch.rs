@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 启动模型（B1）：对应源文件
 //! - Public/Models/LaunchResult.cs：LaunchResult 类
 //! - Builder/CoreOptions.cs 内 JavaOptions / LaunchOptions 记录类

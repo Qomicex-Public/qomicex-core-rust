@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 数据包扫描 + pack.mcmeta 解析（B10，对应源：Services/Expansion/Local/DataPacks.cs）
 //!
 //! 源类 `DataPacks : LocalResourceBase`（构造函数注入

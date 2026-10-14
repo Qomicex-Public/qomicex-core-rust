@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Technic API 客户端（issue #151，**无 C# 源对应**）。
 //!
 //! API 基地址 `https://api.technicpack.net`。本模块是 Technic 平台的唯一出网入口。

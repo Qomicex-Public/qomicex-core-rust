@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! B1 批次验证：模型层 serde 行为与源项目 JsonContext 语义对齐
 //! 覆盖：VersionArguments 新旧格式兼容、字符串枚举（Modrinth）、数字枚举（serde_repr）、常规往返
 

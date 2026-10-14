@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Java 提供商整合（B7 收尾）
 //!
 //! 源文件：Services/JavaProvider.cs（910 行，一个类三个职责）。

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 认证模型（B1）：对应源文件
 //! - Models/Auth/YggdrasilModels.cs（Yggdrasil 认证 DTO，AuthJsonContext 注册：CamelCase + WhenWritingNull）
 //! - Models/UserAuth.cs（UserAuth 记录）

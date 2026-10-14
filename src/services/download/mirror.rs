@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 默认下载源管理器（B6）
 //!
 //! 对应源文件：Services/DefaultDownloadSourceManager.cs

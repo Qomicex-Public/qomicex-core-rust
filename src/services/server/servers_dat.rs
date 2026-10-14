@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! servers.dat CRUD（B11，对应 ServerManager.cs 的服务器列表持久化部分）
 //!
 //! 对应源文件：Services/Options/ServerManager.cs（1247 行；本文件只移植 servers.dat 部分：

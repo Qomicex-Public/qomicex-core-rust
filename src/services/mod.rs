@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 实现层：全部 pub(crate)，外部不可见（对应源项目 Services/）
 pub mod auth;
 pub mod download;

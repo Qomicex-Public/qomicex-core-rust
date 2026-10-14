@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! MurmurHash2 指纹（CurseForge 反查）（B2）
 //!
 //! 对应源：Services/Expansion/Local/LocalResourceBase.cs 的

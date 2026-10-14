@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! LocalResourcesFactory trait：本地内容管理器工厂（B3）
 //!
 //! 对应源文件：Services/Expansion/Local/ILocalModsFactory.cs

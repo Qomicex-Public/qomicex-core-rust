@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! NeoForge 安装器（B9）
 //! 对应源文件：Services/Installers/NeoForgeInstaller.cs（256 行）
 //!

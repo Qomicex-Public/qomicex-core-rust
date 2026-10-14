@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! CurseForge API 客户端（B13，对应源文件：Services/Expansion/CurseForge/CurseForgeBase.cs）
 //!
 //! 简单派生类标注（仅继承 + ClassId 常量，无额外逻辑 → 不单列 Rust 类型）：

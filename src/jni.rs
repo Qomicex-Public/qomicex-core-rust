@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! JNI 桥接层：把 qomicex-core 的版本扫描能力暴露给 Android Kotlin。
 //!
 //! 导出符号与 Kotlin `CoreBridge` 的 external 函数一一对应

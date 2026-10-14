@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Modern（现代协议）服务器 Ping 与状态查询（B11, P51a）
 //!
 //! 对应源文件：Services/Options/ServerManager.cs（Qomicex.Core.AOT，`#region Minecraft 协议通信`

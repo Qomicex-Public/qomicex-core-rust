@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! CoreEvent 事件枚举 + 日志级别（B3）
 //!
 //! 对应源项目 Public/Events/：IDownloadProgressEvent、IInstallProgressEvent

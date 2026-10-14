@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! InstallerProvider 实现（B13）：模组加载器版本查询（主结构 + Fabric 系）
 //!
 //! 对应源文件：Qomicex.Core.AOT/Services/InstallerProvider.cs（1106 行）

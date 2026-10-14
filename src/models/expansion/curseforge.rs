@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! CurseForge 模型（B1）：对应源文件 Models/Expansion/CurseForge/*.cs
 //! - AuthorMeta.cs, CategoryMeta.cs, CurseForgeBatchFileInfo.cs
 //! - CurseForgeDependenciesMeta.cs, CurseForgeDependenciesType.cs, CurseForgeFileInfo.cs

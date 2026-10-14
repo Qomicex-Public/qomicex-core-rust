@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! CurseForge 整合包安装器（B13）
 //!
 //! 对应源文件：Qomicex.Core.AOT/Services/Installers/Modpacks/CurseForgeModpackInstaller.cs（109 行）

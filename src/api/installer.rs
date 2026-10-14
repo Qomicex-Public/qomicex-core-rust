@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! InstallerProvider trait：可用模组加载器查询（B3）
 //!
 //! 对应源文件：Public/Services/IInstallerProvider.cs（Qomicex.Core.AOT.Public.Services）

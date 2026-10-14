@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! AuthProvider trait（B3）：对应源文件 Public/IAuthProvider.cs
 //!
 //! 方法映射表：

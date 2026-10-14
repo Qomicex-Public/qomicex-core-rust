@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! GameCore 门面（Facade）：聚合全部核心服务，`Arc<dyn Trait>` 依赖注入（B4）
 //!
 //! 对应源文件：Core/DefaultGameCore.cs（Qomicex.Core.AOT）

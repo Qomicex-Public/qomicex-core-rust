@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 版本域公开 API traits（B3）：对应源项目 Public/ 下 4 个接口
 //!
 //! | 源接口 | 源文件 | Rust trait |

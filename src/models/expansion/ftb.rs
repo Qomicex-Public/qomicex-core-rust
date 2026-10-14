@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! FTB 模型（B1）：对应源文件
 //! - Models/Expansion/FeedTheBeast/FTBSearchResponse.cs（FTBSearchResponse）
 //! - Models/Expansion/FeedTheBeast/ModpackInfo.cs（ModpackInfo、TagInfo、VersionInfo、SpecsInfo、TargetInfo、AuthorInfo、LinkInfo、ArtInfo、MetaInfo、RatingInfo）

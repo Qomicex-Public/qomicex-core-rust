@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Java 在线下载：Adoptium / Zulu / BMCLAPI（B7）
 //!
 //! 对应源文件：Services/JavaProvider.cs（Qomicex.Core.AOT.Services.JavaProvider）

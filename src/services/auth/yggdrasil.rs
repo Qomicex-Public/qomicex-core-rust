@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Yggdrasil 外置登录（B5，对应源文件 Services/YggdrasilAuthProvider.cs）
 //!
 //! 端点（base = server_url 去尾部 `/` 后补一个 `/`，即源 `_baseUrl`）：

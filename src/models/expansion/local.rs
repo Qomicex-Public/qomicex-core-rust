@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 本地内容管理模型（B1）
 //! 对应源：Models/Expansion/Local/ 下 6 个文件
 //! (DataPackInfo.cs, ModInfo.cs, ResourcePackInfo.cs, SaveInfo.cs, ScreenshotInfo.cs, ShaderInfo.cs)

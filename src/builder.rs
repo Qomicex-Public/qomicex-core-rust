@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! GameCore 完整组装器（P59，对应源：Builder/GameCoreBuilder.cs + Builder/CoreOptions.cs）
 //!
 //! - `GameCoreBuilder`（sealed class）→ `GameCoreBuilder`（Builder 模式）

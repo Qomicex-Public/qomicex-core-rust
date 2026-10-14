@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! options.txt 读写 + 版本可用性过滤（B12，对应 OptionsProvider.cs）
 //!
 //! 对应源文件：Services/Options/OptionsProvider.cs（namespace Qomicex.Core.AOT.Services.Options，

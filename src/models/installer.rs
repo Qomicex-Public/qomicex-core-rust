@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 安装器模型（B1）：对应源文件
 //! - Public/Models/ModLoaderResult.cs：ModLoaderResult 记录 + ModLoaderType 枚举
 //! - Public/Models/MissFileInfo.cs：MissFileInfo 记录

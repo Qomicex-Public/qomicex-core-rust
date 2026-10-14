@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Forge 安装：Legacy + New（B9，高风险）
 //! 对应源文件：Qomicex.Core.AOT/Services/Installers/ForgeInstaller.cs（433 行）
 //! 基类：ForgeInstallerBase.cs（P38 并行移植 → forge_base.rs，本文件按契约引用）

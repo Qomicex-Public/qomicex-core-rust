@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 光影包扫描（B10，对应源：Services/Expansion/Local/Shaders.cs）
 //!
 //! 源类 `Shaders : LocalResourceBase`（构造函数注入

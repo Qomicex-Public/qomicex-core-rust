@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 扩展平台数据源 traits：Modrinth / CurseForge / FTB（B3）
 //!
 //! 对应源文件：

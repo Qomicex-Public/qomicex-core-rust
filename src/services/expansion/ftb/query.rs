@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! FTB API：整合包 / 版本 / 更新日志（B13）
 //!
 //! 对应源文件：

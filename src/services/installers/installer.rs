@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 安装器基础契约（B9）
 //!
 //! 对应源文件（Qomicex.Core.AOT/Services/Installers/）：

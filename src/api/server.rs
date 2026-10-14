@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! ServerManager trait：servers.dat CRUD + Ping + LAN（B3）
 //!
 //! 对应源文件：Public/Services/IServerManager.cs（namespace Qomicex.Core.AOT.Public.Services）

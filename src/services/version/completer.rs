@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 资源补全器实现（B6）：对应源文件 Services/DefaultResourceCompleter.cs
 //!
 //! 并发设计（特殊兼容）：源 `Task.WhenAll` + `SemaphoreSlim(_maxConcurrentDownloads)`

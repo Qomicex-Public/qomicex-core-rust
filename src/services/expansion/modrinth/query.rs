@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Modrinth API：搜索 / 项目详情 / 版本 / 哈希反查 / 标签（B13）
 //!
 //! 对应源文件：`Services/Expansion/Modrinth/ModrinthBase.cs`（160 行，internal class ModrinthBase : IModrinthSource）。

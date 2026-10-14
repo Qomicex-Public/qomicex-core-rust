@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 核心内部网络配置（proxy + TLS 校验开关）。
 //!
 //! 启动器后端把已配好 proxy / ignore-TLS 的 `reqwest::Client` 经

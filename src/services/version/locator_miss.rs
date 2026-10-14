@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 缺失文件检查（B6，对应 DefaultVersionLocator.cs 的缺失文件检查部分）
 //!
 //! 拆分说明：源文件 Services/DefaultVersionLocator.cs（765 行）按职责拆为两个文件：

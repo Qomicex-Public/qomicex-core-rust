@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 数据模型层：全 serde derive（对应源项目 Models/ + JsonContext/）
 pub mod auth;
 pub mod download;

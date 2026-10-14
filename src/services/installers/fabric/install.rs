@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Fabric 安装器（B9）
 //! 对应源：Services/Installers/FabricInstaller.cs（131 行）
 //!

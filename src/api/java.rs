@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! JavaProvider trait：Java 检测 / 推荐 / 包下载（B3）
 //!
 //! 对应源文件：Public/Services/IJavaProvider.cs（Qomicex.Core.AOT.Public.Services）

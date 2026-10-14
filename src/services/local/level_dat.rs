@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 存档设置（level.dat NBT）读写服务。
 //!
 //! 对应「存档设置管理」功能（前端实例管理 → 存档 tab → 每存档「设置」弹窗）。

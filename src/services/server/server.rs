@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! ServerManager trait 聚合实现（B11, P53）
 //!
 //! 对应源文件：Services/Options/ServerManager.cs（Qomicex.Core.AOT，1247 行）。

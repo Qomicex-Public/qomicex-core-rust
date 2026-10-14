@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Minecraft launcher core library (Rust version of Qomicex.Core.AOT)"
 authors = ["Qomicex Team"]
-license = "GPL-3.0"
+license = "GPL-3.0-or-later"
 repository = "https://github.com/Qomicex-Public/qomicex-core-rust"
 
 [lib]

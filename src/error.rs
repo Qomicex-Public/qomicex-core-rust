@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 统一 Error 枚举（thiserror）（B1，对应 Exceptions/；B6 增补 Http 变体）
 
 use thiserror::Error;

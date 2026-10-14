@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 本地模型（B1）
 //! 对应源：Models/Local/LocalVersionInfo.cs + VersionManifestCacheInfo.cs
 //! 追加段（p20 批次）：Services/Options/ServiceTypes.cs 的游戏版本/选项/服务器条目类型，见文件尾部

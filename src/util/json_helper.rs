@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! JSON 工具（B2）
 //!
 //! 对应源：Utils/JsonHelper.cs（System.Text.Json SourceGen 序列化入口）

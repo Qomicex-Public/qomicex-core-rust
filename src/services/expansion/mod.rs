@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 扩展平台实现：Modrinth / CurseForge / FTB / Technic
 pub mod curseforge;
 pub mod ftb;

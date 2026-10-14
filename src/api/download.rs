@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! DownloadSourceManager trait：镜像切换（B3）
 //!
 //! 对应源文件：Public/Core/IDownloadSourceManager.cs（Qomicex.Core.AOT.Interfaces.Core）

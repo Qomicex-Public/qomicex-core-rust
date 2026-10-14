@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! LegacyFabric 安装器（B9）
 //! 对应源文件：Qomicex.Core.AOT/Services/Installers/LegacyFabricInstaller.cs（134 行）
 //!

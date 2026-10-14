@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Java 版本推荐器（B7，对应源：Services/JavaProvider.cs 的推荐/校验部分）
 //!
 //! 拆分说明：JavaProvider.cs（1034 行）按职责拆为三个文件（B7）：

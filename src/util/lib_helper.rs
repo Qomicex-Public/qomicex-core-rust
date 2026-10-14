@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 库辅助工具
 //! 对应源：Qomicex.Core.AOT/Utils/LibHelper.cs（276 行）
 //! 功能：库坐标解析（Maven group:artifact:version[:classifier[:type]] → 路径）、

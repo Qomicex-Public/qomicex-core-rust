@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 版本管理编排服务（B6，对应源：Services/VersionManagementService.cs）
 //!
 //! 版本域总入口实现：清单获取（含磁盘缓存）、可用/最新版本查询、

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 版本识别工具（B2）
 //! 对应源：Qomicex.Core.AOT/Utils/GameVersionHelper.cs（322 行）
 //! 特殊兼容点：Java .class 文件常量池解析（高风险兼容点）——

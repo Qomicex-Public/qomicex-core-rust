@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 存档列表 / 重命名 / 备份（NBT 解析）（B10，对应 Saves.cs）
 //!
 //! 对应源文件：Services/Expansion/Local/Saves.cs（`Saves : LocalResourceBase`，518 行）。

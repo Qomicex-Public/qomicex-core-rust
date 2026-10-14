@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 进程启动 + natives 处理（B8，对应 LaunchExecutor.cs 的启动/进程/natives 部分）
 //!
 //! 拆分说明：源文件 Qomicex.Core.AOT/Services/LaunchExecutor.cs（835 行）按职责拆为两个文件：

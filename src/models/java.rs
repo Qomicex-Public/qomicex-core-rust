@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Java 模型（B1）：对应源文件 Public/Models/JavaResult.cs（全部内容）
 //! - JavaResult / JavaSearchOptions 记录、JavaPackageInfo 记录类
 //! - JavaSearchMode / JavaState / JavaType / JavaDownloadSource / JavaPlatform /

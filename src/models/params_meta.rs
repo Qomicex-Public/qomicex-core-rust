@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 安装器参数元数据模型（B1）
 //! 对应源：Models/ParamsMeta/ParamEntry.cs + JsonContext/ParamsJsonContent.cs
 //! 依赖：crate::models::version_metadata::{Rule, AssetIndex}（VersionMetadata 批次，另行移植）

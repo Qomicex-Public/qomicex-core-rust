@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 全量 NBT 解析 / 序列化（通用：存档 level.dat 等）。
 //!
 //! 来源：`Saves.cs` 内嵌 NBT 解析器（Services/Expansion/Local/Saves.cs，518 行），

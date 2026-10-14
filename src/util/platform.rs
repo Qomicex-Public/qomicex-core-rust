@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 平台/系统工具（对应源项目 Utils/SystemHelper.cs、Utils/PathHelper.cs、Utils/OfflineUuidHelper.cs）
 //! SystemHelper：OS / 架构探测；PathHelper：Minecraft 路径约定；OfflineUuidHelper：离线 UUID v3
 

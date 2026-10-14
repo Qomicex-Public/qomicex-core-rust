@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Qomicex Core — Minecraft 启动核心库（Rust 移植版）
 //!
 //! 移植自 [Qomicex.Core.AOT](https://github.com/Qomicex-Public/Qomicex.Core.AOT)

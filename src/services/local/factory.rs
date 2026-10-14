@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 本地资源工厂 + 本地资源基类共享逻辑（B10）
 //!
 //! 对应源文件：

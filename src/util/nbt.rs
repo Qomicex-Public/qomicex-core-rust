@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! NBT 解析 / 序列化（B2，对应 NbtIO.cs，高风险）
 //!
 //! 对应源：Services/Options/NbtIO.cs（servers.dat 的 NBT 读写）。

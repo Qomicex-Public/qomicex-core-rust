@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! LaunchExecutor trait：JVM 参数组装 + 进程启动（B3）
 //!
 //! 对应源文件：Public/ILaunchExecutor.cs（Qomicex.Core.AOT.Interfaces）

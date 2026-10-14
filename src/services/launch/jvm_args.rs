@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! JVM/游戏参数组装（B8，对应源：Services/LaunchExecutor.cs）
 //!
 //! 拆分说明：源 LaunchExecutor 类的"参数组装"与"进程/原生库"两部分拆为两个文件

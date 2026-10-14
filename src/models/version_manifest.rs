@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Qomicex Launcher Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! 版本清单模型（B1）
 //! 对应源：Models/VersionManifest/*.cs，由 VersionManifestJsonContext（CamelCase 策略）序列化
 
