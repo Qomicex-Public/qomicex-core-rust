@@ -51,10 +51,50 @@ pub(crate) struct Mods {
     api_key: String,
     /// 图标缓存目录（为空时禁用 per-jar 缓存）
     icon_cache_dir: Option<PathBuf>,
-    /// 实例加载器（如 `forge` / `neoforge` / `fabric` / `quilt`；None 或空串 = 未知）。
+    /// 该实例的**加载器归属侧**（由构造参数 `loader` 派生）。
     /// issue #255：多端模组把 fabric 与 forge 两套元数据装进**同一个 jar**，
     /// 解析必须先知道实例跑哪个加载器，否则会读到另一端声明的依赖。
-    loader: Option<String>,
+    /// 只保留派生结果——原始字符串除判侧外无用途，留着会触发 dead_code 警告。
+    side: LoaderSide,
+}
+
+/// 实例加载器归属的元数据侧（issue #255）。
+///
+/// 多端模组把两套元数据装进同一个 jar，必须按实例实际加载器选侧：
+/// - NeoForge 与 Forge 都要分开——NeoForge 的专用条目是 `META-INF/neoforge.mods.toml`，
+///   优先读它而非 `META-INF/mods.toml`（评审 sourcery 指出）；
+/// - Cleanroom 是 Forge fork，模组元数据同为 `META-INF/mods.toml`，归入 Forge；
+/// - 未知 / 空串归入 Fabric：本机制的目的是消除「Forge 实例读到 Fabric 侧」的误报，
+///   对加载器未知的调用方保持修复前的解析顺序，不引入新回归。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LoaderSide {
+    Forge,
+    NeoForge,
+    /// Fabric / Quilt / 其它 / 未知
+    Fabric,
+}
+
+impl LoaderSide {
+    fn from_loader(loader: Option<&str>) -> Self {
+        match loader
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("neoforge") => Self::NeoForge,
+            Some("forge") | Some("cleanroom") => Self::Forge,
+            _ => Self::Fabric,
+        }
+    }
+
+    /// per-jar 缓存文件名里的解析侧标记。
+    fn cache_tag(self) -> &'static str {
+        match self {
+            Self::Forge => "forge",
+            Self::NeoForge => "neoforge",
+            Self::Fabric => "fabric",
+        }
+    }
 }
 
 impl Mods {
@@ -77,24 +117,13 @@ impl Mods {
             version_segmented,
             api_key,
             icon_cache_dir,
-            loader,
+            side: LoaderSide::from_loader(loader.as_deref()),
         }
     }
 
-    /// 该实例是否为 Forge 系（Forge / NeoForge / Cleanroom）——决定 jar 元数据解析优先哪一侧。
-    ///
-    /// Cleanroom 是 Forge fork，模组元数据同为 `META-INF/mods.toml`，故归入本系。
-    /// 未知 / 空串按 **Fabric 优先**（与修复前行为一致）：本函数的用途是消除「Forge 实例
-    /// 读到 Fabric 侧依赖」的误报，对加载器未知的调用方保持既有解析顺序，不引入新回归。
-    fn is_forge_family(&self) -> bool {
-        matches!(
-            self.loader
-                .as_deref()
-                .map(str::trim)
-                .map(str::to_ascii_lowercase)
-                .as_deref(),
-            Some("forge") | Some("neoforge") | Some("cleanroom")
-        )
+    /// 该实例的加载器归属侧（决定 jar 元数据解析顺序与 per-jar 缓存身份）。
+    fn loader_side(&self) -> LoaderSide {
+        self.side
     }
 
     /// Mod 目录（源：`ModDirectory` 计算属性）：
@@ -148,11 +177,6 @@ struct CachedModMeta {
 /// v4：解析顺序按加载器分派（issue #255）——旧缓存的 dependencies 可能是另一端元数据的
 /// 产物（Forge 实例里存着 fabric.mod.json 的 `fabric` 依赖），必须失效重扫。
 const MOD_META_CACHE_VERSION: u32 = 4;
-
-/// per-jar 缓存文件名里的解析侧标记（issue #255）：同一 jar 的解析结果依赖加载器。
-fn side_tag(forge_family: bool) -> &'static str {
-    if forge_family { "forge" } else { "fabric" }
-}
 
 fn load_cached_mod(cache_file: &Path, size: u64, mtime: u64) -> Option<CachedModMeta> {
     let bytes = std::fs::read(cache_file).ok()?;
@@ -262,7 +286,7 @@ impl Mods {
             let mod_path = mod_path.clone();
             let cache_dir = self.icon_cache_dir.clone();
             // issue #255：解析结果依赖加载器，闭包需按值捕获该标志（闭包为 'static）
-            let forge_family = self.is_forge_family();
+            let side = self.loader_side();
             tasks.spawn_blocking(move || -> Result<(usize, ModInfo), Error> {
                 // Stat jar for cache validation (cheap, no file content read)
                 let (file_size, file_mtime_millis) = match std::fs::metadata(&mod_path) {
@@ -285,8 +309,7 @@ impl Mods {
                     // issue #255：缓存 key 必须含加载器——同一个 jar 在 Forge 实例按 mods.toml
                     // 解析、在 Fabric 实例按 fabric.mod.json 解析，结果不同。只按路径做 key
                     // 会让先扫的实例把结论喂给后扫的实例（size+mtime 完全相同，无从察觉）。
-                    let cache_file =
-                        dir.join(format!("{path_hash}-{}.json", side_tag(forge_family)));
+                    let cache_file = dir.join(format!("{path_hash}-{}.json", side.cache_tag()));
                     if let Some(cached) = load_cached_mod(&cache_file, file_size, file_mtime_millis)
                     {
                         let icon_base64 = cached.icon_sha1.and_then(|sha1| {
@@ -350,7 +373,7 @@ impl Mods {
                     provides_ids: Vec::new(),
                 };
 
-                parse_metadata(&bytes, &mut info, forge_family);
+                parse_metadata(&bytes, &mut info, side);
 
                 // 源：if string.IsNullOrEmpty(modInfo.Name) → Path.GetFileNameWithoutExtension(mod)
                 // （file_stem 等价：去掉最后一个扩展名）
@@ -379,8 +402,7 @@ impl Mods {
                         })
                     };
 
-                    let cache_file =
-                        dir.join(format!("{path_hash}-{}.json", side_tag(forge_family)));
+                    let cache_file = dir.join(format!("{path_hash}-{}.json", side.cache_tag()));
                     let meta = CachedModMeta {
                         v: MOD_META_CACHE_VERSION,
                         size: file_size,
@@ -520,7 +542,13 @@ fn call_progress(cb: &mut (dyn FnMut(i32, i32) + Send), current: i32, total: i32
 /// 只做**一层**嵌套：JiJ 规范本身即一层，真实样本（含 44 个嵌套 jar 的 fabric-api）
 /// 未出现二级嵌套；限定深度可避免恶意/异常 jar 造成解压炸弹式递归。
 /// 任何单步失败都静默跳过该项（与既有解析的 catch{} 吞错约定一致）。
-fn collect_nested_ids<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Vec<String> {
+///
+/// `side` 决定每个嵌套 jar 读哪一侧的元数据（issue #255）：嵌套 jar 同样可能是双端 jar，
+/// 固定读 Fabric 侧会让 Forge 实例把另一端的 id 记进 `provides_ids`。
+fn collect_nested_ids<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    side: LoaderSide,
+) -> Vec<String> {
     // 先收集待处理条目的索引（不能在遍历时再借 archive 读其它条目）
     let mut nested_paths: Vec<String> = Vec::new();
 
@@ -560,7 +588,7 @@ fn collect_nested_ids<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Vec<String
         }
         drop(entry);
 
-        if let Some(id) = nested_jar_id(&bytes)
+        if let Some(id) = nested_jar_id(&bytes, side)
             && !ids.iter().any(|x| x.eq_ignore_ascii_case(&id))
         {
             ids.push(id);
@@ -569,29 +597,52 @@ fn collect_nested_ids<R: Read + Seek>(archive: &mut ZipArchive<R>) -> Vec<String
     ids
 }
 
-/// 从一个嵌套 jar 的字节里读出它的 mod id（fabric.mod.json `id`，回退 mods.toml `modId`）。
-fn nested_jar_id(bytes: &[u8]) -> Option<String> {
+/// 从一个嵌套 jar 的字节里读出它的 mod id，**按实例加载器侧优先**（issue #255）：
+/// 嵌套 jar 同样可能是双端 jar，两侧声明不同 id；若固定读 Fabric 侧，Forge 实例会把
+/// 另一端的 id 记进 `provides_ids`，导致真实的 Forge 侧依赖被判缺失（评审 sourcery 指出）。
+/// 与顶层一致：同侧优先，另一侧兜底。
+fn nested_jar_id(bytes: &[u8], side: LoaderSide) -> Option<String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes)).ok()?;
-    if let Ok(Some(content)) = read_zip_entry(&mut archive, "fabric.mod.json")
-        && let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(&content)
-        && let Some(id) = json_str(&obj, "id").filter(|s| !s.trim().is_empty())
-    {
-        return Some(id);
-    }
-    let toml_content = read_zip_entry(&mut archive, "META-INF/mods.toml")
+    // 先把三个条目读成字符串（每次读取单独借 archive，读完即释放），再按侧解析
+    let fabric_json = read_zip_entry(&mut archive, "fabric.mod.json")
         .ok()
-        .flatten()
-        .or_else(|| {
-            read_zip_entry(&mut archive, "META-INF/neoforge.mods.toml")
-                .ok()
-                .flatten()
-        })?;
-    let value: toml::Value = toml_content.parse().ok()?;
-    let mods = value.as_table()?.get("mods")?.as_array()?;
-    let first = mods.first()?.as_table()?;
-    match first.get("modId") {
-        Some(toml::Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
-        _ => None,
+        .flatten();
+    let forge_toml = read_zip_entry(&mut archive, "META-INF/mods.toml")
+        .ok()
+        .flatten();
+    let neoforge_toml = read_zip_entry(&mut archive, "META-INF/neoforge.mods.toml")
+        .ok()
+        .flatten();
+
+    let fabric_id = || -> Option<String> {
+        let Value::Object(obj) = serde_json::from_str::<Value>(fabric_json.as_deref()?).ok()?
+        else {
+            return None;
+        };
+        json_str(&obj, "id").filter(|s| !s.trim().is_empty())
+    };
+    let toml_id = |content: Option<&str>| -> Option<String> {
+        let value: toml::Value = content?.parse().ok()?;
+        let mods = value.as_table()?.get("mods")?.as_array()?;
+        let first = mods.first()?.as_table()?;
+        match first.get("modId") {
+            Some(toml::Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+            _ => None,
+        }
+    };
+
+    // 同侧优先：Forge 读 mods.toml、NeoForge 读 neoforge.mods.toml、其余读 fabric.mod.json；
+    // 同侧读不到再试另一侧（两侧都认，只是顺序不同——嵌套 jar 里往往只有一份元数据）
+    match side {
+        LoaderSide::NeoForge => toml_id(neoforge_toml.as_deref())
+            .or_else(|| toml_id(forge_toml.as_deref()))
+            .or_else(fabric_id),
+        LoaderSide::Forge => toml_id(forge_toml.as_deref())
+            .or_else(|| toml_id(neoforge_toml.as_deref()))
+            .or_else(fabric_id),
+        LoaderSide::Fabric => fabric_id()
+            .or_else(|| toml_id(forge_toml.as_deref()))
+            .or_else(|| toml_id(neoforge_toml.as_deref())),
     }
 }
 
@@ -608,13 +659,14 @@ fn nested_jar_id(bytes: &[u8]) -> Option<String> {
 ///
 /// | 加载器 | 顺序 |
 /// |---|---|
-/// | Forge / NeoForge / Cleanroom | `META-INF/mods.toml` → `neoforge.mods.toml` → `fabric.mod.json` → `mcmod.info` |
-/// | Fabric / Quilt / 其它 / 未知 | `fabric.mod.json` → `META-INF/mods.toml` → `neoforge.mods.toml` → `mcmod.info`（修复前行为） |
+/// | NeoForge | `META-INF/neoforge.mods.toml` → `META-INF/mods.toml` → `fabric.mod.json` → `mcmod.info` |
+/// | Forge / Cleanroom | `META-INF/mods.toml` → `neoforge.mods.toml` → `fabric.mod.json` → `mcmod.info` |
+/// | Fabric / Quilt / 其它 / 未知 | `fabric.mod.json` → Forge 系 → `mcmod.info`（修复前行为） |
 ///
 /// 【留档】曾评估「按 `fabric.mod.json` 的 `id` 与 `mods.toml` 的 `modId` 是否一致来判定多端
 /// 模组」——**实测证伪**：四个真实双元数据 jar（collective / Towns-and-Towers / packetfixer /
 /// BadOptimizations）两侧 id **4/4 完全相同**，无从区分。故只能由加载器决定。
-fn parse_metadata(file_bytes: &[u8], info: &mut ModInfo, forge_family: bool) {
+fn parse_metadata(file_bytes: &[u8], info: &mut ModInfo, side: LoaderSide) {
     let mut archive = match ZipArchive::new(Cursor::new(file_bytes)) {
         Ok(a) => a,
         Err(_) => return,
@@ -622,16 +674,12 @@ fn parse_metadata(file_bytes: &[u8], info: &mut ModInfo, forge_family: bool) {
 
     // issue #165：先收集嵌套（Jar-in-Jar）模组 id——容器 jar 只声明自己的 id，
     // 真正的子模块 id 在嵌套 jar 里（见 collect_nested_ids 文档）。
-    info.provides_ids = collect_nested_ids(&mut archive);
-
-    if forge_family && try_parse_forge_side(&mut archive, info) {
-        return;
-    }
-    if try_parse_fabric_side(&mut archive, info) {
-        return;
-    }
-    if !forge_family && try_parse_forge_side(&mut archive, info) {
-        return;
+    info.provides_ids = collect_nested_ids(&mut archive, side);
+    match try_parse_mod_metadata(&mut archive, info, side) {
+        MetadataOutcome::Parsed => return,
+        // 读取失败（IO/解压错误）→ 同源 catch{} 语义：放弃本 jar，不再尝试其它格式
+        MetadataOutcome::ReadError => return,
+        MetadataOutcome::NotPresent => {}
     }
 
     let mcmod = match read_zip_entry(&mut archive, "mcmod.info") {
@@ -643,42 +691,81 @@ fn parse_metadata(file_bytes: &[u8], info: &mut ModInfo, forge_family: bool) {
     }
 }
 
-/// Fabric 侧解析：`fabric.mod.json` 命中即返回 `true`（元数据已填充）。
-/// 读取失败（条目存在但解压出错）返回 `false` 交由下一格式尝试——修复前的实现此处
-/// 直接返回，会让该 jar 的元数据整体为空（连名称都退化）而无从察觉，属顺手收敛。
-fn try_parse_fabric_side<R: Read + Seek>(archive: &mut ZipArchive<R>, info: &mut ModInfo) -> bool {
-    let content = match read_zip_entry(archive, "fabric.mod.json") {
-        Err(_) => return false,
-        Ok(c) => c,
-    };
-    match content {
-        Some(content) => {
-            parse_fabric_json(archive, &content, info);
-            true
-        }
-        None => false,
-    }
+/// 元数据解析结果的三种去向（区分「没这个条目」与「条目坏了」与「解析成功」）。
+enum MetadataOutcome {
+    /// 已按所选加载器侧填充 `ModInfo`
+    Parsed,
+    /// 所选侧的条目不存在或内容无法解析 → 允许回退到 `mcmod.info` / 另一侧
+    NotPresent,
+    /// 条目存在但读取失败 → 同源 catch{} 吞掉整个解析块（不再尝试后续格式）
+    ReadError,
 }
 
-/// Forge 侧解析：`META-INF/mods.toml` → 回退 `META-INF/neoforge.mods.toml`，
-/// 命中即返回 `true`（元数据已填充）。
-fn try_parse_forge_side<R: Read + Seek>(archive: &mut ZipArchive<R>, info: &mut ModInfo) -> bool {
-    let mut content = match read_zip_entry(archive, "META-INF/mods.toml") {
-        Err(_) => return false,
-        Ok(c) => c,
+/// 取「与实例加载器同侧优先」的第一个可解析元数据条目。
+///
+/// 三种格式都会在**未填充任何内容**时返回 `NotPresent`，从而回退到下一种：
+/// 条目缺失、JSON/TOML 语法错误、以及结构不符（如 `fabric.mod.json` 是数组、`mods.toml`
+/// 缺 `[[mods]]` 表）都归入此类。修复前这些情形会直接 `return`，让 jar 元数据整体为空
+/// 且无从察觉（评审 sourcery 指出：有效的备用元数据被跳过）。
+fn try_parse_mod_metadata<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    info: &mut ModInfo,
+    side: LoaderSide,
+) -> MetadataOutcome {
+    // 与实例加载器同侧的格式排在最前；余下按修复前的固定顺序补齐
+    let order: [MetadataFormat; 3] = match side {
+        LoaderSide::NeoForge => [
+            MetadataFormat::NeoForgeToml,
+            MetadataFormat::ForgeToml,
+            MetadataFormat::FabricJson,
+        ],
+        LoaderSide::Forge => [
+            MetadataFormat::ForgeToml,
+            MetadataFormat::NeoForgeToml,
+            MetadataFormat::FabricJson,
+        ],
+        LoaderSide::Fabric => [
+            MetadataFormat::FabricJson,
+            MetadataFormat::ForgeToml,
+            MetadataFormat::NeoForgeToml,
+        ],
     };
-    if content.is_none() {
-        content = match read_zip_entry(archive, "META-INF/neoforge.mods.toml") {
-            Err(_) => return false,
-            Ok(c) => c,
+
+    for format in order {
+        let content = match read_zip_entry(archive, format.entry_name()) {
+            // 条目存在但读取失败 → 同源 catch{} 吞掉整个解析块
+            Err(_) => return MetadataOutcome::ReadError,
+            Ok(None) => continue,
+            Ok(Some(content)) => content,
         };
-    }
-    match content {
-        Some(content) => {
-            parse_forge_toml(archive, &content, info);
-            true
+        let filled = match format {
+            MetadataFormat::FabricJson => parse_fabric_json(archive, &content, info),
+            MetadataFormat::ForgeToml | MetadataFormat::NeoForgeToml => {
+                parse_forge_toml(archive, &content, info)
+            }
+        };
+        if filled {
+            return MetadataOutcome::Parsed;
         }
-        None => false,
+    }
+    MetadataOutcome::NotPresent
+}
+
+/// jar 内承载 mod 元数据的三种条目。
+#[derive(Clone, Copy)]
+enum MetadataFormat {
+    FabricJson,
+    ForgeToml,
+    NeoForgeToml,
+}
+
+impl MetadataFormat {
+    fn entry_name(self) -> &'static str {
+        match self {
+            MetadataFormat::FabricJson => "fabric.mod.json",
+            MetadataFormat::ForgeToml => "META-INF/mods.toml",
+            MetadataFormat::NeoForgeToml => "META-INF/neoforge.mods.toml",
+        }
     }
 }
 
@@ -747,15 +834,18 @@ fn base64_encode(data: &[u8]) -> String {
 }
 
 /// 解析 fabric.mod.json（源：`JsonNode.Parse(content)!.AsObject()`）：
-/// JSON 无效或非对象 → 跳过（同源异常被 catch 吞掉，不尝试后续格式）
+/// JSON 无效或非对象 → 跳过（同源异常被 catch 吞掉，不尝试后续格式）。
 /// issue #165 扩展：额外读取 `id`（模组自身 id）与 `depends`（强制前置依赖）。
+///
+/// 返回是否**成功填充**（JSON 有效且为对象）——调用方据此决定要不要回退到下一格式
+/// （评审 sourcery 指出：条目存在但结构不符时不该整体放弃，否则有效的备用元数据被跳过）。
 fn parse_fabric_json<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     content: &str,
     info: &mut ModInfo,
-) {
+) -> bool {
     let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(content) else {
-        return;
+        return false;
     };
     info.name = json_str(&obj, "name").unwrap_or_else(|| "Unknown".to_string());
     info.version = json_str(&obj, "version").unwrap_or_default();
@@ -767,6 +857,7 @@ fn parse_fabric_json<R: Read + Seek>(
     }
     info.mod_id = json_str(&obj, "id").unwrap_or_default();
     info.dependencies = extract_fabric_depends(obj.get("depends"));
+    true
 }
 
 /// 提取 Fabric 强制依赖（issue #165）：`depends` 为 `{ "<modid>": <版本谓词> }` 对象。
@@ -853,22 +944,25 @@ fn json_value_text(v: &Value) -> String {
 /// 表数组首元素 `(TomlTable)mods[0]`；缺失/类型不符/空数组 → 跳过，同源异常被吞）。
 /// ⚠️ 需要依赖: toml crate（MAPPING_TABLE runtime 映射：Tomlyn → toml；
 /// Cargo.toml 尚未引入，本批禁止修改 → 待后续批次声明）
+///
+/// 返回是否**成功填充**（TOML 有效且含 `[[mods]]` 首元素）——调用方据此决定要不要回退到
+/// 下一格式（评审 sourcery 指出：结构不符时不该整体放弃，否则有效的备用元数据被跳过）。
 fn parse_forge_toml<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     content: &str,
     info: &mut ModInfo,
-) {
+) -> bool {
     let Ok(value) = content.parse::<toml::Value>() else {
-        return;
+        return false;
     };
     let Some(table) = value.as_table() else {
-        return;
+        return false;
     };
     let Some(toml::Value::Array(mods)) = table.get("mods") else {
-        return;
+        return false;
     };
     let Some(toml::Value::Table(mod_table)) = mods.first() else {
-        return;
+        return false;
     };
 
     // 源：`TryGetValue(key, out var v) ? v?.ToString() ?? default : default`
@@ -891,7 +985,9 @@ fn parse_forge_toml<R: Read + Seek>(
     // 找前缀 "Implementation-Version:"（OrdinalIgnoreCase）取截断后 Trim 的首行
     if info.version == "${file.jarVersion}" {
         let manifest = match read_zip_entry(archive, "META-INF/MANIFEST.MF") {
-            Err(_) => return,
+            // read_zip_entry 的 Err 只可能是「条目存在但读取失败」——此时无法取版本，
+            // 但 mods.toml 其余字段已填好，故保留已解析内容直接返回（同源 catch{} 语义）
+            Err(_) => return true,
             Ok(Some(m)) => m,
             Ok(None) => String::new(),
         };
@@ -937,6 +1033,7 @@ fn parse_forge_toml<R: Read + Seek>(
     if let Some(key) = dep_key {
         info.dependencies = extract_forge_dependencies(table.get("dependencies"), &key);
     }
+    true
 }
 
 /// 提取 Forge/NeoForge 强制依赖（issue #165）：
@@ -1257,7 +1354,7 @@ mod dependency_tests {
             }
         }"#;
         let mut info = empty_info();
-        parse_fabric_json(&mut dummy_archive(), json, &mut info);
+        let _ = parse_fabric_json(&mut dummy_archive(), json, &mut info);
 
         assert_eq!(info.mod_id, "create");
         let deps: Vec<(&str, &str)> = info
@@ -1275,7 +1372,7 @@ mod dependency_tests {
     fn fabric_wildcard_version_becomes_empty_range() {
         let json = r#"{"id":"a","depends":{"other":"*"}}"#;
         let mut info = empty_info();
-        parse_fabric_json(&mut dummy_archive(), json, &mut info);
+        let _ = parse_fabric_json(&mut dummy_archive(), json, &mut info);
         assert_eq!(info.dependencies.len(), 1);
         assert_eq!(info.dependencies[0].mod_id, "other");
         assert_eq!(info.dependencies[0].version_range, "");
@@ -1285,7 +1382,7 @@ mod dependency_tests {
     fn fabric_array_version_joins_with_or() {
         let json = r#"{"id":"a","depends":{"other":[">=1.0","<2.0"]}}"#;
         let mut info = empty_info();
-        parse_fabric_json(&mut dummy_archive(), json, &mut info);
+        let _ = parse_fabric_json(&mut dummy_archive(), json, &mut info);
         assert_eq!(info.dependencies[0].version_range, ">=1.0 || <2.0");
     }
 
@@ -1301,7 +1398,7 @@ mod dependency_tests {
             "conflicts": {"also_bad": "*"}
         }"#;
         let mut info = empty_info();
-        parse_fabric_json(&mut dummy_archive(), json, &mut info);
+        let _ = parse_fabric_json(&mut dummy_archive(), json, &mut info);
         assert_eq!(info.dependencies.len(), 1);
         assert_eq!(info.dependencies[0].mod_id, "required_mod");
     }
@@ -1310,7 +1407,7 @@ mod dependency_tests {
     fn fabric_missing_depends_is_empty() {
         let json = r#"{"id":"a","name":"A"}"#;
         let mut info = empty_info();
-        parse_fabric_json(&mut dummy_archive(), json, &mut info);
+        let _ = parse_fabric_json(&mut dummy_archive(), json, &mut info);
         assert!(info.dependencies.is_empty());
         assert_eq!(info.mod_id, "a");
     }
@@ -1318,7 +1415,7 @@ mod dependency_tests {
     #[test]
     fn fabric_invalid_json_leaves_fields_untouched() {
         let mut info = empty_info();
-        parse_fabric_json(&mut dummy_archive(), "not json", &mut info);
+        let _ = parse_fabric_json(&mut dummy_archive(), "not json", &mut info);
         assert!(info.mod_id.is_empty());
         assert!(info.dependencies.is_empty());
     }
@@ -1347,7 +1444,7 @@ version="10.4.5"
     versionRange="[1.0,)"
 "#;
         let mut info = empty_info();
-        parse_forge_toml(&mut dummy_archive(), toml, &mut info);
+        let _ = parse_forge_toml(&mut dummy_archive(), toml, &mut info);
 
         assert_eq!(info.mod_id, "mekanism");
         let deps: Vec<(&str, &str)> = info
@@ -1370,7 +1467,7 @@ modId="m"
     versionRange="[1,)"
 "#;
         let mut info = empty_info();
-        parse_forge_toml(&mut dummy_archive(), toml, &mut info);
+        let _ = parse_forge_toml(&mut dummy_archive(), toml, &mut info);
         assert_eq!(info.dependencies.len(), 1);
         assert_eq!(info.dependencies[0].mod_id, "needed");
     }
@@ -1394,7 +1491,7 @@ modId="m"
     versionRange="[1,)"
 "#;
         let mut info = empty_info();
-        parse_forge_toml(&mut dummy_archive(), toml, &mut info);
+        let _ = parse_forge_toml(&mut dummy_archive(), toml, &mut info);
         let ids: Vec<&str> = info
             .dependencies
             .iter()
@@ -1414,7 +1511,7 @@ displayName="Mystery"
     mandatory=true
 "#;
         let mut info = empty_info();
-        parse_forge_toml(&mut dummy_archive(), toml, &mut info);
+        let _ = parse_forge_toml(&mut dummy_archive(), toml, &mut info);
         assert!(info.mod_id.is_empty());
         assert!(info.dependencies.is_empty());
     }
@@ -1430,7 +1527,7 @@ modId="m"
     mandatory=true
 "#;
         let mut info = empty_info();
-        parse_forge_toml(&mut dummy_archive(), toml, &mut info);
+        let _ = parse_forge_toml(&mut dummy_archive(), toml, &mut info);
         assert_eq!(info.mod_id, "m");
         assert!(info.dependencies.is_empty());
     }
@@ -1446,7 +1543,7 @@ modId="m"
     versionRange="*"
 "#;
         let mut info = empty_info();
-        parse_forge_toml(&mut dummy_archive(), toml, &mut info);
+        let _ = parse_forge_toml(&mut dummy_archive(), toml, &mut info);
         assert_eq!(info.dependencies[0].version_range, "");
     }
 
@@ -2016,8 +2113,17 @@ versionRange="[2.0,)"
             " NeoForge ",
             "CLEANROOM",
         ] {
-            assert!(mk(Some(l)).is_forge_family(), "{l} 应判为 Forge 系");
+            let side = mk(Some(l)).loader_side();
+            assert!(
+                matches!(side, LoaderSide::Forge | LoaderSide::NeoForge),
+                "{l} 应判为 Forge 系，实际 {side:?}"
+            );
         }
+        // NeoForge 必须与 Forge 区分：其专用条目是 neoforge.mods.toml
+        assert_eq!(mk(Some("neoforge")).loader_side(), LoaderSide::NeoForge);
+        assert_eq!(mk(Some(" NeoForge ")).loader_side(), LoaderSide::NeoForge);
+        assert_eq!(mk(Some("forge")).loader_side(), LoaderSide::Forge);
+        assert_eq!(mk(Some("cleanroom")).loader_side(), LoaderSide::Forge);
         for l in [
             "fabric",
             "quilt",
@@ -2027,9 +2133,156 @@ versionRange="[2.0,)"
             "   ",
             "unknown",
         ] {
-            assert!(!mk(Some(l)).is_forge_family(), "{l:?} 不应判为 Forge 系");
+            assert_eq!(
+                mk(Some(l)).loader_side(),
+                LoaderSide::Fabric,
+                "{l:?} 应归入 Fabric 侧"
+            );
         }
-        assert!(!mk(None).is_forge_family(), "未知加载器应保持 Fabric 优先");
+        assert_eq!(
+            mk(None).loader_side(),
+            LoaderSide::Fabric,
+            "未知加载器应保持 Fabric 优先"
+        );
+        // 缓存身份必须区分三侧（同 jar 在不同加载器下解析结果不同）
+        assert_ne!(
+            LoaderSide::Forge.cache_tag(),
+            LoaderSide::NeoForge.cache_tag()
+        );
+        assert_ne!(
+            LoaderSide::Forge.cache_tag(),
+            LoaderSide::Fabric.cache_tag()
+        );
+    }
+
+    #[test]
+    fn e2e_neoforge_instance_prefers_neoforge_metadata() {
+        // 评审 sourcery：NeoForge 的专用条目是 neoforge.mods.toml，修复前读的是 mods.toml，
+        // 导致依赖与展示字段都来自 Forge 侧。
+        let (game_dir, mods_dir) = temp_game_dir("neoforge");
+        write_jar(
+            &mods_dir.join("dual-1.0.jar"),
+            &[
+                (
+                    "META-INF/mods.toml",
+                    r#"modLoader="javafml"
+loaderVersion="[47,)"
+[[mods]]
+modId="dual"
+displayName="Forge Side"
+version="1.0"
+[[dependencies.dual]]
+modId="forgelib"
+mandatory=true
+versionRange="[1.0,)"
+"#,
+                ),
+                (
+                    "META-INF/neoforge.mods.toml",
+                    r#"modLoader="javafml"
+loaderVersion="[1,)"
+[[mods]]
+modId="dual"
+displayName="NeoForge Side"
+version="2.0"
+[[dependencies.dual]]
+modId="neolib"
+mandatory=true
+versionRange="[2.0,)"
+"#,
+                ),
+            ],
+        );
+
+        let list = scan(&game_dir, Some("neoforge"));
+        let m = find(&list, "dual-1.0.jar");
+        let ids: Vec<&str> = m.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
+        assert_eq!(
+            m.name, "NeoForge Side",
+            "NeoForge 实例应取 neoforge 侧展示字段"
+        );
+        assert!(
+            ids.contains(&"neolib") && !ids.contains(&"forgelib"),
+            "NeoForge 实例应取 neoforge.mods.toml 依赖: {ids:?}"
+        );
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_structurally_invalid_metadata_falls_back_to_other_side() {
+        // 评审 sourcery：所选侧的条目存在但结构不符（此处 fabric.mod.json 是数组）时，
+        // 修复前会直接放弃、跳过有效的 mods.toml；现应回退到另一侧。
+        let (game_dir, mods_dir) = temp_game_dir("fallback-struct");
+        write_jar(
+            &mods_dir.join("legacy-1.0.jar"),
+            &[
+                ("fabric.mod.json", r#"[{"id":"legacy"}]"#),
+                (
+                    "META-INF/mods.toml",
+                    r#"modLoader="javafml"
+loaderVersion="[47,)"
+[[mods]]
+modId="legacy"
+displayName="Forge Side"
+version="1.0"
+[[dependencies.legacy]]
+modId="forgelib"
+mandatory=true
+versionRange="[1.0,)"
+"#,
+                ),
+            ],
+        );
+
+        let list = scan(&game_dir, None);
+        let m = find(&list, "legacy-1.0.jar");
+        assert_eq!(m.mod_id, "legacy", "应从 mods.toml 回退解析出 mod id");
+        assert_eq!(m.name, "Forge Side");
+        let ids: Vec<&str> = m.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
+        assert!(ids.contains(&"forgelib"), "应回退取 Forge 侧依赖: {ids:?}");
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_nested_ids_respect_loader_side() {
+        // 评审 sourcery：嵌套 jar 也可能是双端 jar，两侧 id 不同；固定读 Fabric 侧会让
+        // Forge 实例把另一端的 id 记进 provides_ids，从而掩盖真实的 Forge 侧依赖。
+        let (game_dir, mods_dir) = temp_game_dir("nested-side");
+        let nested = test_jar_with_entries(&[
+            ("fabric.mod.json", r#"{"id":"fabric.sub"}"#),
+            (
+                "META-INF/mods.toml",
+                "modLoader=\"javafml\"\n[[mods]]\nmodId=\"forge.sub\"\n\n",
+            ),
+        ]);
+        write_container_jar(
+            &mods_dir.join("container-1.0.jar"),
+            "container",
+            &[("META-INF/jars/sub.jar", nested)],
+            &[],
+        );
+
+        let forge_list = scan(&game_dir, Some("forge"));
+        let m = find(&forge_list, "container-1.0.jar");
+        assert!(
+            m.provides_ids.iter().any(|i| i == "forge.sub"),
+            "Forge 实例应记录 Forge 侧嵌套 id: {:?}",
+            m.provides_ids
+        );
+        assert!(
+            !m.provides_ids.iter().any(|i| i == "fabric.sub"),
+            "Forge 实例不应记录 Fabric 侧嵌套 id: {:?}",
+            m.provides_ids
+        );
+
+        let fabric_list = scan(&game_dir, Some("fabric"));
+        let mf = find(&fabric_list, "container-1.0.jar");
+        assert!(
+            mf.provides_ids.iter().any(|i| i == "fabric.sub"),
+            "Fabric 实例应记录 Fabric 侧嵌套 id: {:?}",
+            mf.provides_ids
+        );
+        let _ = std::fs::remove_dir_all(&game_dir);
     }
 
     #[test]
