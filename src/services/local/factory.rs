@@ -61,13 +61,15 @@ impl DefaultLocalResourcesFactory {
 }
 
 impl LocalResourcesFactory for DefaultLocalResourcesFactory {
-    /// 创建 Mod 管理器（源：`CreateMods(string gameDir, string version, bool versionSegmented, string apiKey)`）
+    /// 创建 Mod 管理器（源：`CreateMods(string gameDir, string version, bool versionSegmented, string apiKey)`；
+    /// Rust 新增 `loader`：多端模组单 jar 内含两套元数据，解析需按实例加载器选侧，见 mods.rs）
     fn create_mods(
         &self,
         game_dir: &str,
         version: &str,
         version_segmented: bool,
         api_key: &str,
+        loader: Option<&str>,
     ) -> Box<dyn ModsManager + Send + Sync> {
         Box::new(Mods::new(
             self.http.clone(),
@@ -76,6 +78,7 @@ impl LocalResourcesFactory for DefaultLocalResourcesFactory {
             version_segmented,
             api_key.to_string(),
             self.icon_cache_dir.clone(),
+            loader.map(str::to_string),
         ))
     }
 
@@ -221,5 +224,90 @@ impl LocalResourceBase {
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf).ok()?;
         Some(buf)
+    }
+}
+
+/// issue #255 接线测试：证明 `loader` 确实经工厂流到 jar 元数据解析侧。
+/// 单元测试直接调 `Mods::new`，无法覆盖「backend 传的 loader 有没有被工厂透传」这一段，
+/// 故按真实调用形态（`create_mods(...)` → `get_mod_list_light()`）断言两侧结果不同。
+#[cfg(test)]
+mod loader_wiring_tests {
+    use super::*;
+
+    /// 写入「Fabric + Forge 双端」单 jar（真实多端模组形态，如 collective-1.20.1-8.53.jar）。
+    fn write_dual_jar(mods_dir: &Path, file_name: &str) {
+        use std::io::Write;
+        let path = mods_dir.join(file_name);
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+        zip.start_file("fabric.mod.json", opts).unwrap();
+        zip.write_all(
+            br#"{"id":"collective","name":"Fabric Side","version":"1.0",
+                 "depends":{"fabricloader":">=0.12.6","fabric":"*","minecraft":">=1.20"}}"#,
+        )
+        .unwrap();
+        zip.start_file("META-INF/mods.toml", opts).unwrap();
+        zip.write_all(
+            br#"modLoader="javafml"
+loaderVersion="[47,)"
+[[mods]]
+modId="collective"
+displayName="Forge Side"
+version="1.0"
+[[dependencies.collective]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20,1.21)"
+"#,
+        )
+        .unwrap();
+        zip.finish().unwrap();
+    }
+
+    fn scan_via_factory(loader: Option<&str>) -> Vec<String> {
+        let dir = std::env::temp_dir().join(format!(
+            "qomicex-wiring-{}-{:?}",
+            loader.unwrap_or("none"),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mods_dir = dir.join("mods");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+        write_dual_jar(&mods_dir, "collective-1.20.1-8.53.jar");
+
+        let factory = DefaultLocalResourcesFactory::new(reqwest::Client::new(), None);
+        let mods = factory.create_mods(dir.to_str().unwrap(), "1.20.1", false, "", loader);
+        let list = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(mods.get_mod_list_light())
+            .unwrap();
+        let ids: Vec<String> = list
+            .iter()
+            .flat_map(|m| m.dependencies.iter().map(|d| d.mod_id.clone()))
+            .collect();
+        let _ = std::fs::remove_dir_all(&dir);
+        ids
+    }
+
+    #[test]
+    fn factory_passes_loader_through_to_metadata_parsing() {
+        // Forge 实例：不得出现 fabric 侧依赖（issue #255 原始症状）
+        let forge_ids = scan_via_factory(Some("forge"));
+        assert!(
+            !forge_ids.iter().any(|i| i == "fabric"),
+            "Forge 实例经工厂扫描后不应含 fabric 依赖: {forge_ids:?}"
+        );
+        assert!(
+            !forge_ids.iter().any(|i| i == "fabricloader"),
+            "Forge 实例不应含 fabricloader: {forge_ids:?}"
+        );
+
+        // 同一 jar、同一目录布局，仅 loader 不同 → 另一侧解析结果（证明 loader 确实生效）
+        let fab_ids = scan_via_factory(Some("fabric"));
+        assert!(
+            fab_ids.iter().any(|i| i == "fabric") && fab_ids.iter().any(|i| i == "fabricloader"),
+            "Fabric 实例应含 fabric 依赖: {fab_ids:?}"
+        );
     }
 }
