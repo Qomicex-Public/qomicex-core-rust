@@ -217,9 +217,10 @@ impl LocalResourceBase {
         let file = File::open(path).ok()?;
         let mut archive = ZipArchive::new(file).ok()?;
         // 源按 FullName 忽略大小写查找首个匹配条目 → 先定位索引再读取
+        // zip 9：`file_names()` 每项是 `ZipResult<Cow<str>>`，解码失败的条目名跳过
         let index = archive
             .file_names()
-            .position(|name| name.eq_ignore_ascii_case(file_name))?;
+            .position(|name| name.is_ok_and(|n| n.eq_ignore_ascii_case(file_name)))?;
         let mut entry = archive.by_index(index).ok()?;
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf).ok()?;

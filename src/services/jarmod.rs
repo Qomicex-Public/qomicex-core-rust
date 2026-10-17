@@ -245,7 +245,14 @@ fn copy_entries<R: Read + std::io::Seek>(
         if !entry.is_file() {
             continue;
         }
-        let name = entry.name().to_string();
+        // zip 9：`name()` 返回 `ZipResult<Cow<str>>`（8 之前直接是 &str）
+        let name = entry
+            .name()
+            .map_err(|e| Error::ResourceCompletion {
+                message: format!("读取 jar 条目名失败: {e}"),
+                source: Some(Box::new(e)),
+            })?
+            .to_string();
         // 目录条目（名字以 / 结尾）与 META-INF 过滤
         if name.ends_with('/') {
             continue;
@@ -328,7 +335,7 @@ mod tests {
             if e.is_dir() {
                 continue;
             }
-            let name = e.name().to_string();
+            let name = e.name().unwrap().to_string();
             let mut s = String::new();
             e.read_to_string(&mut s).unwrap();
             out.insert(name, s);

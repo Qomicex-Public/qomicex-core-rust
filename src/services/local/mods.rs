@@ -553,7 +553,8 @@ fn collect_nested_ids<R: Read + Seek>(
     let mut nested_paths: Vec<String> = Vec::new();
 
     // ① Fabric：META-INF/jars/*.jar
-    for name in archive.file_names() {
+    // zip 9：`file_names()` 每项是 `ZipResult<Cow<str>>`，解码失败的条目名跳过
+    for name in archive.file_names().flatten() {
         let lower = name.to_ascii_lowercase();
         if lower.starts_with("meta-inf/jars/") && lower.ends_with(".jar") {
             nested_paths.push(name.to_string());
@@ -773,9 +774,11 @@ impl MetadataFormat {
 /// `OrdinalIgnoreCase` 匹配；zip crate 的 by_name 为精确匹配 → 先定位索引再 by_index，
 /// 同 P44 基类 try_read_file_from_zip 的处理方式）
 fn find_entry_index<R: Read + Seek>(archive: &ZipArchive<R>, entry_path: &str) -> Option<usize> {
+    // zip 9：`file_names()` 每项是 `ZipResult<Cow<str>>`（8 之前直接是 &str），
+    // 解码失败的条目名无法比较 → 跳过该项（不影响其它条目定位）
     archive
         .file_names()
-        .position(|n| n.eq_ignore_ascii_case(entry_path))
+        .position(|n| n.is_ok_and(|n| n.eq_ignore_ascii_case(entry_path)))
 }
 
 /// 读取 zip 内条目文本（源：ReadZipEntry + StreamReader）。
@@ -1213,10 +1216,12 @@ fn scan_legacy_forge_annotation_deps<R: Read + Seek>(
 
     let mut deps: Vec<ModDependencyInfo> = Vec::new();
     // 先收集条目索引（不能在遍历时再借 archive 读其它条目，同 collect_nested_ids）
+    // zip 9：`file_names()` 每项是 `ZipResult<Cow<str>>`，解码失败的条目名跳过
     let class_indices: Vec<usize> = archive
         .file_names()
+        .flatten()
         .filter(|n| n.to_ascii_lowercase().ends_with(".class"))
-        .map(|n| find_entry_index(archive, n))
+        .map(|n| find_entry_index(archive, &n))
         .collect::<Option<Vec<_>>>()
         .unwrap_or_default();
     for index in class_indices {
