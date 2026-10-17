@@ -837,8 +837,9 @@ fn base64_encode(data: &[u8]) -> String {
 /// JSON 无效或非对象 → 跳过（同源异常被 catch 吞掉，不尝试后续格式）。
 /// issue #165 扩展：额外读取 `id`（模组自身 id）与 `depends`（强制前置依赖）。
 ///
-/// 返回是否**成功填充**（JSON 有效且为对象）——调用方据此决定要不要回退到下一格式
+/// 返回是否**成功填充**——调用方据此决定要不要回退到下一格式
 /// （评审 sourcery 指出：条目存在但结构不符时不该整体放弃，否则有效的备用元数据被跳过）。
+/// 判定标准见 [`fabric_json_is_usable`]：必须是对象且提供了可用字段。
 fn parse_fabric_json<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     content: &str,
@@ -847,6 +848,11 @@ fn parse_fabric_json<R: Read + Seek>(
     let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(content) else {
         return false;
     };
+    // 先判定可用性再写字段：不可用时保持 info 原样，交由调用方回退下一格式
+    // （CodeRabbit PR #258 评审：`{}` 这类空对象原实现也返回成功，会吞掉有效的 mods.toml）
+    if !fabric_json_is_usable(&obj) {
+        return false;
+    }
     info.name = json_str(&obj, "name").unwrap_or_else(|| "Unknown".to_string());
     info.version = json_str(&obj, "version").unwrap_or_default();
     info.description =
@@ -858,6 +864,23 @@ fn parse_fabric_json<R: Read + Seek>(
     info.mod_id = json_str(&obj, "id").unwrap_or_default();
     info.dependencies = extract_fabric_depends(obj.get("depends"));
     true
+}
+
+/// `fabric.mod.json` 是否提供了**可用**元数据。
+///
+/// Fabric 规范里 `id` 是必填；`name` / `version` / `depends` 为常用可选字段。
+/// 只要其中任一非空就算可用——`{}` 这类空对象（或只有 `schemaVersion` 等无关键）不提供
+/// 任何可用于判定依赖与展示的信息，应让调用方继续尝试同一 jar 的 `mods.toml`。
+fn fabric_json_is_usable(obj: &serde_json::Map<String, Value>) -> bool {
+    if obj.is_empty() {
+        return false;
+    }
+    let has = |key: &str| {
+        obj.get(key)
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.trim().is_empty())
+    };
+    has("id") || has("name") || has("version") || obj.get("depends").is_some_and(Value::is_object)
 }
 
 /// 提取 Fabric 强制依赖（issue #165）：`depends` 为 `{ "<modid>": <版本谓词> }` 对象。
@@ -945,8 +968,9 @@ fn json_value_text(v: &Value) -> String {
 /// ⚠️ 需要依赖: toml crate（MAPPING_TABLE runtime 映射：Tomlyn → toml；
 /// Cargo.toml 尚未引入，本批禁止修改 → 待后续批次声明）
 ///
-/// 返回是否**成功填充**（TOML 有效且含 `[[mods]]` 首元素）——调用方据此决定要不要回退到
-/// 下一格式（评审 sourcery 指出：结构不符时不该整体放弃，否则有效的备用元数据被跳过）。
+/// 返回是否**成功填充**——调用方据此决定要不要回退到下一格式
+/// （评审 sourcery 指出：结构不符时不该整体放弃，否则有效的备用元数据被跳过）。
+/// 判定标准见 [`forge_toml_is_usable`]：`[[mods]]` 首元素必须提供可用字段。
 fn parse_forge_toml<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     content: &str,
@@ -964,6 +988,10 @@ fn parse_forge_toml<R: Read + Seek>(
     let Some(toml::Value::Table(mod_table)) = mods.first() else {
         return false;
     };
+    // 先判定可用性再写字段：`[[mods]]` 全空时不提供任何信息，应回退下一格式
+    if !forge_toml_is_usable(mod_table) {
+        return false;
+    }
 
     // 源：`TryGetValue(key, out var v) ? v?.ToString() ?? default : default`
     // ⚠️ 必须从 mods[0] 表读取（源从 `(TomlTable)mods[0]` 取 displayName/description/version），
@@ -1034,6 +1062,19 @@ fn parse_forge_toml<R: Read + Seek>(
         info.dependencies = extract_forge_dependencies(table.get("dependencies"), &key);
     }
     true
+}
+
+/// `META-INF/mods.toml` 的 `[[mods]]` 首元素是否提供了**可用**元数据。
+/// Forge 规范里 `modId` 必填；`displayName` / `version` / `description` 为常用字段。
+/// 全空的 `[[mods]]` 不提供任何可用于判定依赖与展示的信息 → 视为未填充，让调用方回退。
+fn forge_toml_is_usable(mod_table: &toml::map::Map<String, toml::Value>) -> bool {
+    let has = |key: &str| {
+        mod_table
+            .get(key)
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.trim().is_empty())
+    };
+    has("modId") || has("displayName") || has("version") || has("description")
 }
 
 /// 提取 Forge/NeoForge 强制依赖（issue #165）：
@@ -2205,6 +2246,76 @@ versionRange="[2.0,)"
             ids.contains(&"neolib") && !ids.contains(&"forgelib"),
             "NeoForge 实例应取 neoforge.mods.toml 依赖: {ids:?}"
         );
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_empty_fabric_object_falls_back_to_forge_metadata() {
+        // CodeRabbit（PR #258）评审：`fabric.mod.json` 为 `{}` 时，原实现只要 JSON 是对象
+        // 就返回成功，解析提前停止，mod_id / dependencies 保持为空，有效的 mods.toml
+        // 反而不被采纳。空对象没有提供任何可用字段，应视为「未填充」并回退。
+        let (game_dir, mods_dir) = temp_game_dir("empty-fabric");
+        write_jar(
+            &mods_dir.join("emptyobj-1.0.jar"),
+            &[
+                ("fabric.mod.json", "{}"),
+                (
+                    "META-INF/mods.toml",
+                    r#"modLoader="javafml"
+loaderVersion="[47,)"
+[[mods]]
+modId="emptyobj"
+displayName="Forge Side"
+version="1.0"
+[[dependencies.emptyobj]]
+modId="forgelib"
+mandatory=true
+versionRange="[1.0,)"
+"#,
+                ),
+            ],
+        );
+
+        let list = scan(&game_dir, None);
+        let m = find(&list, "emptyobj-1.0.jar");
+        assert_eq!(m.mod_id, "emptyobj", "空对象不应阻止回退到 mods.toml");
+        assert_eq!(m.name, "Forge Side");
+        let ids: Vec<&str> = m.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
+        assert!(
+            ids.contains(&"forgelib"),
+            "应从 mods.toml 填充依赖: {ids:?}"
+        );
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_empty_forge_mods_table_falls_back_to_fabric_metadata() {
+        // 对称场景：`[[mods]]` 存在但全空，不提供任何信息；同 jar 的有效
+        // fabric.mod.json 应被采纳，而不是被「结构存在即成功」挡掉。
+        // 必须用 Forge 实例：只有 Forge 侧顺序才先读 mods.toml（未知/Fabric 侧先读
+        // fabric.mod.json，走不到该判定，用例会假通过——实测确认过）。
+        let (game_dir, mods_dir) = temp_game_dir("empty-forge");
+        write_jar(
+            &mods_dir.join("emptyforge-1.0.jar"),
+            &[
+                ("META-INF/mods.toml", "modLoader=\"javafml\"\n[[mods]]\n"),
+                (
+                    "fabric.mod.json",
+                    r#"{"id":"emptyforge","name":"Fabric Side","version":"1.0",
+                        "depends":{"fabriclib":"*"}}"#,
+                ),
+            ],
+        );
+
+        let list = scan(&game_dir, Some("forge"));
+        let m = find(&list, "emptyforge-1.0.jar");
+        assert_eq!(
+            m.mod_id, "emptyforge",
+            "空 [[mods]] 不应阻止回退到 fabric 侧"
+        );
+        assert_eq!(m.name, "Fabric Side");
+        let ids: Vec<&str> = m.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
+        assert!(ids.contains(&"fabriclib"), "应回退填充依赖: {ids:?}");
         let _ = std::fs::remove_dir_all(&game_dir);
     }
 
