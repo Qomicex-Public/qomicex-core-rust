@@ -113,7 +113,10 @@ impl CurseForgeModpackInstaller {
             let mut entry = archive
                 .by_index(i)
                 .map_err(|e| zip_io_err(&self.modpack_file_path, e))?;
-            let full_name = entry.name();
+            // zip 9：`name()` 返回 `ZipResult<Cow<str>>`（8 之前直接是 &str）
+            let full_name = entry
+                .name()
+                .map_err(|e| zip_io_err(&self.modpack_file_path, e))?;
             // 源：entry.FullName.StartsWith($"{overrideName}/", OrdinalIgnoreCase)
             if !full_name
                 .get(..prefix.len())
