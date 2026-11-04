@@ -145,10 +145,11 @@ impl FabricInstaller {
         game_dir: &str,
     ) -> Result<String, Error> {
         let client = InstallerBase::create_http_client();
+        let meta_client = InstallerBase::create_metadata_client();
         // 源：`$"{_downloadSource}v2/versions/loader/{gameVersion}/{fabricVersion}/profile/json"`
         // 主选失败换镜像另一侧（见 fetch_profile_json）
         let (meta_value, used_source) = self
-            .fetch_profile_json(&client, game_version, fabric_version)
+            .fetch_profile_json(&meta_client, game_version, fabric_version)
             .await?;
         let mut meta = meta_value
             .as_object()
@@ -210,7 +211,7 @@ impl FabricInstaller {
         game_version: &str,
         game_dir: &str,
     ) -> Result<Vec<MissFileData>, Error> {
-        let client = InstallerBase::create_http_client();
+        let client = InstallerBase::create_metadata_client();
         let (meta_value, used_source) = self
             .fetch_profile_json(&client, game_version, fabric_version)
             .await?;
@@ -258,11 +259,11 @@ impl FabricInstaller {
                     url = url
                         .replace(
                             "https://meta.fabricmc.net/",
-                            "https://bmclapi2.bangbang93.com/fabric-meta",
+                            "https://bmclapi2.bangbang93.com/fabric-meta/",
                         )
                         .replace(
                             "https://maven.fabricmc.net/",
-                            "https://bmclapi2.bangbang93.com/maven",
+                            "https://bmclapi2.bangbang93.com/maven/",
                         );
                 }
                 miss_files.push(MissFileData {
@@ -314,11 +315,23 @@ impl FabricInstaller {
                     source: Some(Box::new(e)),
                 })?;
                 // 源：`JsonNode.Parse(metaStr)!`（Parse 失败 → JsonException）
-                serde_json::from_str(&meta_str).map_err(|e| Error::Http {
+                let value: Value = serde_json::from_str(&meta_str).map_err(|e| Error::Http {
                     message: format!("Launcher Meta JSON 解析失败: {e}"),
                     status: None,
                     source: Some(Box::new(e)),
-                })
+                })?;
+                // 200 + 合法 JSON 不一定是可用的 profile：缺 libraries 时安装器后续
+                // 会失败，应继续尝试另一侧，而不是把坏 JSON 当成成功。
+                if value.as_object().is_none()
+                    || value.get("libraries").and_then(Value::as_array).is_none()
+                {
+                    return Err(Error::Http {
+                        message: format!("{base} Launcher Meta 结构不可用（缺少 libraries）"),
+                        status: None,
+                        source: None,
+                    });
+                }
+                Ok(value)
             };
             // 单次尝试限时，卡住时尽快换另一侧
             let attempt: Result<Value, Error> =

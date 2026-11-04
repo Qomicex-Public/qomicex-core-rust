@@ -105,8 +105,12 @@ impl InstallerProviderService {
                     .await?;
                 if !supports_minecraft_version(&game_versions, minecraft_version) {
                     // 源：Trace.WriteLine($"Fabric 不支持 MC 版本 {minecraftVersion}")，随后 return versions（空）
-                    eprintln!("Fabric 不支持 MC 版本 {minecraft_version}");
-                    return Ok(());
+                    // 主选可能返回过期/残缺列表，交给下一候选再确认。
+                    return Err(Error::Http {
+                        message: format!("Fabric 不支持 MC 版本 {minecraft_version}"),
+                        status: None,
+                        source: None,
+                    });
                 }
 
                 // 源：var encodedMcVersion = Uri.EscapeDataString(minecraftVersion);
@@ -191,7 +195,13 @@ impl InstallerProviderService {
                 };
 
             match outcome {
-                Ok(()) => return Self::sort_and_deduplicate(versions),
+                Ok(()) => {
+                    if versions.is_empty() {
+                        eprintln!("Fabric：{candidate} 返回空版本列表，尝试下一来源");
+                        continue;
+                    }
+                    return Self::sort_and_deduplicate(versions);
+                }
                 // 源：catch (HttpRequestException ex) —— 请求/状态码失败
                 Err(Error::Http { message, .. }) => {
                     eprintln!("Fabric API 请求失败（{candidate}）：{message}")
@@ -1190,9 +1200,8 @@ impl InstallerProvider for InstallerProviderService {
                 babric_task,
             ) = tokio::join!(
                 InstallerProviderService::with_timeout(self.get_forge_versions(game_version)),
-                InstallerProviderService::with_timeout(
-                    self.get_fabric_versions(game_version, self.get_fabric_base_url())
-                ),
+                // Fabric 内部已按候选源各限时 10s；外层 10s 会直接取消第二次回退。
+                self.get_fabric_versions(game_version, self.get_fabric_base_url()),
                 InstallerProviderService::with_timeout(self.get_neoforge_versions(game_version)),
                 InstallerProviderService::with_timeout(self.get_quilt_versions(game_version)),
                 InstallerProviderService::with_timeout(self.get_optifine_versions(game_version)),

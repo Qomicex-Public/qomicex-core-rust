@@ -37,12 +37,22 @@ use crate::models::expansion::curseforge::{
 };
 use crate::models::expansion::ftb::{ModpackInfo, VersionInfo as FtbVersionInfo};
 use crate::models::expansion::modrinth::{DependenciesInfo, ProjectVersionInfo, SearchResultInfo};
+use crate::net::NetworkConfig;
 use crate::services::auth::microsoft::MicrosoftAuthProvider;
 use crate::services::auth::yggdrasil::{YggdrasilAuthProvider, YggdrasilProfilesOutcome};
 use crate::services::expansion::curseforge::query::CurseForgeBase;
 use crate::services::expansion::ftb::query::FtbBase;
 use crate::services::expansion::modrinth::query::ModrinthBase;
 use crate::services::local::factory::DefaultLocalResourcesFactory;
+
+/// JNI 侧自建 client 也走统一 `NetworkConfig`（proxy/TLS/connect/read timeout），
+/// 避免 Android 端请求停滞时无限挂起。
+fn http_client() -> reqwest::Client {
+    NetworkConfig::global()
+        .apply(reqwest::Client::builder())
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 /// Android logcat 日志（tag QomicexCore），宿主编译时为空实现。
 #[cfg(target_os = "android")]
@@ -502,7 +512,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_yggdrasilAuth(
     let username = get_string(&mut env, username);
     let password = get_string(&mut env, password);
     let server_url = get_string(&mut env, server_url);
-    let provider = YggdrasilAuthProvider::new(reqwest::Client::new(), server_url);
+    let provider = YggdrasilAuthProvider::new(http_client(), server_url);
     let request = AuthRequest {
         username: Some(username),
         password: Some(password),
@@ -532,7 +542,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_microsoftDevice
     client_id: JString,
 ) -> jstring {
     let client_id = get_string(&mut env, client_id);
-    let provider = MicrosoftAuthProvider::new(reqwest::Client::new(), client_id);
+    let provider = MicrosoftAuthProvider::new(http_client(), client_id);
     let result: Value = match block_on(provider.start_device_code()) {
         Ok(Some(dc)) => json!({
             "success": true,
@@ -560,7 +570,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_microsoftPoll(
 ) -> jstring {
     let client_id = get_string(&mut env, client_id);
     let device_code = get_string(&mut env, device_code);
-    let provider = MicrosoftAuthProvider::new(reqwest::Client::new(), client_id);
+    let provider = MicrosoftAuthProvider::new(http_client(), client_id);
     let result: Value = match block_on(provider.poll_for_token(&device_code)) {
         Ok(Some(p)) => json!({
             "accessToken": p.access_token,
@@ -593,7 +603,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_microsoftComple
     let client_id = get_string(&mut env, client_id);
     let access_token = get_string(&mut env, access_token);
     let refresh_token = get_string(&mut env, refresh_token);
-    let provider = MicrosoftAuthProvider::new(reqwest::Client::new(), client_id);
+    let provider = MicrosoftAuthProvider::new(http_client(), client_id);
     let result: Value = match block_on(provider.complete_login(&access_token, &refresh_token)) {
         Ok(a) => auth_result_json(&a),
         Err(e) => json!({
@@ -619,7 +629,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_microsoftProfil
     access_token: JString,
 ) -> jstring {
     let access_token = get_string(&mut env, access_token);
-    let provider = MicrosoftAuthProvider::new(reqwest::Client::new(), String::new());
+    let provider = MicrosoftAuthProvider::new(http_client(), String::new());
     let result: Value = match block_on(provider.get_minecraft_profile(&access_token)) {
         Ok(Some((id, name))) => json!({"id": id, "name": name}),
         _ => Value::Null,
@@ -638,7 +648,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_microsoftRefres
 ) -> jstring {
     let client_id = get_string(&mut env, client_id);
     let refresh_token = get_string(&mut env, refresh_token);
-    let provider = MicrosoftAuthProvider::new(reqwest::Client::new(), client_id);
+    let provider = MicrosoftAuthProvider::new(http_client(), client_id);
     let result: Value = match block_on(provider.refresh_login(&refresh_token)) {
         Ok(a) => auth_result_json(&a),
         Err(e) => json!({
@@ -1152,7 +1162,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceSearch(
 
     let result: Value = match source {
         "modrinth" => {
-            let mr = ModrinthBase::new(reqwest::Client::new(), None);
+            let mr = ModrinthBase::new(http_client(), None);
             let loader_arr: Vec<String> = if loader.is_empty() {
                 Vec::new()
             } else {
@@ -1196,7 +1206,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceSearch(
             if api_key.is_empty() {
                 err_json("CurseForge API Key 未配置".to_string())
             } else {
-                let cf = CurseForgeBase::new(reqwest::Client::new(), api_key.to_string(), None);
+                let cf = CurseForgeBase::new(http_client(), api_key.to_string(), None);
                 let gv_opt: Option<Vec<String>> = if game_version.is_empty() {
                     None
                 } else {
@@ -1237,7 +1247,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceSearch(
             if !category.eq_ignore_ascii_case("modpack") {
                 json!({ "items": [], "total": 0, "page": page, "pageSize": page_size })
             } else {
-                let ftb = FtbBase::new(reqwest::Client::new(), None, None);
+                let ftb = FtbBase::new(http_client(), None, None);
                 let query_opt = if keyword.is_empty() {
                     None
                 } else {
@@ -1304,14 +1314,14 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceDetail(
     let api_key = get_string(&mut env, api_key);
     let result: Value = match source.as_str() {
         "modrinth" => {
-            let mr = ModrinthBase::new(reqwest::Client::new(), None);
-            block_on(mr_detail_json(&mr, &reqwest::Client::new(), &id))
+            let mr = ModrinthBase::new(http_client(), None);
+            block_on(mr_detail_json(&mr, &http_client(), &id))
         }
         "curseforge" => {
             if api_key.is_empty() {
                 err_json("CurseForge API Key 未配置".to_string())
             } else {
-                let cf = CurseForgeBase::new(reqwest::Client::new(), api_key, None);
+                let cf = CurseForgeBase::new(http_client(), api_key, None);
                 let result = match block_on(cf.get_mod_info(&id)) {
                     Ok(info) => cf_detail_json(&info, &category),
                     Err(e) => err_json(format!("{e}")),
@@ -1320,7 +1330,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceDetail(
             }
         }
         "ftb" => {
-            let ftb = FtbBase::new(reqwest::Client::new(), None, None);
+            let ftb = FtbBase::new(http_client(), None, None);
             match id.parse::<i32>() {
                 Ok(ftb_id) => match block_on(ftb.get_pack_detail(ftb_id)) {
                     Ok(Some(pack)) => ftb_detail_json(&pack),
@@ -1354,7 +1364,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceVersion
     let api_key = get_string(&mut env, api_key);
     let result: Value = match source.as_str() {
         "modrinth" => {
-            let mr = ModrinthBase::new(reqwest::Client::new(), None);
+            let mr = ModrinthBase::new(http_client(), None);
             match block_on(mr.get_project_version_info(&id)) {
                 Ok(versions) => {
                     let items: Vec<Value> = versions.iter().map(mr_version_json).collect();
@@ -1367,12 +1377,12 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceVersion
             if api_key.is_empty() {
                 err_json("CurseForge API Key 未配置".to_string())
             } else {
-                let cf = CurseForgeBase::new(reqwest::Client::new(), api_key, None);
+                let cf = CurseForgeBase::new(http_client(), api_key, None);
                 block_on(cf_versions_json(&cf, &id, &game_version, &loader))
             }
         }
         "ftb" => {
-            let ftb = FtbBase::new(reqwest::Client::new(), None, None);
+            let ftb = FtbBase::new(http_client(), None, None);
             block_on(ftb_versions_json(&ftb, &id, &game_version, &loader))
         }
         _ => err_json(format!("资源源 {source} 暂不支持")),
@@ -1397,7 +1407,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceVersion
     let api_key = get_string(&mut env, api_key);
     let result: Value = match source.as_str() {
         "modrinth" => {
-            let mr = ModrinthBase::new(reqwest::Client::new(), None);
+            let mr = ModrinthBase::new(http_client(), None);
             match block_on(mr.get_version_info(&version_id)) {
                 Ok(v) => {
                     let files: Vec<Value> = v
@@ -1421,7 +1431,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceVersion
             if api_key.is_empty() {
                 err_json("CurseForge API Key 未配置".to_string())
             } else {
-                let cf = CurseForgeBase::new(reqwest::Client::new(), api_key, None);
+                let cf = CurseForgeBase::new(http_client(), api_key, None);
                 match block_on(cf.get_download_url(&id, &version_id)) {
                     Ok(url) => json!([json!({ "url": url, "fileName": "", "size": 0 })]),
                     Err(e) => err_json(format!("{e}")),
@@ -1429,7 +1439,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceVersion
             }
         }
         "ftb" => {
-            let ftb = FtbBase::new(reqwest::Client::new(), None, None);
+            let ftb = FtbBase::new(http_client(), None, None);
             match (id.parse::<i32>(), version_id.parse::<i32>()) {
                 (Ok(pack_id), Ok(ver_id)) => {
                     match block_on(ftb.get_version_detail(pack_id, ver_id)) {
@@ -1702,7 +1712,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceDepende
 
     let result: Value = match source.as_str() {
         "modrinth" => {
-            let mr = ModrinthBase::new(reqwest::Client::new(), None);
+            let mr = ModrinthBase::new(http_client(), None);
             let mut visited: HashSet<String> = HashSet::new();
             json!(block_on(resolve_mr_deps(
                 &mr,
@@ -1730,7 +1740,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_resourceDepende
             if api_key.is_empty() {
                 err_json("CurseForge API Key 未配置".to_string())
             } else {
-                let cf = CurseForgeBase::new(reqwest::Client::new(), api_key, None);
+                let cf = CurseForgeBase::new(http_client(), api_key, None);
                 let mut visited: HashSet<String> = HashSet::new();
                 json!(block_on(resolve_cf_deps(
                     &cf,
@@ -1775,7 +1785,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_curseForgeVersi
     let result: Value = if api_key.is_empty() {
         err_json("CurseForge API Key 未配置".to_string())
     } else {
-        let cf = CurseForgeBase::new(reqwest::Client::new(), api_key, None);
+        let cf = CurseForgeBase::new(http_client(), api_key, None);
         block_on(cf_versions_json(&cf, &id, &game_version, &loader))
     };
     to_jstring(&mut env, result.to_string())
@@ -1794,7 +1804,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_ftbVersionDetai
     let version_id = get_string(&mut env, version_id);
     let result: Value = match (pack_id.parse::<i32>(), version_id.parse::<i32>()) {
         (Ok(p), Ok(v)) => {
-            let ftb = FtbBase::new(reqwest::Client::new(), None, None);
+            let ftb = FtbBase::new(http_client(), None, None);
             match block_on(ftb.get_version_detail(p, v)) {
                 Ok(Some(detail)) => serde_json::to_value(detail).unwrap_or(Value::Null),
                 _ => Value::Null,
@@ -1861,11 +1871,11 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_instanceFilesMe
     let category = get_string(&mut env, category);
     let version_segmented = get_string(&mut env, version_segmented) == "true";
 
-    let factory = DefaultLocalResourcesFactory::new(reqwest::Client::new(), None);
+    let factory = DefaultLocalResourcesFactory::new(http_client(), None);
     let result: Value = match category.as_str() {
         "mods" => match block_on(
             factory
-                .create_mods(&game_dir, &version_name, version_segmented, "", None)
+                .create_mods_with_loader(&game_dir, &version_name, version_segmented, "", None)
                 .get_mod_list(None),
         ) {
             Ok(list) => json!(

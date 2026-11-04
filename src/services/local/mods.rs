@@ -883,7 +883,13 @@ fn fabric_json_is_usable(obj: &serde_json::Map<String, Value>) -> bool {
             .and_then(Value::as_str)
             .is_some_and(|s| !s.trim().is_empty())
     };
-    has("id") || has("name") || has("version") || obj.get("depends").is_some_and(Value::is_object)
+    has("id")
+        || has("name")
+        || has("version")
+        || obj
+            .get("depends")
+            .and_then(Value::as_object)
+            .is_some_and(|m| !m.is_empty())
 }
 
 /// 提取 Fabric 强制依赖（issue #165）：`depends` 为 `{ "<modid>": <版本谓词> }` 对象。
@@ -2197,6 +2203,10 @@ versionRange="[2.0,)"
         );
         assert_ne!(
             LoaderSide::Forge.cache_tag(),
+            LoaderSide::Fabric.cache_tag()
+        );
+        assert_ne!(
+            LoaderSide::NeoForge.cache_tag(),
             LoaderSide::Fabric.cache_tag()
         );
     }

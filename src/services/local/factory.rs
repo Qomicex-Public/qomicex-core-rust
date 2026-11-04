@@ -61,9 +61,20 @@ impl DefaultLocalResourcesFactory {
 }
 
 impl LocalResourcesFactory for DefaultLocalResourcesFactory {
+    /// 旧签名：下游/测试仍可调用；默认不按加载器选侧。
+    fn create_mods(
+        &self,
+        game_dir: &str,
+        version: &str,
+        version_segmented: bool,
+        api_key: &str,
+    ) -> Box<dyn ModsManager + Send + Sync> {
+        self.create_mods_with_loader(game_dir, version, version_segmented, api_key, None)
+    }
+
     /// 创建 Mod 管理器（源：`CreateMods(string gameDir, string version, bool versionSegmented, string apiKey)`；
     /// Rust 新增 `loader`：多端模组单 jar 内含两套元数据，解析需按实例加载器选侧，见 mods.rs）
-    fn create_mods(
+    fn create_mods_with_loader(
         &self,
         game_dir: &str,
         version: &str,
@@ -278,7 +289,8 @@ versionRange="[1.20,1.21)"
         write_dual_jar(&mods_dir, "collective-1.20.1-8.53.jar");
 
         let factory = DefaultLocalResourcesFactory::new(reqwest::Client::new(), None);
-        let mods = factory.create_mods(dir.to_str().unwrap(), "1.20.1", false, "", loader);
+        let mods =
+            factory.create_mods_with_loader(dir.to_str().unwrap(), "1.20.1", false, "", loader);
         let list = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(mods.get_mod_list_light())
