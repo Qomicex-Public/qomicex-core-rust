@@ -46,6 +46,12 @@ use crate::models::installer::{ModLoaderResult, ModLoaderType};
 /// （B1 决策：DateTimeOffset 字段 → String 原始文本保真，详见 MAPPING_TABLE b1_decisions）。
 const DATETIME_OFFSET_MIN_VALUE: &str = "0001-01-01T00:00:00+00:00";
 
+/// Fabric meta 单次尝试超时（源 `WithTimeout` 为 10s）。
+///
+/// 逐候选计时而不是给整条查询计时：主选 `meta.fabricmc.net` 在国内会出现
+/// 「200 后 body 停住」，10s 后立刻换 BMCLAPI，不必等注入 client 的 30s 总超时。
+const FABRIC_META_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// 源 `ForgeVersionCacheDir = Path.Combine(Path.GetTempPath(), "ForgeVersionCache")`
 /// （供 Forge 官方 HTML 缓存使用；Forge 版本查询未在本批范围，常量保留待用）。
 /// 安装器提供商实现（源：`internal class InstallerProvider : IInstallerProvider`）。
@@ -80,98 +86,129 @@ impl InstallerProviderService {
     /// game 列表支持性检查 → `{baseUrl}/loader/{mcVersion}` → 逐项解析（loader.version / loader.stable）。
     /// 源 catch(HttpRequestException) → "Fabric API 请求失败"，catch(Exception) → "Fabric API 处理失败"；
     /// 成功/失败统一在 catch 外走 SortAndDeduplicate（源即如此）。
+    ///
+    /// 相对源补充：主选地址失败（含超时）时按 `meta_candidates` 换官方/BMCLAPI 另一侧
+    /// 再试一次。国内直连 `meta.fabricmc.net` 会拿到 200 后 body 停在半途，单源结果是
+    /// 空的加载器列表（前端表现为「暂无可加载器版本」）。
     async fn get_fabric_versions(
         &self,
         minecraft_version: &str,
         base_url: &str,
     ) -> Vec<ModLoaderResult> {
         let mut versions: Vec<ModLoaderResult> = Vec::new();
-        let outcome: Result<(), Error> = async {
-            // 源：var gameVersions = await GetSupportedGameVersions(_http, $"{baseUrl}/game");
-            let game_versions = self
-                .get_supported_game_versions(&format!("{base_url}/game"))
-                .await?;
-            if !supports_minecraft_version(&game_versions, minecraft_version) {
-                // 源：Trace.WriteLine($"Fabric 不支持 MC 版本 {minecraftVersion}")，随后 return versions（空）
-                eprintln!("Fabric 不支持 MC 版本 {minecraft_version}");
-                return Ok(());
-            }
-
-            // 源：var encodedMcVersion = Uri.EscapeDataString(minecraftVersion);
-            let encoded_mc_version = escape_data_string(minecraft_version);
-            let loader_url = format!("{base_url}/loader/{encoded_mc_version}");
-            let loader_response =
-                self.http
-                    .get(&loader_url)
-                    .send()
-                    .await
-                    .map_err(|e| Error::Http {
-                        message: format!("GET {loader_url} 失败"),
+        for candidate in crate::services::installers::fabric::meta_candidates(base_url) {
+            versions.clear();
+            let attempt = async {
+                // 源：var gameVersions = await GetSupportedGameVersions(_http, $"{baseUrl}/game");
+                let game_versions = self
+                    .get_supported_game_versions(&format!("{candidate}/game"))
+                    .await?;
+                if !supports_minecraft_version(&game_versions, minecraft_version) {
+                    // 源：Trace.WriteLine($"Fabric 不支持 MC 版本 {minecraftVersion}")，随后 return versions（空）
+                    // 主选可能返回过期/残缺列表，交给下一候选再确认。
+                    return Err(Error::Http {
+                        message: format!("Fabric 不支持 MC 版本 {minecraft_version}"),
                         status: None,
-                        source: Some(Box::new(e)),
-                    })?;
-            if !loader_response.status().is_success() {
-                return Err(Error::Http {
-                    message: format!("请求失败，状态码 {}", loader_response.status()),
-                    status: None,
-                    source: None,
-                });
-            }
-            let loader_json = loader_response.text().await.map_err(|e| Error::Http {
-                message: format!("读取响应体失败: {loader_url}"),
-                status: None,
-                source: Some(Box::new(e)),
-            })?;
-
-            // 源：var loaderArray = JsonNode.Parse(loaderJson)!.AsArray();
-            let loader_array = parse_json_array(&loader_json, "Fabric loader 响应")?;
-
-            for item in loader_array {
-                // 源：var loaderInfo = item["loader"] as JsonObject; if (loaderInfo == null) continue;
-                let Some(loader_info) = item.get("loader") else {
-                    continue;
-                };
-
-                let loader_version = loader_info
-                    .get("version")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let is_stable = loader_info
-                    .get("stable")
-                    .map(|s| match s {
-                        // 源：loaderInfo["stable"]?.ToString().Equals("true", OrdinalIgnoreCase)
-                        //     JSON 布尔 true → "True" → 也匹配（faithful 处理）
-                        Value::String(s) => s.eq_ignore_ascii_case("true"),
-                        Value::Bool(b) => *b,
-                        _ => false,
-                    })
-                    .unwrap_or(false);
-
-                if loader_version.is_empty() {
-                    continue;
+                        source: None,
+                    });
                 }
 
-                versions.push(new_loader_result(
-                    ModLoaderType::Fabric,
-                    loader_version,
-                    minecraft_version,
-                    "API未提供",
-                    "",
-                    is_stable,
-                ));
-            }
-            // 源：Trace.WriteLine($"Fabric：成功解析 {versions.Count} 个版本");
-            eprintln!("Fabric：成功解析 {} 个版本", versions.len());
-            Ok(())
-        }
-        .await;
+                // 源：var encodedMcVersion = Uri.EscapeDataString(minecraftVersion);
+                let encoded_mc_version = escape_data_string(minecraft_version);
+                let loader_url = format!("{candidate}/loader/{encoded_mc_version}");
+                let loader_response =
+                    self.http
+                        .get(&loader_url)
+                        .send()
+                        .await
+                        .map_err(|e| Error::Http {
+                            message: format!("GET {loader_url} 失败"),
+                            status: None,
+                            source: Some(Box::new(e)),
+                        })?;
+                if !loader_response.status().is_success() {
+                    return Err(Error::Http {
+                        message: format!("请求失败，状态码 {}", loader_response.status()),
+                        status: None,
+                        source: None,
+                    });
+                }
+                let loader_json = loader_response.text().await.map_err(|e| Error::Http {
+                    message: format!("读取响应体失败: {loader_url}"),
+                    status: None,
+                    source: Some(Box::new(e)),
+                })?;
 
-        match outcome {
-            Ok(()) => {}
-            // 源：catch (HttpRequestException ex) —— 请求/状态码失败
-            Err(Error::Http { message, .. }) => eprintln!("Fabric API 请求失败：{message}"),
-            // 源：catch (Exception ex)
-            Err(e) => eprintln!("Fabric API 处理失败：{e}"),
+                // 源：var loaderArray = JsonNode.Parse(loaderJson)!.AsArray();
+                let loader_array = parse_json_array(&loader_json, "Fabric loader 响应")?;
+
+                for item in loader_array {
+                    // 源：var loaderInfo = item["loader"] as JsonObject; if (loaderInfo == null) continue;
+                    let Some(loader_info) = item.get("loader") else {
+                        continue;
+                    };
+
+                    let loader_version = loader_info
+                        .get("version")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let is_stable = loader_info
+                        .get("stable")
+                        .map(|s| match s {
+                            // 源：loaderInfo["stable"]?.ToString().Equals("true", OrdinalIgnoreCase)
+                            //     JSON 布尔 true → "True" → 也匹配（faithful 处理）
+                            Value::String(s) => s.eq_ignore_ascii_case("true"),
+                            Value::Bool(b) => *b,
+                            _ => false,
+                        })
+                        .unwrap_or(false);
+
+                    if loader_version.is_empty() {
+                        continue;
+                    }
+
+                    versions.push(new_loader_result(
+                        ModLoaderType::Fabric,
+                        loader_version,
+                        minecraft_version,
+                        "API未提供",
+                        "",
+                        is_stable,
+                    ));
+                }
+                // 源：Trace.WriteLine($"Fabric：成功解析 {versions.Count} 个版本");
+                eprintln!("Fabric：成功解析 {} 个版本", versions.len());
+                Ok(())
+            };
+            // 单次尝试限时：主选卡住时尽快换另一侧，而不是等注入 client 的 30s 总超时
+            let outcome: Result<(), Error> =
+                match tokio::time::timeout(FABRIC_META_ATTEMPT_TIMEOUT, attempt).await {
+                    Ok(result) => result,
+                    Err(_) => Err(Error::Http {
+                        message: format!(
+                            "{candidate} 超过 {}s 未返回",
+                            FABRIC_META_ATTEMPT_TIMEOUT.as_secs()
+                        ),
+                        status: None,
+                        source: None,
+                    }),
+                };
+
+            match outcome {
+                Ok(()) => {
+                    if versions.is_empty() {
+                        eprintln!("Fabric：{candidate} 返回空版本列表，尝试下一来源");
+                        continue;
+                    }
+                    return Self::sort_and_deduplicate(versions);
+                }
+                // 源：catch (HttpRequestException ex) —— 请求/状态码失败
+                Err(Error::Http { message, .. }) => {
+                    eprintln!("Fabric API 请求失败（{candidate}）：{message}")
+                }
+                // 源：catch (Exception ex)
+                Err(e) => eprintln!("Fabric API 处理失败（{candidate}）：{e}"),
+            }
         }
         Self::sort_and_deduplicate(versions)
     }
@@ -1163,9 +1200,8 @@ impl InstallerProvider for InstallerProviderService {
                 babric_task,
             ) = tokio::join!(
                 InstallerProviderService::with_timeout(self.get_forge_versions(game_version)),
-                InstallerProviderService::with_timeout(
-                    self.get_fabric_versions(game_version, self.get_fabric_base_url())
-                ),
+                // Fabric 内部已按候选源各限时 10s；外层 10s 会直接取消第二次回退。
+                self.get_fabric_versions(game_version, self.get_fabric_base_url()),
                 InstallerProviderService::with_timeout(self.get_neoforge_versions(game_version)),
                 InstallerProviderService::with_timeout(self.get_quilt_versions(game_version)),
                 InstallerProviderService::with_timeout(self.get_optifine_versions(game_version)),

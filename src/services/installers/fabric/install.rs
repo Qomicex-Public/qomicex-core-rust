@@ -31,6 +31,7 @@
 //! - 参数缺失（源 ArgumentNullException）/ 主版本 JSON 缺失 / 库条目畸形（源 NRE）→ Error::Params
 
 use std::path::Path;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -41,6 +42,9 @@ use crate::services::download::checksum::sha1_hex;
 use crate::services::installers::installer::MissFileData;
 use crate::services::installers::installer::{Installer, InstallerBase};
 use crate::util::lib_helper::maven_to_path;
+
+/// loader profile JSON 单次请求超时：主选卡住时尽快换镜像另一侧。
+const PROFILE_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Fabric 安装器（源：`internal class FabricInstaller : InstallerBase, IInstaller`）
 pub(crate) struct FabricInstaller {
@@ -141,34 +145,12 @@ impl FabricInstaller {
         game_dir: &str,
     ) -> Result<String, Error> {
         let client = InstallerBase::create_http_client();
+        let meta_client = InstallerBase::create_metadata_client();
         // 源：`$"{_downloadSource}v2/versions/loader/{gameVersion}/{fabricVersion}/profile/json"`
-        let url = format!(
-            "{}v2/versions/loader/{game_version}/{fabric_version}/profile/json",
-            self.download_source
-        );
-        let response = client.get(&url).send().await.map_err(|e| Error::Http {
-            message: format!("获取Launcher Meta失败: {e}"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
-        if !response.status().is_success() {
-            return Err(Error::Http {
-                message: "获取Launcher Meta失败".to_string(),
-                status: None,
-                source: None,
-            });
-        }
-        let meta_str = response.text().await.map_err(|e| Error::Http {
-            message: format!("读取Launcher Meta响应失败: {e}"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
-        // 源：`JsonNode.Parse(metaStr)!.AsObject()`（Parse 失败 → JsonException；非对象 → InvalidOperationException）
-        let meta_value: Value = serde_json::from_str(&meta_str).map_err(|e| Error::Http {
-            message: format!("Launcher Meta JSON 解析失败: {e}"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
+        // 主选失败换镜像另一侧（见 fetch_profile_json）
+        let (meta_value, used_source) = self
+            .fetch_profile_json(&meta_client, game_version, fabric_version)
+            .await?;
         let mut meta = meta_value
             .as_object()
             .ok_or_else(|| Error::Http {
@@ -194,17 +176,22 @@ impl FabricInstaller {
                     .get("url")
                     .and_then(|v| v.as_str())
                     .filter(|u| !u.is_empty())
-                    .unwrap_or(&self.download_source);
+                    .unwrap_or(used_source.as_str());
                 let maven_path = maven_to_path(name);
                 // 源：`await DownloadFileAsync(client, $"{urlDomain}{MavenToPath(name)}",
                 //      $"{gameDir}/libraries/{MavenToPath(name)}")`（返回值被源忽略；失败抛异常传播）
-                InstallerBase::download_file_async(
-                    &client,
-                    &format!("{url_domain}{maven_path}"),
-                    &format!("{game_dir}/libraries/{maven_path}"),
-                    5,
-                )
-                .await?;
+                let url = format!("{url_domain}{maven_path}");
+                let dest = format!("{game_dir}/libraries/{maven_path}");
+                if let Err(primary_error) =
+                    InstallerBase::download_file_async(&client, &url, &dest, 5).await
+                {
+                    // 官方 maven 在国内同样会被「200 后 body 停住」打断，换镜像补一次
+                    let Some(fallback) = super::mirror_url(&url) else {
+                        return Err(primary_error);
+                    };
+                    eprintln!("[FabricInstaller] 库下载失败，改用镜像：{url} -> {fallback}");
+                    InstallerBase::download_file_async(&client, &fallback, &dest, 5).await?;
+                }
             }
         }
 
@@ -224,33 +211,10 @@ impl FabricInstaller {
         game_version: &str,
         game_dir: &str,
     ) -> Result<Vec<MissFileData>, Error> {
-        let client = InstallerBase::create_http_client();
-        let url = format!(
-            "{}v2/versions/loader/{game_version}/{fabric_version}/profile/json",
-            self.download_source
-        );
-        let response = client.get(&url).send().await.map_err(|e| Error::Http {
-            message: format!("获取Launcher Meta失败: {e}"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
-        if !response.status().is_success() {
-            return Err(Error::Http {
-                message: "获取Launcher Meta失败".to_string(),
-                status: None,
-                source: None,
-            });
-        }
-        let meta_str = response.text().await.map_err(|e| Error::Http {
-            message: format!("读取Launcher Meta响应失败: {e}"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
-        let meta_value: Value = serde_json::from_str(&meta_str).map_err(|e| Error::Http {
-            message: format!("Launcher Meta JSON 解析失败: {e}"),
-            status: None,
-            source: Some(Box::new(e)),
-        })?;
+        let client = InstallerBase::create_metadata_client();
+        let (meta_value, used_source) = self
+            .fetch_profile_json(&client, game_version, fabric_version)
+            .await?;
         let meta = meta_value.as_object().ok_or_else(|| Error::Http {
             message: "Launcher Meta 顶层非 JSON 对象".to_string(),
             status: None,
@@ -271,7 +235,7 @@ impl FabricInstaller {
                     .get("url")
                     .and_then(|v| v.as_str())
                     .filter(|u| !u.is_empty())
-                    .unwrap_or(&self.download_source);
+                    .unwrap_or(used_source.as_str());
                 let maven_path = maven_to_path(name);
                 // 源：`var libPath = Path.Combine(gameDir, "libraries", MavenToPath(name));`
                 let lib_path = path_combine(&path_combine(game_dir, "libraries"), &maven_path);
@@ -291,15 +255,15 @@ impl FabricInstaller {
                 // （urlDomain 以 / 结尾时 Combine 等价直接拼接；库 url 通常含尾斜杠）
                 let mut url = path_combine(url_domain, &maven_path);
                 // 源：非官方源时把官方域名替换为 BMCLAPI 域名（String.Replace 全局替换，原样保留）
-                if self.download_source != "https://meta.fabricmc.net/" {
+                if used_source != super::META_OFFICIAL {
                     url = url
                         .replace(
                             "https://meta.fabricmc.net/",
-                            "https://bmclapi2.bangbang93.com/fabric-meta",
+                            "https://bmclapi2.bangbang93.com/fabric-meta/",
                         )
                         .replace(
                             "https://maven.fabricmc.net/",
-                            "https://bmclapi2.bangbang93.com/maven",
+                            "https://bmclapi2.bangbang93.com/maven/",
                         );
                 }
                 miss_files.push(MissFileData {
@@ -315,6 +279,87 @@ impl FabricInstaller {
             }
         }
         Ok(miss_files)
+    }
+
+    /// 依次尝试官方 / BMCLAPI 拉取 loader profile JSON，返回 `(JSON, 命中的根地址)`。
+    ///
+    /// 源只有一个 `_downloadSource`，但该地址（Cloudflare）在国内链路会出现
+    /// 「拿到 200 后 body 停在半途」，单源请求表现为安装卡住。这里保留主选优先，
+    /// 失败后换另一侧，与 `source_policy` 的「偏好只决定顺序，两侧互为兜底」一致。
+    async fn fetch_profile_json(
+        &self,
+        client: &reqwest::Client,
+        game_version: &str,
+        fabric_version: &str,
+    ) -> Result<(Value, String), Error> {
+        let mut last_error = None;
+        for base in super::meta_candidates(&self.download_source) {
+            let url =
+                format!("{base}v2/versions/loader/{game_version}/{fabric_version}/profile/json");
+            let attempt = async {
+                let response = client.get(&url).send().await.map_err(|e| Error::Http {
+                    message: format!("获取Launcher Meta失败: {e}"),
+                    status: None,
+                    source: Some(Box::new(e)),
+                })?;
+                if !response.status().is_success() {
+                    return Err(Error::Http {
+                        message: "获取Launcher Meta失败".to_string(),
+                        status: None,
+                        source: None,
+                    });
+                }
+                let meta_str = response.text().await.map_err(|e| Error::Http {
+                    message: format!("读取Launcher Meta响应失败: {e}"),
+                    status: None,
+                    source: Some(Box::new(e)),
+                })?;
+                // 源：`JsonNode.Parse(metaStr)!`（Parse 失败 → JsonException）
+                let value: Value = serde_json::from_str(&meta_str).map_err(|e| Error::Http {
+                    message: format!("Launcher Meta JSON 解析失败: {e}"),
+                    status: None,
+                    source: Some(Box::new(e)),
+                })?;
+                // 200 + 合法 JSON 不一定是可用的 profile：缺 libraries 时安装器后续
+                // 会失败，应继续尝试另一侧，而不是把坏 JSON 当成成功。
+                if value.as_object().is_none()
+                    || value.get("libraries").and_then(Value::as_array).is_none()
+                {
+                    return Err(Error::Http {
+                        message: format!("{base} Launcher Meta 结构不可用（缺少 libraries）"),
+                        status: None,
+                        source: None,
+                    });
+                }
+                Ok(value)
+            };
+            // 单次尝试限时，卡住时尽快换另一侧
+            let attempt: Result<Value, Error> =
+                match tokio::time::timeout(PROFILE_ATTEMPT_TIMEOUT, attempt).await {
+                    Ok(result) => result,
+                    Err(_) => Err(Error::Http {
+                        message: format!(
+                            "{base} 超过 {}s 未返回",
+                            PROFILE_ATTEMPT_TIMEOUT.as_secs()
+                        ),
+                        status: None,
+                        source: None,
+                    }),
+                };
+
+            match attempt {
+                Ok(value) => return Ok((value, base)),
+                Err(e) => {
+                    eprintln!("[FabricInstaller] {base} 获取 Launcher Meta 失败：{e}");
+                    last_error = Some(e);
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| Error::Http {
+            message: "获取Launcher Meta失败：没有可用来源".to_string(),
+            status: None,
+            source: None,
+        }))
     }
 }
 

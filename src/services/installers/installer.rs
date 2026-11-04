@@ -103,11 +103,25 @@ impl InstallerBase {
     /// - 应用全局 proxy/TLS 配置（`build()` 经 CoreOptions 写入，见 net.rs）；
     /// - 构建失败（源构造不抛异常）→ `expect` 直接中止。
     pub(crate) fn create_http_client() -> reqwest::Client {
+        Self::build_client(false)
+    }
+
+    /// 元数据/短响应用客户端：在普通 client 上追加 idle-read 超时。
+    /// 大文件下载仍用 [`create_http_client`](Self::create_http_client)，避免弱网误杀。
+    pub(crate) fn create_metadata_client() -> reqwest::Client {
+        Self::build_client(true)
+    }
+
+    fn build_client(metadata: bool) -> reqwest::Client {
         let mut builder = reqwest::Client::builder();
         if let Some(user_agent) = DEFAULT_USER_AGENT.get() {
             builder = builder.user_agent(user_agent);
         }
-        builder = NetworkConfig::global().apply(builder);
+        builder = if metadata {
+            NetworkConfig::global().apply_metadata(builder)
+        } else {
+            NetworkConfig::global().apply(builder)
+        };
         builder
             .redirect(reqwest::redirect::Policy::limited(50))
             .build()
@@ -275,12 +289,23 @@ impl InstallerBase {
             }
         }
 
-        let mut file = tokio::fs::File::create(destination_path)
-            .await
-            .map_err(|e| Error::DownloadFailed {
-                message: format!("下载文件失败（{url}）：创建文件失败：{e}"),
-                source: Some(Box::new(e)),
-            })?;
+        // 先写同目录临时文件，完整下载后再 rename：失败/中断不会覆盖已存在的共享库，
+        // 并发安装也不会读到半截文件。
+        let tmp_path = format!(
+            "{destination_path}.{}.{}.qml-tmp",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let mut file =
+            tokio::fs::File::create(&tmp_path)
+                .await
+                .map_err(|e| Error::DownloadFailed {
+                    message: format!("下载文件失败（{url}）：创建临时文件失败：{e}"),
+                    source: Some(Box::new(e)),
+                })?;
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| Error::DownloadFailed {
@@ -290,8 +315,23 @@ impl InstallerBase {
             file.write_all(&chunk)
                 .await
                 .map_err(|e| Error::DownloadFailed {
-                    message: format!("下载文件失败（{url}）：写入文件失败：{e}"),
+                    message: format!("下载文件失败（{url}）：写入临时文件失败：{e}"),
                     source: Some(Box::new(e)),
+                })?;
+        }
+        file.flush().await.map_err(|e| Error::DownloadFailed {
+            message: format!("下载文件失败（{url}）：刷新临时文件失败：{e}"),
+            source: Some(Box::new(e)),
+        })?;
+        drop(file);
+        if let Err(e) = tokio::fs::rename(&tmp_path, &destination_path).await {
+            // Windows 目标已存在时 rename 会失败：先删旧文件再重试。
+            let _ = tokio::fs::remove_file(&destination_path).await;
+            tokio::fs::rename(&tmp_path, &destination_path)
+                .await
+                .map_err(|e2| Error::DownloadFailed {
+                    message: format!("下载文件失败（{url}）：替换目标文件失败：{e} / {e2}"),
+                    source: Some(Box::new(e2)),
                 })?;
         }
         Ok(true)
@@ -331,7 +371,12 @@ impl InstallerBase {
                 message: format!("读取ZIP失败（{path}）：{e}"),
                 source: Some(Box::new(e)),
             })?;
-            if entry.name().eq_ignore_ascii_case(file_name) {
+            // zip 9：`name()` 返回 `ZipResult<Cow<str>>`（8 之前直接是 &str）
+            let entry_name = entry.name().map_err(|e| Error::Params {
+                message: format!("读取ZIP失败（{path}）：{e}"),
+                source: Some(Box::new(e)),
+            })?;
+            if entry_name.eq_ignore_ascii_case(file_name) {
                 let mut buf = Vec::new();
                 std::io::Read::read_to_end(&mut entry, &mut buf).map_err(|e| Error::Params {
                     message: format!("读取ZIP失败（{path}）：{e}"),

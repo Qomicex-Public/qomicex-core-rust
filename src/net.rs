@@ -15,6 +15,16 @@
 //!   从而无需逐个改动构造签名或调用方。
 
 use std::sync::OnceLock;
+use std::time::Duration;
+
+/// 连接建立超时：卡在 TCP/TLS 握手的连接快速失败，交给上层换源。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// 单次读取超时：**仅用于元数据/短响应**。body 传到一半不再出数据时快速失败。
+///
+/// 不应用到所有 client：大文件下载在弱网下可能 >30s 没有新字节，统一 read_timeout
+/// 会误杀已推进的传输。需要它的调用方用 [`NetworkConfig::apply_metadata`]。
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 网络配置：可选代理 URL + 是否禁用所有代理 + 是否跳过 TLS 证书校验。
 ///
@@ -51,7 +61,10 @@ impl NetworkConfig {
     /// - `proxy_url` 为非法 URL 时静默跳过（`reqwest::Proxy::all` 返回 Err 时不应用，
     ///   保持 reqwest 标准语义）；SOCKS5 需 reqwest `socks` feature。
     /// - `ignore_ssl_certs` → `.danger_accept_invalid_certs(true)`。
+    /// - 统一设置 [`CONNECT_TIMEOUT`]；元数据/短响应另用
+    ///   [`apply_metadata`](Self::apply_metadata) 追加 idle-read 超时。
     pub(crate) fn apply(&self, mut builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+        builder = builder.connect_timeout(CONNECT_TIMEOUT);
         if self.no_proxy {
             builder = builder.no_proxy();
         }
@@ -64,6 +77,12 @@ impl NetworkConfig {
             builder = builder.proxy(proxy);
         }
         builder
+    }
+
+    /// 在 [`apply`](Self::apply) 基础上追加元数据/短响应的 idle-read 超时。
+    /// 大文件下载不要用这个，避免弱网下 >30s 无新字节被误杀。
+    pub(crate) fn apply_metadata(&self, builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+        self.apply(builder).read_timeout(READ_TIMEOUT)
     }
 }
 

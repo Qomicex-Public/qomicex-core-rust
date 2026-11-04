@@ -16,7 +16,9 @@ use async_trait::async_trait;
 
 // 方法映射表：
 // - `CreateMods(string gameDir, string version, bool versionSegmented, string apiKey) -> Mods`
-//   → `create_mods(&self, game_dir: &str, version: &str, version_segmented: bool, api_key: &str) -> Box<dyn ModsManager + Send + Sync>`
+//   → `create_mods(&self, game_dir: &str, version: &str, version_segmented: bool, api_key: &str, loader: Option<&str>) -> Box<dyn ModsManager + Send + Sync>`
+//   （`loader` 为 Rust 新增参数，源无对应：多端模组把 fabric 与 forge 两套元数据装进同一个
+//   jar，解析必须先知道实例跑哪个加载器才知道该信哪一侧，见 mods.rs parse_metadata）
 // - `CreateSaves(...) -> Saves` → `create_saves(...) -> Box<dyn SavesManager + Send + Sync>`
 // - `CreateResourcepack(...) -> Resourcepack` → `create_resourcepack(...) -> Box<dyn ResourcepackManager + Send + Sync>`
 // - `CreateShaders(...) -> Shaders` → `create_shaders(...) -> Box<dyn ShadersManager + Send + Sync>`
@@ -44,7 +46,7 @@ use async_trait::async_trait;
 /// 按实例游戏目录、版本号、版本分段目录、API Key 创建各类本地内容管理器
 /// （Mods/存档/资源包/光影/截图/数据包）。
 pub trait LocalResourcesFactory: Send + Sync {
-    /// 创建 Mod 管理器（源：CreateMods）
+    /// 创建 Mod 管理器（源：CreateMods；保持旧签名以兼容下游实现）。
     fn create_mods(
         &self,
         game_dir: &str,
@@ -52,6 +54,28 @@ pub trait LocalResourcesFactory: Send + Sync {
         version_segmented: bool,
         api_key: &str,
     ) -> Box<dyn ModsManager + Send + Sync>;
+
+    /// 创建 Mod 管理器（Rust 新增 `loader`，见文件头映射表）。
+    ///
+    /// `loader` 决定 jar 元数据解析优先读哪一侧（issue #255）：Forge 按
+    /// `META-INF/mods.toml` → fabric.mod.json；NeoForge 按
+    /// `META-INF/neoforge.mods.toml` → `META-INF/mods.toml` → fabric.mod.json；
+    /// 其余（Fabric/Quilt/未知）按 `fabric.mod.json` → Forge 系回退。多端模组在同一个
+    /// jar 里同时装有两套元数据，只按固定顺序取第一个命中的会读到**另一端**的依赖声明
+    /// （详见 mods.rs parse_metadata）。
+    ///
+    /// 默认实现忽略 loader，回退到旧 `create_mods`，避免下游 crate 因新增参数编译失败。
+    fn create_mods_with_loader(
+        &self,
+        game_dir: &str,
+        version: &str,
+        version_segmented: bool,
+        api_key: &str,
+        loader: Option<&str>,
+    ) -> Box<dyn ModsManager + Send + Sync> {
+        let _ = loader;
+        self.create_mods(game_dir, version, version_segmented, api_key)
+    }
 
     /// 创建存档管理器（源：CreateSaves）
     fn create_saves(
