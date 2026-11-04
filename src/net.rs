@@ -15,6 +15,17 @@
 //!   从而无需逐个改动构造签名或调用方。
 
 use std::sync::OnceLock;
+use std::time::Duration;
+
+/// 连接建立超时：卡在 TCP/TLS 握手的连接快速失败，交给上层换源。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// 单次读取超时：body 传到一半不再出数据时快速失败。
+///
+/// 不设总时长上限——大文件只要持续出数据就不会被打断，而「拿到 200 后 body
+/// 停住」的干扰（实测 `meta.fabricmc.net`）会在 30s 后报错，让安装器/列表查询
+/// 及时改走另一侧，而不是无限挂起。
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 网络配置：可选代理 URL + 是否禁用所有代理 + 是否跳过 TLS 证书校验。
 ///
@@ -51,7 +62,12 @@ impl NetworkConfig {
     /// - `proxy_url` 为非法 URL 时静默跳过（`reqwest::Proxy::all` 返回 Err 时不应用，
     ///   保持 reqwest 标准语义）；SOCKS5 需 reqwest `socks` feature。
     /// - `ignore_ssl_certs` → `.danger_accept_invalid_certs(true)`。
+    /// - 同时统一设置 [`CONNECT_TIMEOUT`] / [`READ_TIMEOUT`]：核心内部所有自建
+    ///   client 都经过这里，避免个别调用点漏设超时而无限挂起。
     pub(crate) fn apply(&self, mut builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+        builder = builder
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT);
         if self.no_proxy {
             builder = builder.no_proxy();
         }
