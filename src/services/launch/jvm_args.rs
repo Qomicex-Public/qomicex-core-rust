@@ -79,6 +79,13 @@ struct RawArguments {
     game: Option<Vec<Value>>,
 }
 
+/// 启动器设置的最大堆必须覆盖版本 JSON 自带值：现代 JSON 通常不含 `-Xmx`，
+/// 若完全依赖 JSON，JVM 会回退到默认堆（物理内存的 1/4）。
+fn apply_max_memory(jvm_list: &mut Vec<String>, max_memory_mb: i32) {
+    jvm_list.retain(|arg| !arg.trim_start().starts_with("-Xmx"));
+    jvm_list.push(format!("-Xmx{max_memory_mb}m"));
+}
+
 impl LaunchExecutor {
     /// 创建启动执行器（源构造函数 `LaunchExecutor(string launchName, string gameDir)`）
     pub(crate) fn new(launch_name: String, game_dir: String) -> Self {
@@ -464,6 +471,11 @@ impl LaunchExecutor {
     ) -> Result<Vec<String>, Error> {
         let game_dir = self.effective_game_dir(options);
         let mut jvm_list: Vec<String> = Vec::new();
+        let max_memory = options
+            .java_options
+            .as_ref()
+            .map(|j| j.max_memory_mb)
+            .unwrap_or(512);
         if options.version.is_empty() {
             // 源：ArgumentException("Version cannot be null or empty.", nameof(options.Version))
             return Err(Error::Params {
@@ -522,7 +534,9 @@ impl LaunchExecutor {
             jvm_list.push("${classpath}".to_string());
             jvm_list.push("${authlib_injector_param}".to_string());
             jvm_list.push("-Xmn256m".to_string());
-            jvm_list.push("-Xmx${max_memory}m".to_string());
+            if add_default_params {
+                apply_max_memory(&mut jvm_list, max_memory);
+            }
             return Ok(jvm_list); // 旧版兼容
         };
 
@@ -580,6 +594,9 @@ impl LaunchExecutor {
                     jvm_list.push(normalize_arg(s));
                 }
             }
+        }
+        if add_default_params {
+            apply_max_memory(&mut jvm_list, max_memory);
         }
         Ok(jvm_list)
     }
@@ -887,5 +904,27 @@ fn windows_major_version() -> Option<u32> {
     #[cfg(not(windows))]
     {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_max_memory;
+
+    #[test]
+    fn appends_max_memory_when_json_has_none() {
+        let mut args = vec!["-XX:+UseG1GC".to_string()];
+        apply_max_memory(&mut args, 7936);
+        assert_eq!(
+            args,
+            vec!["-XX:+UseG1GC".to_string(), "-Xmx7936m".to_string()]
+        );
+    }
+
+    #[test]
+    fn replaces_json_max_memory() {
+        let mut args = vec!["-Xmx4G".to_string(), "-Dfoo=bar".to_string()];
+        apply_max_memory(&mut args, 7936);
+        assert_eq!(args, vec!["-Dfoo=bar".to_string(), "-Xmx7936m".to_string()]);
     }
 }
