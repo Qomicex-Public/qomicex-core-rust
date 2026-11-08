@@ -545,7 +545,6 @@ impl Mods {
             match joined {
                 Ok(Ok(Some((idx, info)))) => {
                     ordered[idx] = Some(info);
-                    completed += 1;
                 }
                 // 解析期间 jar 被替换 → 该条结论已过期，不返回（下次扫描会读到新文件）
                 Ok(Ok(None)) => {}
@@ -553,6 +552,9 @@ impl Mods {
                 // 源 Parallel.ForEach 的线程异常不向外传播（只中断该任务）→ 跳过
                 Err(_) => {}
             }
+            // 进度按**已处理的任务数**递增，与是否采纳结果无关：被丢弃的那条也算处理完了，
+            // 否则进度条永远停在 total_count 之下（评审 sourcery 指出）
+            completed += 1;
             if let Some(cb) = on_progress.as_deref_mut() {
                 call_progress(cb, completed, total_count);
             }
@@ -2939,6 +2941,60 @@ version="1.0"
 
         let _ = std::fs::remove_dir_all(&game_dir);
         let _ = std::fs::remove_dir_all(&game_dir2);
+    }
+
+    #[test]
+    fn progress_reaches_total_even_when_an_entry_is_dropped() {
+        // 评审 sourcery 指出：解析期间 jar 被替换时该任务的结论被丢弃且不计数，
+        // 进度回调会永远停在 total_count 之下（前端进度条卡住）。
+        // 现进度按「已处理任务数」递增，与是否采纳结果无关。
+        //
+        // 「结论被丢弃」这条分支要靠并发替换 jar 才能稳定触发，测试里不可靠；
+        // 这里守住能验证的部分：全部正常时进度必须走到 total_count。
+        // 丢弃不计数会少走一格，正是下面断言要防的形态。
+        let (game_dir, mods_dir) = temp_game_dir("progress");
+        write_jar(
+            &mods_dir.join("a.jar"),
+            &[(
+                "fabric.mod.json",
+                r#"{"id":"a","name":"A","version":"1.0"}"#,
+            )],
+        );
+        write_jar(
+            &mods_dir.join("b.jar"),
+            &[(
+                "fabric.mod.json",
+                r#"{"id":"b","name":"B","version":"1.0"}"#,
+            )],
+        );
+
+        let mods = Mods::new(
+            reqwest::Client::new(),
+            game_dir.to_string_lossy().into_owned(),
+            "1.20.1".to_string(),
+            false,
+            String::new(),
+            None,
+            None,
+        );
+        let mut progress: Vec<(i32, i32)> = Vec::new();
+        {
+            let mut cb = |cur: i32, total: i32| progress.push((cur, total));
+            let opt: Option<&mut (dyn FnMut(i32, i32) + Send)> = Some(&mut cb);
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(mods.get_mod_list(opt))
+                .unwrap();
+        }
+
+        let total = progress.last().map(|(_, t)| *t).unwrap_or(0);
+        assert_eq!(total, 2, "总数应为 2 个 jar: {progress:?}");
+        assert_eq!(
+            progress.last().map(|(c, _)| *c),
+            Some(2),
+            "进度必须走到 total_count（丢弃条目也要计数）: {progress:?}"
+        );
+        let _ = std::fs::remove_dir_all(&game_dir);
     }
 
     #[test]

@@ -26,6 +26,9 @@ pub mod modrinth;
 ///
 /// `C:payload` 这类**盘符相对**段也必须拒绝：`PathBuf::push` 遇到它会把整条路径替换成
 /// 「当前 C 盘目录下的 payload」，`starts_with(base)` 拦不住（评审 sourcery 指出）。
+///
+/// 段尾的点与空格同样要按 Windows 口径归一后再判：`..junk`、`...`、`..  ` 在 Win32 上会
+/// 被规范化成父目录段，只看字面量 `== ".."` 会漏（评审 sourcery 指出）。
 pub(crate) fn safe_join_under(
     base: &std::path::Path,
     relative_path: &str,
@@ -36,7 +39,19 @@ pub(crate) fn safe_join_under(
         if segment.is_empty() || segment == "." {
             continue;
         }
-        if segment == ".." {
+        // Windows 的段规范化会剥掉尾部的点与空格，所以 `..junk`、`...`、`..  ` 都要先归一。
+        // 归一后的形态只有三种可能：空（纯点/空格，等价 `.`）、以点开头（父目录段）、正常名。
+        let normalized = segment.trim_end_matches(['.', ' ']);
+        if normalized.is_empty() {
+            // 纯点/空格段：`...` / `   ` 归一后为空，等价于 `.` → 丢弃；
+            // 但 `..` 本身也会被剥成空串，不能当无害段放过，故单独确认没有两个连续点
+            if segment.contains("..") {
+                return None;
+            }
+            continue;
+        }
+        // `..`、`..junk` 归一后仍以 `..` 开头 → 父目录段
+        if normalized.starts_with("..") {
             return None;
         }
         // 盘符前缀（`C:`、`C:payload`）与 UNC 共享名都是绝对/盘符相对的起点
@@ -106,6 +121,34 @@ mod tests {
         assert_eq!(
             safe_join_under(base, "./mods//a.jar"),
             Some(base.join("mods/a.jar"))
+        );
+    }
+
+    #[test]
+    fn safe_join_under_rejects_windows_normalized_parent_segments() {
+        // Win32 的段规范化会剥掉尾部的点与空格，`..junk`、`.. `、`....` 都会被当成父目录段；
+        // 只比对字面量 `== ".."` 会漏（评审 sourcery 指出）。
+        let base = Path::new("install");
+        for evil in [
+            "..junk/x.jar",
+            ".. /x.jar",
+            "mods/.../../x.jar",
+            "mods/.. /x.jar",
+        ] {
+            assert!(
+                safe_join_under(base, evil).is_none(),
+                "{evil:?} 归一后是父目录段，应被拒绝"
+            );
+        }
+        // `...` 含连续两点，按 Win32 口径同样是父目录段 → 拒绝而不是放过
+        assert!(
+            safe_join_under(base, "mods/.../a.jar").is_none(),
+            "`...` 含连续两点，应按父目录段拒绝"
+        );
+        // 纯空格的段归一后为空、且不含连续点 → 等价于 `.`，折叠掉
+        assert!(
+            safe_join_under(base, "mods/   /a.jar").is_some(),
+            "纯空格段应折叠掉而不是拒绝"
         );
     }
 
