@@ -61,6 +61,13 @@ impl CurseForgeModpackInstaller {
         }
     }
 
+    /// 测试入口：直接跑 overrides 释放（install 还要求 manifest.json，
+    /// 而 issue #12 的加固与 manifest 无关）。
+    #[cfg(test)]
+    pub(crate) fn release_files_for_test(&self, version_id: &str) -> Result<(), Error> {
+        self.release_files(version_id)
+    }
+
     /// 读取整合包信息（源：`public CurseForgeModpackInfo GetModpackInfo()`）。
     ///
     /// 解析 zip 内 `manifest.json` 并提取名称/版本/游戏版本/加载器/必选文件列表；
@@ -109,51 +116,41 @@ impl CurseForgeModpackInstaller {
         let mut archive =
             zip::ZipArchive::new(file).map_err(|e| zip_io_err(&self.modpack_file_path, e))?;
 
-        for i in 0..archive.len() {
-            let mut entry = archive
-                .by_index(i)
-                .map_err(|e| zip_io_err(&self.modpack_file_path, e))?;
-            // zip 9：`name()` 返回 `ZipResult<Cow<str>>`（8 之前直接是 &str）
-            let full_name = entry
-                .name()
-                .map_err(|e| zip_io_err(&self.modpack_file_path, e))?;
-            // 源：entry.FullName.StartsWith($"{overrideName}/", OrdinalIgnoreCase)
-            if !full_name
-                .get(..prefix.len())
-                .is_some_and(|head| head.eq_ignore_ascii_case(&prefix))
-            {
-                continue;
-            }
-            // 源：var relativePath = entry.FullName.Substring($"{overrideName}/".Length);
-            let relative_path = &full_name[prefix.len()..];
-            // 源：var destinationPath = Path.Combine(versionDir, relativePath);
-            // ⚠️ 偏离源：relativePath 来自不可信 zip，源直接 Combine 会被
-            // `overrides/../../x` 写到安装目录之外；这里拒绝越界条目。
-            let Some(destination_path) = super::safe_join_under(&version_dir, relative_path) else {
-                continue;
-            };
+        // 解压上下文：统一做路径校验、预算扣减与失败回滚（issue #12）
+        let mut extractor = super::OverrideExtractor::new(&version_dir)
+            .map_err(|msg| file_io_err(&self.modpack_file_path, std::io::Error::other(msg)))?;
 
-            // 源：if (string.IsNullOrEmpty(entry.Name)) —— .NET ZipArchiveEntry.Name 为
-            // FullName 末段，目录条目（尾部 '/'）→ 空串。
-            // ⚠️ 偏离源：这里两种分隔符都认——`subdir\` 若只按 '/' 取末段会得到非空文件名，
-            // 随后被当文件创建，等子条目写入才失败（评审 sourcery 指出）。
-            if super::is_directory_entry(&full_name) {
-                // 源：Directory.CreateDirectory(destinationPath)
-                std::fs::create_dir_all(&destination_path)
-                    .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
-            } else {
-                // 源：Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!) 后
-                //      entry.ExtractToFile(destinationPath, overwrite: true)
-                if let Some(parent) = destination_path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
+        let result = (|| -> Result<(), String> {
+            for i in 0..archive.len() {
+                let mut entry = archive
+                    .by_index(i)
+                    .map_err(|e| format!("读取条目失败: {e}"))?;
+                // zip 9：`name()` 返回 `ZipResult<Cow<str>>`（8 之前直接是 &str）
+                // 先转成自有 String：下面要把 `entry` 可变借用给 extractor
+                let full_name = entry
+                    .name()
+                    .map_err(|e| format!("条目名解码失败: {e}"))?
+                    .into_owned();
+                // 源：entry.FullName.StartsWith($"{overrideName}/", OrdinalIgnoreCase)
+                if !full_name
+                    .get(..prefix.len())
+                    .is_some_and(|head| head.eq_ignore_ascii_case(&prefix))
+                {
+                    continue;
                 }
-                let mut out = std::fs::File::create(&destination_path)
-                    .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
-                std::io::copy(&mut entry, &mut out)
-                    .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
+                extractor.extract_entry(&mut entry, &full_name, prefix.len())?;
             }
+            Ok(())
+        })();
+
+        if result.is_err() {
+            // 失败：删本次新建的文件、还原被覆盖文件的原内容（issue #12）
+            extractor.rollback();
+        } else {
+            // 成功：删掉覆盖备份
+            extractor.commit();
         }
+        result.map_err(|msg| file_io_err(&self.modpack_file_path, std::io::Error::other(msg)))?;
         Ok(())
     }
 }

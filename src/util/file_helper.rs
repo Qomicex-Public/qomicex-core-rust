@@ -87,23 +87,60 @@ pub fn unzip(zip_file_path: &str, target_dir: &str) -> bool {
 }
 
 /// 逐项解压 zip（覆盖已存在文件）
+///
+/// 加固（issue #12）：
+/// - 目标路径经符号链接解析后必须仍在 `target_dir` 内，否则拒绝——`mangled_name()`
+///   已过滤 `..`，但挡不住目标目录里预置的、指向外部的符号链接；
+/// - 按目标盘剩余空间约束解压总量，避免高压缩比条目把盘写满。
 fn extract_zip(zip_file_path: &str, target_dir: &str) -> zip::result::ZipResult<()> {
     let file = fs::File::open(zip_file_path).map_err(zip::result::ZipError::Io)?;
     let mut archive = zip::ZipArchive::new(file)?;
 
+    let root = Path::new(target_dir);
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    // 预算探测失败时仍保留单条目上限，不放弃全部限制
+    let mut budget = crate::services::installers::modpacks::ExtractBudget::for_target(&root);
+
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         // zip 9：`mangled_name()` 返回 `ZipResult<PathBuf>`（8 之前直接是 PathBuf）
-        let out_path = Path::new(target_dir).join(entry.mangled_name()?);
+        let out_path = root.join(entry.mangled_name()?);
+
+        // 符号链接防护：**总是**校验。不能只在 out_path.exists() 时校验——叶子不存在、
+        // 但父目录是指向根外的链接时 exists() 为 false，随后 create_dir_all 仍会跟着
+        // 链接写出去（评审 sourcery 指出）。
+        if !crate::services::installers::modpacks::resolves_within_root(&root, &out_path) {
+            return Err(zip::result::ZipError::Io(std::io::Error::other(format!(
+                "解压目标越过根目录（疑似符号链接）：{}",
+                out_path.display()
+            ))));
+        }
 
         if entry.is_dir() {
             fs::create_dir_all(&out_path).map_err(zip::result::ZipError::Io)?;
         } else {
+            let declared = entry.size();
+            match budget.as_mut() {
+                Some(b) => b
+                    .reserve(declared)
+                    .map_err(|msg| zip::result::ZipError::Io(std::io::Error::other(msg)))?,
+                // 探测失败：仍按单条目上限卡，至少不会因单条巨文件写满盘
+                None => crate::services::installers::modpacks::check_single_entry_limit(declared)
+                    .map_err(|msg| zip::result::ZipError::Io(std::io::Error::other(msg)))?,
+            }
             if let Some(parent) = out_path.parent() {
                 fs::create_dir_all(parent).map_err(zip::result::ZipError::Io)?;
             }
             let mut out = fs::File::create(&out_path).map_err(zip::result::ZipError::Io)?;
-            std::io::copy(&mut entry, &mut out).map_err(zip::result::ZipError::Io)?;
+            let mut limited = std::io::Read::take(&mut entry, declared.saturating_add(1));
+            let copied =
+                std::io::copy(&mut limited, &mut out).map_err(zip::result::ZipError::Io)?;
+            // 实写量超过声明量 → zip 头撒谎，判失败（不能默默当成功）
+            if copied > declared {
+                return Err(zip::result::ZipError::Io(std::io::Error::other(format!(
+                    "条目实际解压 {copied} 字节，超过声明 {declared} 字节"
+                ))));
+            }
         }
     }
     Ok(())
