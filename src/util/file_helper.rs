@@ -87,23 +87,49 @@ pub fn unzip(zip_file_path: &str, target_dir: &str) -> bool {
 }
 
 /// 逐项解压 zip（覆盖已存在文件）
+///
+/// 加固（issue #12）：
+/// - 目标路径经符号链接解析后必须仍在 `target_dir` 内，否则拒绝——`mangled_name()`
+///   已过滤 `..`，但挡不住目标目录里预置的、指向外部的符号链接；
+/// - 按目标盘剩余空间约束解压总量，避免高压缩比条目把盘写满。
 fn extract_zip(zip_file_path: &str, target_dir: &str) -> zip::result::ZipResult<()> {
     let file = fs::File::open(zip_file_path).map_err(zip::result::ZipError::Io)?;
     let mut archive = zip::ZipArchive::new(file)?;
 
+    let root = Path::new(target_dir);
+    // 预算探测失败时退回「只靠单条目上限」，不阻断既有调用方（natives 解压多为小文件）
+    let mut budget = crate::services::installers::modpacks::ExtractBudget::for_target(root);
+
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         // zip 9：`mangled_name()` 返回 `ZipResult<PathBuf>`（8 之前直接是 PathBuf）
-        let out_path = Path::new(target_dir).join(entry.mangled_name()?);
+        let out_path = root.join(entry.mangled_name()?);
+
+        // 符号链接防护：目标已存在时解析真实路径，必须仍在根目录内
+        if out_path.exists()
+            && !crate::services::installers::modpacks::resolves_within_root(root, &out_path)
+        {
+            return Err(zip::result::ZipError::Io(std::io::Error::other(format!(
+                "解压目标越过根目录（疑似符号链接）：{}",
+                out_path.display()
+            ))));
+        }
 
         if entry.is_dir() {
             fs::create_dir_all(&out_path).map_err(zip::result::ZipError::Io)?;
         } else {
+            let declared = entry.size();
+            if let Some(budget) = budget.as_mut() {
+                budget
+                    .reserve(declared)
+                    .map_err(|msg| zip::result::ZipError::Io(std::io::Error::other(msg)))?;
+            }
             if let Some(parent) = out_path.parent() {
                 fs::create_dir_all(parent).map_err(zip::result::ZipError::Io)?;
             }
             let mut out = fs::File::create(&out_path).map_err(zip::result::ZipError::Io)?;
-            std::io::copy(&mut entry, &mut out).map_err(zip::result::ZipError::Io)?;
+            let mut limited = std::io::Read::take(&mut entry, declared.saturating_add(1));
+            std::io::copy(&mut limited, &mut out).map_err(zip::result::ZipError::Io)?;
         }
     }
     Ok(())
