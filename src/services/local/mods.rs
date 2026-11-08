@@ -20,6 +20,8 @@
 
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use async_trait::async_trait;
@@ -56,6 +58,12 @@ pub(crate) struct Mods {
     /// 解析必须先知道实例跑哪个加载器，否则会读到另一端声明的依赖。
     /// 只保留派生结果——原始字符串除判侧外无用途，留着会触发 dead_code 警告。
     side: LoaderSide,
+    /// 本次扫描命中 per-jar 缓存的次数。
+    ///
+    /// 生产路径不读它；存在的意义是让测试能分辨「缓存真的被复用」与「每次都没命中
+    /// 只是重新解析出了同样的结果」——后者会让缓存隔离类测试在实现退化时照样通过
+    /// （评审 sourcery 指出）。
+    cache_hits: Arc<AtomicU64>,
 }
 
 /// 实例加载器归属的元数据侧（issue #255）。
@@ -118,12 +126,19 @@ impl Mods {
             api_key,
             icon_cache_dir,
             side: LoaderSide::from_loader(loader.as_deref()),
+            cache_hits: Arc::new(AtomicU64::new(0)),
         }
     }
 
     /// 该实例的加载器归属侧（决定 jar 元数据解析顺序与 per-jar 缓存身份）。
     fn loader_side(&self) -> LoaderSide {
         self.side
+    }
+
+    /// 本次扫描已命中 per-jar 缓存的次数（测试用）。
+    #[cfg(test)]
+    fn cache_hit_count(&self) -> u64 {
+        self.cache_hits.load(Ordering::Relaxed)
     }
 
     /// Mod 目录（源：`ModDirectory` 计算属性）：
@@ -245,14 +260,15 @@ fn load_cached_mod(
     }
 }
 
-/// 写入 per-jar 缓存：先写同目录临时文件再 `rename` 原子替换。
+/// 写入 per-jar 缓存：先写同目录临时文件再 `rename` 覆盖目标。
 ///
 /// 同一 jar 的并发扫描会写同一个缓存文件（如列表页与后台刷新重叠）：
 /// - 直接 `fs::write` 会让先开始、后完成的旧扫描截断较新的条目，留下半截 JSON 或旧结论；
-///   `rename` 在同一文件系统上是原子替换，读方看到的要么是旧条目要么是新条目；
-/// - 只靠原子替换仍不够——旧扫描若在 jar 被替换后才完成，会把旧结论带上新身份写回去。
-///   故写前按 `jar_path` 重新取一次身份：与解析时的 `meta.file_key` 不一致（解析期间
-///   jar 被换掉）就不写，让下一次扫描正常重扫，而不是让过期结论冒充当前 jar 的解析结果。
+///   写临时文件再 `rename` 则让读方看到的要么是旧条目要么是新条目
+///   （`std::fs::rename` 覆盖已存在的目标，Windows 上同理）；
+/// - 临时文件名必须每次唯一，否则同进程内重叠的两次扫描会互相写/删/改名同一个路径；
+/// - 旧扫描若在 jar 被替换后才完成，会把旧结论带上新身份写回去。故写前按 `jar_path`
+///   重新取一次身份：与解析时的 `meta.file_key` 不一致（解析期间 jar 被换掉）就不写。
 fn save_cached_mod(cache_file: &Path, meta: &CachedModMeta, jar_path: &str) {
     if jar_identity(jar_path).map(|(_, _, key)| key) != Some(meta.file_key) {
         return;
@@ -263,10 +279,24 @@ fn save_cached_mod(cache_file: &Path, meta: &CachedModMeta, jar_path: &str) {
     let Ok(json) = serde_json::to_vec(meta) else {
         return;
     };
+
+    // 唯一后缀：pid + 进程内自增。缓存目录可能被低权限用户写入，故用 create_new
+    // （已存在则失败，不跟随已存在的符号链接）而不是 fs::write。
+    static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
     let mut tmp_name = cache_file.file_name().unwrap_or_default().to_os_string();
-    tmp_name.push(format!(".{}.tmp", std::process::id()));
+    tmp_name.push(format!(".{}.{seq}.tmp", std::process::id()));
     let tmp_file = cache_file.with_file_name(tmp_name);
-    if std::fs::write(&tmp_file, json).is_err() {
+
+    let written = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp_file)
+        .and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(&json)
+        });
+    if written.is_err() {
         let _ = std::fs::remove_file(&tmp_file);
         return;
     }
@@ -361,6 +391,7 @@ impl Mods {
             let cache_dir = self.icon_cache_dir.clone();
             // issue #255：解析结果依赖加载器，闭包需按值捕获该标志（闭包为 'static）
             let side = self.loader_side();
+            let cache_hits = Arc::clone(&self.cache_hits);
             tasks.spawn_blocking(move || -> Result<(usize, ModInfo), Error> {
                 // Stat jar for cache validation (cheap, no file content read)
                 let (file_size, file_mtime_millis, file_key) =
@@ -376,7 +407,12 @@ impl Mods {
                     let cache_file = dir.join(format!("{path_hash}-{}.json", side.cache_tag()));
                     if let Some(cached) =
                         load_cached_mod(&cache_file, file_size, file_mtime_millis, file_key)
+                        // 读条目期间 jar 可能被换掉：命中后再 stat 一次确认身份没变，
+                        // 否则会把替换前那个 jar 的结论返回给调用方（评审 sourcery 指出）
+                        && jar_identity(&mod_path).unwrap_or((0, 0, 0))
+                            == (file_size, file_mtime_millis, file_key)
                     {
+                        cache_hits.fetch_add(1, Ordering::Relaxed);
                         let icon_base64 = cached.icon_sha1.and_then(|sha1| {
                             let icon_file = dir.join("icons").join(format!("{sha1}.png"));
                             std::fs::read(&icon_file).ok().and_then(|bytes| {
@@ -748,41 +784,42 @@ fn parse_metadata(file_bytes: &[u8], info: &mut ModInfo, side: LoaderSide) {
     // issue #165：先收集嵌套（Jar-in-Jar）模组 id——容器 jar 只声明自己的 id，
     // 真正的子模块 id 在嵌套 jar 里（见 collect_nested_ids 文档）。
     info.provides_ids = collect_nested_ids(&mut archive, side);
-    match try_parse_mod_metadata(&mut archive, info, side) {
-        MetadataOutcome::Parsed => return,
-        // 读取失败（IO/解压错误）→ 同源 catch{} 语义：放弃本 jar，不再尝试其它格式
-        MetadataOutcome::ReadError => return,
-        MetadataOutcome::NotPresent => {}
+    if matches!(
+        try_parse_mod_metadata(&mut archive, info, side),
+        MetadataOutcome::Parsed
+    ) {
+        return;
     }
 
     let mcmod = match read_zip_entry(&mut archive, "mcmod.info") {
-        Err(_) => return,
         Ok(c) => c,
+        // 条目读取失败 → 已无后备格式，放弃本 jar（同源 catch{} 语义）
+        Err(_) => return,
     };
     if let Some(content) = mcmod {
         parse_mcmod_json(&mut archive, &content, info);
     }
 }
 
-/// 元数据解析结果的三种去向（区分「没这个条目」与「条目坏了」与「解析成功」）。
+/// 元数据解析结果的两种去向。
 enum MetadataOutcome {
     /// 已按所选加载器侧填充 `ModInfo`
     Parsed,
-    /// 所选侧的条目不存在或内容无法解析 → 允许回退到 `mcmod.info` / 另一侧
+    /// 没有任何格式能填充 `ModInfo`——条目缺失、内容无法解析、或该条目读取失败，
+    /// 都可能走到这里；调用方继续尝试 `mcmod.info`。
+    ///
+    /// 单条目的读取失败**不再**中止整个解析（评审 sourcery 指出）：某个条目的压缩数据
+    /// 损坏时，同 jar 里的另一侧格式往往是完好的，为一个坏条目丢掉整份元数据得不偿失。
     NotPresent,
-    /// 条目存在但读取失败 → 同源 catch{} 吞掉整个解析块（不再尝试后续格式）
-    ReadError,
 }
 
 /// 取「与实例加载器同侧优先」的第一个可解析元数据条目。
 ///
 /// 三种格式都会在**未填充任何内容**时返回 `NotPresent`，从而回退到下一种：
 /// 条目缺失、JSON/TOML 语法错误、结构不符（如 `fabric.mod.json` 是数组、`mods.toml`
-/// 缺 `[[mods]]` 表）以及缺身份字段（无 `id` / 无 `modId`）都归入此类。
-/// 修复前这些情形会直接 `return`，让 jar 元数据整体为空且无从察觉
-/// （评审 sourcery 指出：有效的备用元数据被跳过）。
-///
-/// 只有 `read_zip_entry` 返回 `Err`（条目存在但读不出来）才是 `ReadError`。
+/// 缺 `[[mods]]` 表）、缺身份字段（无 `id` / 无 `modId`），以及该条目读取失败
+/// （压缩数据损坏等）都归入此类。修复前这些情形会直接 `return`，让 jar 元数据整体
+/// 为空且无从察觉（评审 sourcery 指出：有效的备用元数据被跳过）。
 fn try_parse_mod_metadata<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     info: &mut ModInfo,
@@ -809,8 +846,9 @@ fn try_parse_mod_metadata<R: Read + Seek>(
 
     for format in order {
         let content = match read_zip_entry(archive, format.entry_name()) {
-            // 条目存在但读取失败 → 同源 catch{} 吞掉整个解析块
-            Err(_) => return MetadataOutcome::ReadError,
+            // 该条目读取失败（压缩数据损坏等）→ 只当这一种格式不可用，继续试下一种，
+            // 不让一个坏条目连带丢掉同 jar 里完好的另一侧元数据
+            Err(_) => continue,
             Ok(None) => continue,
             Ok(Some(content)) => content,
         };
@@ -856,9 +894,17 @@ fn find_entry_index<R: Read + Seek>(archive: &ZipArchive<R>, entry_path: &str) -
         .position(|n| n.is_ok_and(|n| n.eq_ignore_ascii_case(entry_path)))
 }
 
+/// 单个 zip 条目允许解压出的最大字节数。
+///
+/// 模组元数据是大几百字节到几十 KB 的文本（真实样本里 `fabric.mod.json` 最大约 120 KB），
+/// 图标通常 < 1 MB。一个几十 KB 的 zip 条目却声明解压后数 GB，就是解压炸弹：扫描会把
+/// 它整个读进 `Vec`，模组目录里放一个这样的 jar 就能把启动器的内存吃光。
+/// 超限的条目按「读取失败」处理（该格式跳过，不影响其它条目）。
+const MAX_ZIP_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
+
 /// 读取 zip 内条目文本（源：ReadZipEntry + StreamReader）。
 /// - 无匹配条目 → `Ok(None)`（同源返回 null → 尝试下一格式）；
-/// - 条目存在但读取失败 → `Err(())`（同源 StreamReader 抛异常 → 外层 catch 吞掉整个解析块）；
+/// - 条目存在但读取失败或解压后超过 [`MAX_ZIP_ENTRY_BYTES`] → `Err(())`；
 /// - BOM 剥离 + 非法 UTF-8 替换（源 StreamReader 默认 UTF-8、检测 BOM、替换模式）
 fn read_zip_entry<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
@@ -869,8 +915,19 @@ fn read_zip_entry<R: Read + Seek>(
         None => return Ok(None),
     };
     let mut entry = archive.by_index(index).map_err(|_| ())?;
+    if entry.size() > MAX_ZIP_ENTRY_BYTES {
+        return Err(());
+    }
     let mut bytes = Vec::new();
-    entry.read_to_end(&mut bytes).map_err(|_| ())?;
+    // 上限兜底：zip 头里的 size 可被构造得比实际解压量小，读的时候再卡一道
+    entry
+        .by_ref()
+        .take(MAX_ZIP_ENTRY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.len() as u64 > MAX_ZIP_ENTRY_BYTES {
+        return Err(());
+    }
     let mut content = String::from_utf8_lossy(&bytes).into_owned();
     if let Some(rest) = content.strip_prefix('\u{feff}') {
         content = rest.to_string();
@@ -879,7 +936,8 @@ fn read_zip_entry<R: Read + Seek>(
 }
 
 /// 提取 zip 内图标为 base64 字符串（源：ExtractIconFromArchive）：
-/// 无条目 → 空串；读取失败 → 空串（同源 Open 抛异常被外层 catch 吞掉，前序字段保留）；
+/// 无条目 → 空串；读取失败或超过 [`MAX_ZIP_ENTRY_BYTES`] → 空串
+/// （同源 Open 抛异常被外层 catch 吞掉，前序字段保留）；
 /// 内容为空 → 空串；否则 → base64
 fn extract_icon_from_archive<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
@@ -893,8 +951,17 @@ fn extract_icon_from_archive<R: Read + Seek>(
         Ok(e) => e,
         Err(_) => return String::new(),
     };
+    if entry.size() > MAX_ZIP_ENTRY_BYTES {
+        return String::new();
+    }
     let mut bytes = Vec::new();
-    if entry.read_to_end(&mut bytes).is_err() {
+    if entry
+        .by_ref()
+        .take(MAX_ZIP_ENTRY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .is_err()
+        || bytes.len() as u64 > MAX_ZIP_ENTRY_BYTES
+    {
         return String::new();
     }
     if bytes.is_empty() {
@@ -1461,6 +1528,80 @@ mod dependency_tests {
         }
     }
 
+    // ── zip 条目解压上限 ──────────────────────────────────────
+
+    #[test]
+    fn oversized_zip_entry_is_rejected_not_buffered() {
+        // 解压炸弹防护：条目声明/实际解压量超过 MAX_ZIP_ENTRY_BYTES 时按读取失败处理，
+        // 不把它整个读进内存。此处用全零内容压缩，压缩后体积远小于解压后体积。
+        let big = "0".repeat((MAX_ZIP_ENTRY_BYTES + 1024) as usize);
+        let jar = test_jar_with_entries(&[("fabric.mod.json", &big)]);
+        let mut archive = ZipArchive::new(Cursor::new(jar)).unwrap();
+        assert!(
+            read_zip_entry(&mut archive, "fabric.mod.json").is_err(),
+            "超过上限的条目应判为读取失败，不得整体读入内存"
+        );
+    }
+
+    #[test]
+    fn unreadable_entry_falls_back_to_next_format() {
+        // 评审 sourcery 指出：修复前某个条目读取失败（压缩数据损坏等）会让
+        // try_parse_mod_metadata 整体返回，连带丢掉同 jar 里完好的另一侧元数据。
+        // 现只把该格式判为不可用并继续。此处把首选侧（Forge 侧先读 mods.toml）
+        // 的内容写成非法 UTF-8 之外的损坏形态不易构造，故用「条目存在但解压后超限」
+        // 复现读取失败路径（同属 Err(_) 分支）。
+        let (game_dir, mods_dir) = temp_game_dir("unreadable-entry");
+        let big = "0".repeat((MAX_ZIP_ENTRY_BYTES + 1024) as usize);
+        write_jar(
+            &mods_dir.join("broken-1.0.jar"),
+            &[
+                ("META-INF/mods.toml", &big),
+                (
+                    "fabric.mod.json",
+                    r#"{"id":"broken","name":"Fabric Side","version":"1.0"}"#,
+                ),
+            ],
+        );
+
+        // Forge 实例先读 mods.toml（读到 Err）→ 必须继续回退到 fabric 侧
+        let list = scan(&game_dir, Some("forge"));
+        let m = find(&list, "broken-1.0.jar");
+        assert_eq!(
+            m.mod_id, "broken",
+            "首选侧条目读取失败不应中止整个解析，应回退下一格式"
+        );
+        assert_eq!(m.name, "Fabric Side");
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn oversized_entry_does_not_drop_other_side_metadata() {
+        // 超限条目只影响它自己：同 jar 的另一侧元数据仍应被正常解析
+        let (game_dir, mods_dir) = temp_game_dir("oversized-entry");
+        let big = "0".repeat((MAX_ZIP_ENTRY_BYTES + 1024) as usize);
+        write_jar(
+            &mods_dir.join("bomb-1.0.jar"),
+            &[
+                ("fabric.mod.json", &big),
+                (
+                    "META-INF/mods.toml",
+                    r#"modLoader="javafml"
+[[mods]]
+modId="bomb"
+displayName="Forge Side"
+version="1.0"
+"#,
+                ),
+            ],
+        );
+
+        let list = scan(&game_dir, None);
+        let m = find(&list, "bomb-1.0.jar");
+        assert_eq!(m.mod_id, "bomb", "超限的 fabric 侧不应连带丢掉 mods.toml");
+        assert_eq!(m.name, "Forge Side");
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
     // ── fabric ────────────────────────────────────────────────
 
     #[test]
@@ -1876,15 +2017,15 @@ modId="m"
     /// 用给定 gameDir 跑一次真实扫描（version_segmented=false → 读 {gameDir}/mods）。
     /// `loader` 为 None → 与修复前一致的 Fabric 优先顺序。
     fn scan(game_dir: &std::path::Path, loader: Option<&str>) -> Vec<ModInfo> {
-        scan_inner(game_dir, loader, None)
+        scan_inner(game_dir, loader, None).0
     }
 
-    /// 同上，但启用 per-jar 磁盘缓存（`icon_cache_dir`）。
+    /// 同上，但启用 per-jar 磁盘缓存（`icon_cache_dir`），并返回本次命中的缓存条数。
     fn scan_with_cache(
         game_dir: &std::path::Path,
         loader: Option<&str>,
         cache_dir: &std::path::Path,
-    ) -> Vec<ModInfo> {
+    ) -> (Vec<ModInfo>, u64) {
         scan_inner(game_dir, loader, Some(cache_dir.to_path_buf()))
     }
 
@@ -1892,7 +2033,7 @@ modId="m"
         game_dir: &std::path::Path,
         loader: Option<&str>,
         cache_dir: Option<PathBuf>,
-    ) -> Vec<ModInfo> {
+    ) -> (Vec<ModInfo>, u64) {
         let mods = Mods::new(
             reqwest::Client::new(),
             game_dir.to_string_lossy().into_owned(),
@@ -1902,10 +2043,11 @@ modId="m"
             cache_dir,
             loader.map(str::to_string),
         );
-        tokio::runtime::Runtime::new()
+        let list = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(mods.get_mod_list_light())
-            .unwrap()
+            .unwrap();
+        (list, mods.cache_hit_count())
     }
 
     fn find<'a>(list: &'a [ModInfo], file_name: &str) -> &'a ModInfo {
@@ -2546,7 +2688,8 @@ versionRange="[1.0,)"
         let cache_dir = game_dir.join("cache");
         write_dual_jar(&mods_dir, "collective-1.20.1-8.53.jar", "collective");
 
-        let forge_first = scan_with_cache(&game_dir, Some("forge"), &cache_dir);
+        let (forge_first, hits_first) = scan_with_cache(&game_dir, Some("forge"), &cache_dir);
+        assert_eq!(hits_first, 0, "首次扫描不可能命中缓存");
         let m = find(&forge_first, "collective-1.20.1-8.53.jar");
         let ids: Vec<&str> = m.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
         assert!(
@@ -2555,7 +2698,7 @@ versionRange="[1.0,)"
         );
 
         // 换加载器：若两侧共用同一条缓存，这里会读到 Forge 侧结论（fabric 依赖缺失）
-        let fabric = scan_with_cache(&game_dir, Some("fabric"), &cache_dir);
+        let (fabric, _) = scan_with_cache(&game_dir, Some("fabric"), &cache_dir);
         let mf = find(&fabric, "collective-1.20.1-8.53.jar");
         let fabric_ids: Vec<&str> = mf.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
         assert!(
@@ -2564,7 +2707,12 @@ versionRange="[1.0,)"
         );
 
         // 回到 Forge：必须仍取 Forge 侧（两侧缓存并存，互不覆盖）
-        let forge_again = scan_with_cache(&game_dir, Some("forge"), &cache_dir);
+        // 这一扫必须**命中**缓存——否则「结果对」只说明重新解析了一次，隔离与否无从判断
+        let (forge_again, hits_again) = scan_with_cache(&game_dir, Some("forge"), &cache_dir);
+        assert_eq!(
+            hits_again, 1,
+            "Forge 二次扫描应命中 1 条缓存（命中为 0 说明缓存没被复用，本用例证明不了隔离）"
+        );
         let m2 = find(&forge_again, "collective-1.20.1-8.53.jar");
         let again: Vec<&str> = m2.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
         assert!(
