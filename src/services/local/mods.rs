@@ -155,6 +155,12 @@ struct CachedModMeta {
     v: u32,
     size: u64,
     mtime: u64,
+    /// jar 的文件身份（创建时间 + 最后写时间，见 [`jar_file_key`]）。缺省 0 = 引入该字段
+    /// 之前的旧条目 → 与任何真实身份都不等，等价于未命中，升级后重扫一次。
+    /// size+mtime 在「同名替换」时可能完全不变（同秒内写入 / 时间戳被保留），
+    /// 单看它们采信会把旧 jar 的依赖喂给新 jar（评审 sourcery 指出）。
+    #[serde(default)]
+    file_key: u64,
     sha1: String,
     cf_hash: i64,
     name: String,
@@ -176,28 +182,96 @@ struct CachedModMeta {
 /// 当前 per-jar 缓存结构版本（v3 起含 mcmod.info 世代的 modId/requiredMods/注解依赖）。
 /// v4：解析顺序按加载器分派（issue #255）——旧缓存的 dependencies 可能是另一端元数据的
 /// 产物（Forge 实例里存着 fabric.mod.json 的 `fabric` 依赖），必须失效重扫。
-const MOD_META_CACHE_VERSION: u32 = 4;
+/// v5：缓存身份由 size+mtime 改为文件身份 `fileKey`（见 [`jar_file_key`]）——
+/// 同名替换而 size 与毫秒 mtime 不变时，旧条目会被采信（评审 sourcery 指出）。
+const MOD_META_CACHE_VERSION: u32 = 5;
 
-fn load_cached_mod(cache_file: &Path, size: u64, mtime: u64) -> Option<CachedModMeta> {
+/// jar 的文件身份：`{creation_secs}.{mtime_nanos}`。
+///
+/// 单一 mtime 不足以区分「同名替换」——同秒内重写的 jar 毫秒 mtime 可以完全相同
+/// （`fs::copy` / 解压保留时间戳时更是如此），此时旧缓存的依赖会被当成新 jar 的结论。
+/// Windows 上创建时间与最后写时间是独立字段，重写必然刷新 mtime；由此组合出的身份
+/// 在「原地替换」时变化，在「文件没动」时稳定。
+///
+/// 不取哈希（内容身份）：命中缓存的意义就是不读文件内容，为此读一遍即抵消全部收益。
+fn jar_file_key(meta: &std::fs::Metadata) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let created = meta
+        .created()
+        .ok()
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    created.hash(&mut hasher);
+    modified.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// 取 jar 的 (size, mtime 毫秒, 文件身份)。stat 失败 → 全 0，与「缓存必然未命中」一致。
+fn jar_identity(path: &str) -> Option<(u64, u64, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    let size = meta.len();
+    let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+    let millis = mtime
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    Some((size, millis, jar_file_key(&meta)))
+}
+
+fn load_cached_mod(
+    cache_file: &Path,
+    size: u64,
+    mtime: u64,
+    file_key: u64,
+) -> Option<CachedModMeta> {
     let bytes = std::fs::read(cache_file).ok()?;
     let meta: CachedModMeta = serde_json::from_slice(&bytes).ok()?;
     // 结构版本不符 → 视为未命中，强制重新解析（旧的 size+mtime 判断发现不了逻辑升级）
     if meta.v != MOD_META_CACHE_VERSION {
         return None;
     }
-    if meta.size == size && meta.mtime == mtime {
+    if meta.size == size && meta.mtime == mtime && meta.file_key == file_key {
         Some(meta)
     } else {
         None
     }
 }
 
-fn save_cached_mod(cache_file: &Path, meta: &CachedModMeta) {
+/// 写入 per-jar 缓存：先写同目录临时文件再 `rename` 原子替换。
+///
+/// 同一 jar 的并发扫描会写同一个缓存文件（如列表页与后台刷新重叠）：
+/// - 直接 `fs::write` 会让先开始、后完成的旧扫描截断较新的条目，留下半截 JSON 或旧结论；
+///   `rename` 在同一文件系统上是原子替换，读方看到的要么是旧条目要么是新条目；
+/// - 只靠原子替换仍不够——旧扫描若在 jar 被替换后才完成，会把旧结论带上新身份写回去。
+///   故写前按 `jar_path` 重新取一次身份：与解析时的 `meta.file_key` 不一致（解析期间
+///   jar 被换掉）就不写，让下一次扫描正常重扫，而不是让过期结论冒充当前 jar 的解析结果。
+fn save_cached_mod(cache_file: &Path, meta: &CachedModMeta, jar_path: &str) {
+    if jar_identity(jar_path).map(|(_, _, key)| key) != Some(meta.file_key) {
+        return;
+    }
     if let Some(parent) = cache_file.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(json) = serde_json::to_vec(meta) {
-        let _ = std::fs::write(cache_file, json);
+    let Ok(json) = serde_json::to_vec(meta) else {
+        return;
+    };
+    let mut tmp_name = cache_file.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(format!(".{}.tmp", std::process::id()));
+    let tmp_file = cache_file.with_file_name(tmp_name);
+    if std::fs::write(&tmp_file, json).is_err() {
+        let _ = std::fs::remove_file(&tmp_file);
+        return;
+    }
+    if std::fs::rename(&tmp_file, cache_file).is_err() {
+        let _ = std::fs::remove_file(&tmp_file);
     }
 }
 
@@ -289,18 +363,8 @@ impl Mods {
             let side = self.loader_side();
             tasks.spawn_blocking(move || -> Result<(usize, ModInfo), Error> {
                 // Stat jar for cache validation (cheap, no file content read)
-                let (file_size, file_mtime_millis) = match std::fs::metadata(&mod_path) {
-                    Ok(m) => {
-                        let size = m.len();
-                        let mtime = m.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                        let millis = mtime
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .map(|d| d.as_millis() as u64)
-                            .unwrap_or(0);
-                        (size, millis)
-                    }
-                    Err(_) => (0, 0),
-                };
+                let (file_size, file_mtime_millis, file_key) =
+                    jar_identity(&mod_path).unwrap_or((0, 0, 0));
 
                 let path_hash = sha1_hex(mod_path.as_bytes());
 
@@ -310,7 +374,8 @@ impl Mods {
                     // 解析、在 Fabric 实例按 fabric.mod.json 解析，结果不同。只按路径做 key
                     // 会让先扫的实例把结论喂给后扫的实例（size+mtime 完全相同，无从察觉）。
                     let cache_file = dir.join(format!("{path_hash}-{}.json", side.cache_tag()));
-                    if let Some(cached) = load_cached_mod(&cache_file, file_size, file_mtime_millis)
+                    if let Some(cached) =
+                        load_cached_mod(&cache_file, file_size, file_mtime_millis, file_key)
                     {
                         let icon_base64 = cached.icon_sha1.and_then(|sha1| {
                             let icon_file = dir.join("icons").join(format!("{sha1}.png"));
@@ -407,6 +472,7 @@ impl Mods {
                         v: MOD_META_CACHE_VERSION,
                         size: file_size,
                         mtime: file_mtime_millis,
+                        file_key,
                         sha1: hash.clone(),
                         cf_hash,
                         name: info.name.clone(),
@@ -418,7 +484,7 @@ impl Mods {
                         dependencies: info.dependencies.clone(),
                         provides_ids: info.provides_ids.clone(),
                     };
-                    let _ = save_cached_mod(&cache_file, &meta);
+                    save_cached_mod(&cache_file, &meta, &mod_path);
                 }
 
                 Ok((idx, info))
@@ -648,8 +714,14 @@ fn nested_jar_id(bytes: &[u8], side: LoaderSide) -> Option<String> {
 }
 
 /// 解析单个 Mod 文件元数据（对应源 GetModList 中 try/catch 包裹的解析块）：
-/// 按实例加载器选侧后取第一个命中的格式，任一环节失败静默跳过（同源 catch{} 吞错，
-/// 且不尝试后续格式），名称兜底（文件名）由调用方处理。
+/// 按实例加载器选侧后取第一个**可解析**的格式，全都不成立时才退到 `mcmod.info`；
+/// 名称兜底（文件名）由调用方处理。
+///
+/// 两种失败语义必须分清（评审 sourcery 指出原注释把两者混为一谈）：
+/// - **条目缺失 / 内容不可解析**（JSON-TOML 语法错、结构不符、缺身份字段）→
+///   回退到解析顺序里的下一种格式，见 [`try_parse_mod_metadata`]；
+/// - **条目读取失败**（IO/解压错误，`read_zip_entry` 返回 `Err`）→ 同源 `catch{}` 语义，
+///   放弃本 jar 的全部元数据解析，不再尝试其它格式。
 ///
 /// **解析顺序按加载器分派（issue #255）**：多端模组（Architectury 等）把两套元数据装进
 /// **同一个 jar**，实测 `Collective-1.20.1-8.53.jar` 在 Forge 1.20.1 版就同时含
@@ -705,9 +777,12 @@ enum MetadataOutcome {
 /// 取「与实例加载器同侧优先」的第一个可解析元数据条目。
 ///
 /// 三种格式都会在**未填充任何内容**时返回 `NotPresent`，从而回退到下一种：
-/// 条目缺失、JSON/TOML 语法错误、以及结构不符（如 `fabric.mod.json` 是数组、`mods.toml`
-/// 缺 `[[mods]]` 表）都归入此类。修复前这些情形会直接 `return`，让 jar 元数据整体为空
-/// 且无从察觉（评审 sourcery 指出：有效的备用元数据被跳过）。
+/// 条目缺失、JSON/TOML 语法错误、结构不符（如 `fabric.mod.json` 是数组、`mods.toml`
+/// 缺 `[[mods]]` 表）以及缺身份字段（无 `id` / 无 `modId`）都归入此类。
+/// 修复前这些情形会直接 `return`，让 jar 元数据整体为空且无从察觉
+/// （评审 sourcery 指出：有效的备用元数据被跳过）。
+///
+/// 只有 `read_zip_entry` 返回 `Err`（条目存在但读不出来）才是 `ReadError`。
 fn try_parse_mod_metadata<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     info: &mut ModInfo,
@@ -837,12 +912,12 @@ fn base64_encode(data: &[u8]) -> String {
 }
 
 /// 解析 fabric.mod.json（源：`JsonNode.Parse(content)!.AsObject()`）：
-/// JSON 无效或非对象 → 跳过（同源异常被 catch 吞掉，不尝试后续格式）。
+/// JSON 无效或非对象 → 不填充、返回 false（调用方继续尝试下一格式）。
 /// issue #165 扩展：额外读取 `id`（模组自身 id）与 `depends`（强制前置依赖）。
 ///
 /// 返回是否**成功填充**——调用方据此决定要不要回退到下一格式
 /// （评审 sourcery 指出：条目存在但结构不符时不该整体放弃，否则有效的备用元数据被跳过）。
-/// 判定标准见 [`fabric_json_is_usable`]：必须是对象且提供了可用字段。
+/// 判定标准见 [`fabric_json_is_usable`]：必须是对象且提供了 `id`。
 fn parse_fabric_json<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     content: &str,
@@ -871,19 +946,17 @@ fn parse_fabric_json<R: Read + Seek>(
 
 /// `fabric.mod.json` 是否提供了**可用**元数据。
 ///
-/// Fabric 规范里 `id` 是必填；`name` / `version` / `depends` 为常用可选字段。
-/// 只要其中任一非空就算可用——`{}` 这类空对象（或只有 `schemaVersion` 等无关键）不提供
-/// 任何可用于判定依赖与展示的信息，应让调用方继续尝试同一 jar 的 `mods.toml`。
+/// `id` 是 Fabric 规范里的必填字段，也是模组在这套元数据里的身份：没有它，
+/// `mod_id` 恒空，缺失前置判定与「谁提供了这个 id」都无从谈起。`name` / `version` /
+/// `depends` 只补展示与依赖，救不回身份 → 不能单独算可用。
+///
+/// 因此 `{"schemaVersion":1,"name":"X"}` 这类无 id 的条目视为未填充，让调用方继续尝试
+/// 同一 jar 里结构完整的 `mods.toml`（评审 sourcery 指出：原判定只要有一个字段就算成功，
+/// 会吞掉有效的备用元数据，且模组没有 mod_id）。
 fn fabric_json_is_usable(obj: &serde_json::Map<String, Value>) -> bool {
-    if obj.is_empty() {
-        return false;
-    }
-    let has = |key: &str| {
-        obj.get(key)
-            .and_then(Value::as_str)
-            .is_some_and(|s| !s.trim().is_empty())
-    };
-    has("id") || has("name") || has("version") || obj.get("depends").is_some_and(Value::is_object)
+    obj.get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.trim().is_empty())
 }
 
 /// 提取 Fabric 强制依赖（issue #165）：`depends` 为 `{ "<modid>": <版本谓词> }` 对象。
@@ -1068,16 +1141,19 @@ fn parse_forge_toml<R: Read + Seek>(
 }
 
 /// `META-INF/mods.toml` 的 `[[mods]]` 首元素是否提供了**可用**元数据。
-/// Forge 规范里 `modId` 必填；`displayName` / `version` / `description` 为常用字段。
-/// 全空的 `[[mods]]` 不提供任何可用于判定依赖与展示的信息 → 视为未填充，让调用方回退。
+///
+/// `modId` 是 Forge 规范里的必填字段，也是模组在这套元数据里的身份：没有它，
+/// `mod_id` 恒定（`parse_forge_toml` 不敢猜依赖归属，[`extract_forge_dependencies`]
+/// 因此一条都取不到），模组在扫描结果里既无身份也无依赖。
+/// `displayName` / `version` / `description` 只补展示字段，救不回身份 → 不能单独算可用。
+///
+/// 因此只有展示字段的条目视为未填充，让调用方继续尝试另一侧（评审 sourcery 指出：
+/// 原判定只要有一个字段就算成功，会吞掉同 jar 里有效的备用元数据）。
 fn forge_toml_is_usable(mod_table: &toml::map::Map<String, toml::Value>) -> bool {
-    let has = |key: &str| {
-        mod_table
-            .get(key)
-            .and_then(|v| v.as_str())
-            .is_some_and(|s| !s.trim().is_empty())
-    };
-    has("modId") || has("displayName") || has("version") || has("description")
+    mod_table
+        .get("modId")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.trim().is_empty())
 }
 
 /// 提取 Forge/NeoForge 强制依赖（issue #165）：
@@ -1601,6 +1677,7 @@ modId="m"
             v: MOD_META_CACHE_VERSION,
             size: 10,
             mtime: 20,
+            file_key: 30,
             sha1: "abc".to_string(),
             cf_hash: 1,
             name: "N".to_string(),
@@ -1633,6 +1710,8 @@ modId="m"
         assert!(meta.mod_id.is_empty());
         assert!(meta.dependencies.is_empty());
         assert!(meta.provides_ids.is_empty());
+        // 缺文件身份 = 引入该字段之前的条目 → 与任何真实身份都不等（等价未命中）
+        assert_eq!(meta.file_key, 0);
     }
 
     #[test]
@@ -1650,19 +1729,100 @@ modId="m"
             "modId":"m","dependencies":[]}"#;
         std::fs::write(&f, old).unwrap();
         assert!(
-            load_cached_mod(&f, 100, 200).is_none(),
+            load_cached_mod(&f, 100, 200, 300).is_none(),
             "旧版本缓存必须判为未命中（否则新字段读不到）"
         );
 
         // v 匹配 → 命中
         let ok = format!(
-            r#"{{"v":{MOD_META_CACHE_VERSION},"size":100,"mtime":200,"sha1":"s","cfHash":0,
+            r#"{{"v":{MOD_META_CACHE_VERSION},"size":100,"mtime":200,"fileKey":300,
+                "sha1":"s","cfHash":0,
                 "name":"n","description":"d","version":"v","authors":[],"iconSha1":null,
                 "modId":"m","dependencies":[],"providesIds":["sub"]}}"#
         );
         std::fs::write(&f, ok).unwrap();
-        let hit = load_cached_mod(&f, 100, 200).expect("版本一致应命中");
+        let hit = load_cached_mod(&f, 100, 200, 300).expect("版本一致应命中");
         assert_eq!(hit.provides_ids, vec!["sub".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stale_scan_does_not_write_cache_entry() {
+        // 评审 sourcery 指出：并发扫描同一 jar 时，先开始、后完成的旧扫描会覆盖较新的条目。
+        // 现写入前按 jar 当前身份复核：解析期间 jar 已被替换 → 不写，交给下次扫描重扫。
+        let dir = std::env::temp_dir().join(format!("qomicex-stale-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jar = dir.join("m.jar");
+        std::fs::write(&jar, b"payload").unwrap();
+        let (_, _, fresh_key) = jar_identity(jar.to_str().unwrap()).expect("stat 成功");
+        let cache_file = dir.join("entry.json");
+
+        let meta = |file_key: u64| CachedModMeta {
+            v: MOD_META_CACHE_VERSION,
+            size: 7,
+            mtime: 1,
+            file_key,
+            sha1: "s".to_string(),
+            cf_hash: 0,
+            name: "n".to_string(),
+            description: String::new(),
+            version: String::new(),
+            authors: Vec::new(),
+            icon_sha1: None,
+            mod_id: "m".to_string(),
+            dependencies: Vec::new(),
+            provides_ids: Vec::new(),
+        };
+
+        // 身份对不上（模拟「解析完才发现 jar 被换」）→ 不落盘
+        save_cached_mod(
+            &cache_file,
+            &meta(fresh_key.wrapping_add(1)),
+            jar.to_str().unwrap(),
+        );
+        assert!(
+            !cache_file.exists(),
+            "过期扫描不得写入缓存条目（否则旧结论会冒充当前 jar）"
+        );
+
+        // 身份一致 → 正常落盘
+        save_cached_mod(&cache_file, &meta(fresh_key), jar.to_str().unwrap());
+        assert!(cache_file.exists(), "身份一致应写入缓存条目");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_entry_requires_matching_file_identity() {
+        // 评审 sourcery 指出：同名替换的 jar 只要 size 与毫秒 mtime 不变，旧的 size+mtime
+        // 校验就会采信旧条目，把旧 jar 的依赖当成新 jar 的结论。
+        // 现缓存额外记录文件身份（[`jar_file_key`]），身份变了即判未命中。
+        let dir = std::env::temp_dir().join(format!("qomicex-filekey-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("m.json");
+
+        let entry = format!(
+            r#"{{"v":{MOD_META_CACHE_VERSION},"size":100,"mtime":200,"fileKey":300,
+                "sha1":"old","cfHash":0,
+                "name":"old","description":"d","version":"v","authors":[],"iconSha1":null,
+                "modId":"old","dependencies":[],"providesIds":[]}}"#
+        );
+        std::fs::write(&f, entry).unwrap();
+
+        assert!(
+            load_cached_mod(&f, 100, 200, 301).is_none(),
+            "size 与 mtime 相同但文件身份变了 → 必须重扫（同名替换）"
+        );
+        assert!(
+            load_cached_mod(&f, 101, 200, 300).is_none(),
+            "size 变化仍必须重扫"
+        );
+        assert!(
+            load_cached_mod(&f, 100, 200, 300).is_some(),
+            "三者全同才命中"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1716,13 +1876,30 @@ modId="m"
     /// 用给定 gameDir 跑一次真实扫描（version_segmented=false → 读 {gameDir}/mods）。
     /// `loader` 为 None → 与修复前一致的 Fabric 优先顺序。
     fn scan(game_dir: &std::path::Path, loader: Option<&str>) -> Vec<ModInfo> {
+        scan_inner(game_dir, loader, None)
+    }
+
+    /// 同上，但启用 per-jar 磁盘缓存（`icon_cache_dir`）。
+    fn scan_with_cache(
+        game_dir: &std::path::Path,
+        loader: Option<&str>,
+        cache_dir: &std::path::Path,
+    ) -> Vec<ModInfo> {
+        scan_inner(game_dir, loader, Some(cache_dir.to_path_buf()))
+    }
+
+    fn scan_inner(
+        game_dir: &std::path::Path,
+        loader: Option<&str>,
+        cache_dir: Option<PathBuf>,
+    ) -> Vec<ModInfo> {
         let mods = Mods::new(
             reqwest::Client::new(),
             game_dir.to_string_lossy().into_owned(),
             "1.20.1".to_string(),
             false,
             String::new(),
-            None,
+            cache_dir,
             loader.map(str::to_string),
         );
         tokio::runtime::Runtime::new()
@@ -2357,6 +2534,135 @@ versionRange="[1.0,)"
         let ids: Vec<&str> = m.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
         assert!(ids.contains(&"forgelib"), "应回退取 Forge 侧依赖: {ids:?}");
         let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_cache_isolates_metadata_between_loader_sides() {
+        // 评审 sourcery 指出：`loader_family_classification` 只比较 `cache_tag()` 字符串，
+        // 若缓存文件名改回「仅路径」做 key，该用例照样通过——跨加载器复用同一条缓存
+        // 也不会被发现。本用例走**真实磁盘缓存**（icon_cache_dir 存在时启用），
+        // 按 Forge → Fabric → Forge 的顺序扫描同一个双端 jar，逐次断言取到的是本侧结论。
+        let (game_dir, mods_dir) = temp_game_dir("cache-side");
+        let cache_dir = game_dir.join("cache");
+        write_dual_jar(&mods_dir, "collective-1.20.1-8.53.jar", "collective");
+
+        let forge_first = scan_with_cache(&game_dir, Some("forge"), &cache_dir);
+        let m = find(&forge_first, "collective-1.20.1-8.53.jar");
+        let ids: Vec<&str> = m.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
+        assert!(
+            !ids.contains(&"fabric") && ids.contains(&"forgelib"),
+            "Forge 首次扫描应取 Forge 侧: {ids:?}"
+        );
+
+        // 换加载器：若两侧共用同一条缓存，这里会读到 Forge 侧结论（fabric 依赖缺失）
+        let fabric = scan_with_cache(&game_dir, Some("fabric"), &cache_dir);
+        let mf = find(&fabric, "collective-1.20.1-8.53.jar");
+        let fabric_ids: Vec<&str> = mf.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
+        assert!(
+            fabric_ids.contains(&"fabric") && !fabric_ids.contains(&"forgelib"),
+            "Fabric 实例不得复用 Forge 侧缓存: {fabric_ids:?}"
+        );
+
+        // 回到 Forge：必须仍取 Forge 侧（两侧缓存并存，互不覆盖）
+        let forge_again = scan_with_cache(&game_dir, Some("forge"), &cache_dir);
+        let m2 = find(&forge_again, "collective-1.20.1-8.53.jar");
+        let again: Vec<&str> = m2.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
+        assert!(
+            again.contains(&"forgelib") && !again.contains(&"fabric"),
+            "Forge 缓存不得被 Fabric 扫描覆盖: {again:?}"
+        );
+        assert_eq!(m2.name, "Forge Display Name", "展示字段同样不得串侧");
+
+        // 断言缓存确实落盘且按侧分文件——否则本用例可能只是「每次都没命中」而假通过
+        let mut cache_files: Vec<String> = std::fs::read_dir(&cache_dir)
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+            .filter(|n| n.ends_with(".json"))
+            .collect();
+        cache_files.sort();
+        assert_eq!(
+            cache_files.len(),
+            2,
+            "两侧应各写 1 条缓存（互不覆盖）: {cache_files:?}"
+        );
+        assert!(
+            cache_files[0].ends_with("-fabric.json") && cache_files[1].ends_with("-forge.json"),
+            "缓存文件名必须带侧别标记: {cache_files:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_metadata_without_identity_field_falls_back_to_other_side() {
+        // 评审 sourcery 指出：所选侧条目「结构对但缺身份字段」时，原判定把它当成已填充，
+        // 解析提前停止 —— 这个 jar 既没有 mod_id 也没有依赖，而同 jar 另一侧其实是完整的。
+        // 现要求 fabric 侧有 `id`、Forge 侧有 `modId`，否则回退。
+        let (game_dir, mods_dir) = temp_game_dir("no-identity");
+        write_jar(
+            &mods_dir.join("noid-1.0.jar"),
+            &[
+                // 有 name / version / depends，唯独没有 id —— 原实现判为「可用」
+                (
+                    "fabric.mod.json",
+                    r#"{"schemaVersion":1,"name":"Fabric Side","version":"1.0",
+                        "depends":{"fabriclib":"*"}}"#,
+                ),
+                (
+                    "META-INF/mods.toml",
+                    r#"modLoader="javafml"
+loaderVersion="[47,)"
+[[mods]]
+modId="noid"
+displayName="Forge Side"
+version="1.0"
+[[dependencies.noid]]
+modId="forgelib"
+mandatory=true
+versionRange="[1.0,)"
+"#,
+                ),
+            ],
+        );
+        // 未知加载器 → 先读 fabric 侧，缺 id 必须回退到 mods.toml
+        let list = scan(&game_dir, None);
+        let m = find(&list, "noid-1.0.jar");
+        assert_eq!(m.mod_id, "noid", "缺 id 的 fabric 侧不得阻止回退");
+        assert_eq!(m.name, "Forge Side");
+        let ids: Vec<&str> = m.dependencies.iter().map(|d| d.mod_id.as_str()).collect();
+        assert!(ids.contains(&"forgelib"), "应取 Forge 侧依赖: {ids:?}");
+
+        // 对称场景：Forge 侧只有展示字段、没有 modId，而 fabric 侧完整
+        let (game_dir2, mods_dir2) = temp_game_dir("no-identity-forge");
+        write_jar(
+            &mods_dir2.join("noid2-1.0.jar"),
+            &[
+                (
+                    "META-INF/mods.toml",
+                    r#"modLoader="javafml"
+[[mods]]
+displayName="Forge Without Id"
+version="1.0"
+"#,
+                ),
+                (
+                    "fabric.mod.json",
+                    r#"{"id":"noid2","name":"Fabric Side","version":"1.0",
+                        "depends":{"fabriclib":"*"}}"#,
+                ),
+            ],
+        );
+        let list2 = scan(&game_dir2, Some("forge"));
+        let m2 = find(&list2, "noid2-1.0.jar");
+        assert_eq!(
+            m2.mod_id, "noid2",
+            "无 modId 的 mods.toml 应回退到 fabric 侧"
+        );
+        assert_eq!(m2.name, "Fabric Side");
+
+        let _ = std::fs::remove_dir_all(&game_dir);
+        let _ = std::fs::remove_dir_all(&game_dir2);
     }
 
     #[test]
