@@ -122,7 +122,11 @@ impl ModrinthModpackInstaller {
             // 源：string relativePath = entry.FullName.Substring(prefix.Length);
             let relative_path = &full_name[prefix.len()..];
             // 源：string destinationPath = Path.Combine(versionDir, relativePath);
-            let destination_path = version_dir.join(relative_path);
+            // ⚠️ 偏离源：relativePath 来自不可信 zip，源直接 Combine 会被
+            // `<prefix>/../..` 写到安装目录之外；这里拒绝越界条目。
+            let Some(destination_path) = super::safe_join_under(version_dir, relative_path) else {
+                continue;
+            };
 
             // 源：if (string.IsNullOrEmpty(entry.Name)) —— .NET ZipArchiveEntry.Name 为
             // FullName 末段，目录条目（尾部 '/'）→ 空串；zip crate 无该属性，按 '/' 取末段

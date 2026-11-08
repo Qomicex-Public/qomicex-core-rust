@@ -201,28 +201,27 @@ struct CachedModMeta {
 /// 同名替换而 size 与毫秒 mtime 不变时，旧条目会被采信（评审 sourcery 指出）。
 const MOD_META_CACHE_VERSION: u32 = 5;
 
-/// jar 的文件身份：`{creation_secs}.{mtime_nanos}`。
+/// jar 的文件身份：创建时间与最后写时间（均为纳秒精度）的组合哈希。
 ///
 /// 单一 mtime 不足以区分「同名替换」——同秒内重写的 jar 毫秒 mtime 可以完全相同
 /// （`fs::copy` / 解压保留时间戳时更是如此），此时旧缓存的依赖会被当成新 jar 的结论。
 /// Windows 上创建时间与最后写时间是独立字段，重写必然刷新 mtime；由此组合出的身份
 /// 在「原地替换」时变化，在「文件没动」时稳定。
 ///
+/// 两者都取**纳秒**：创建时间若只取整秒，同一秒内的「删除 + 重建」会得到相同身份，
+/// 在保留 mtime 的构造性场景下就区分不出来（评审 sourcery 指出）。
+/// `created()` 在部分文件系统上不可用 → 取 0，此时退化为只看 mtime。
+///
 /// 不取哈希（内容身份）：命中缓存的意义就是不读文件内容，为此读一遍即抵消全部收益。
 fn jar_file_key(meta: &std::fs::Metadata) -> u64 {
     use std::hash::{Hash, Hasher};
-    let created = meta
-        .created()
-        .ok()
-        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let modified = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
+    let stamp = |t: Option<SystemTime>| -> u128 {
+        t.and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    };
+    let created = stamp(meta.created().ok());
+    let modified = stamp(meta.modified().ok());
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     created.hash(&mut hasher);
     modified.hash(&mut hasher);
@@ -392,10 +391,12 @@ impl Mods {
             // issue #255：解析结果依赖加载器，闭包需按值捕获该标志（闭包为 'static）
             let side = self.loader_side();
             let cache_hits = Arc::clone(&self.cache_hits);
-            tasks.spawn_blocking(move || -> Result<(usize, ModInfo), Error> {
+            tasks.spawn_blocking(move || -> Result<Option<(usize, ModInfo)>, Error> {
                 // Stat jar for cache validation (cheap, no file content read)
                 let (file_size, file_mtime_millis, file_key) =
                     jar_identity(&mod_path).unwrap_or((0, 0, 0));
+                // 解析期间 jar 被替换时置位：这类结论既不返回也不写缓存（见下方解析后复核）
+                let mut superseded = false;
 
                 let path_hash = sha1_hex(mod_path.as_bytes());
 
@@ -423,7 +424,7 @@ impl Mods {
                                 }
                             })
                         });
-                        return Ok((
+                        return Ok(Some((
                             idx,
                             ModInfo {
                                 name: cached.name,
@@ -442,7 +443,7 @@ impl Mods {
                                 dependencies: cached.dependencies,
                                 provides_ids: cached.provides_ids,
                             },
-                        ));
+                        )));
                     }
                 }
 
@@ -475,6 +476,14 @@ impl Mods {
                 };
 
                 parse_metadata(&bytes, &mut info, side);
+
+                // 解析期间 jar 可能被换掉：身份变了说明读到的 bytes 已不是当前文件的内容，
+                // 这条结论不能返回给调用方（也不能写缓存）。置空标记，由调用方跳过该 jar。
+                if jar_identity(&mod_path).unwrap_or((0, 0, 0))
+                    != (file_size, file_mtime_millis, file_key)
+                {
+                    superseded = true;
+                }
 
                 // 源：if string.IsNullOrEmpty(modInfo.Name) → Path.GetFileNameWithoutExtension(mod)
                 // （file_stem 等价：去掉最后一个扩展名）
@@ -523,7 +532,10 @@ impl Mods {
                     save_cached_mod(&cache_file, &meta, &mod_path);
                 }
 
-                Ok((idx, info))
+                if superseded {
+                    return Ok(None);
+                }
+                Ok(Some((idx, info)))
             });
         }
 
@@ -531,10 +543,12 @@ impl Mods {
         let mut completed = 0i32;
         while let Some(joined) = tasks.join_next().await {
             match joined {
-                Ok(Ok((idx, info))) => {
+                Ok(Ok(Some((idx, info)))) => {
                     ordered[idx] = Some(info);
                     completed += 1;
                 }
+                // 解析期间 jar 被替换 → 该条结论已过期，不返回（下次扫描会读到新文件）
+                Ok(Ok(None)) => {}
                 Ok(Err(e)) => return Err(e),
                 // 源 Parallel.ForEach 的线程异常不向外传播（只中断该任务）→ 跳过
                 Err(_) => {}
@@ -682,13 +696,13 @@ fn collect_nested_ids<R: Read + Seek>(
         let Some(index) = find_entry_index(archive, &path) else {
             continue;
         };
-        let mut bytes = Vec::new();
         let Ok(mut entry) = archive.by_index(index) else {
             continue;
         };
-        if entry.read_to_end(&mut bytes).is_err() {
+        let declared = entry.size();
+        let Ok(bytes) = read_zip_entry_bytes(&mut entry, declared) else {
             continue;
-        }
+        };
         drop(entry);
 
         if let Some(id) = nested_jar_id(&bytes, side)
@@ -902,6 +916,27 @@ fn find_entry_index<R: Read + Seek>(archive: &ZipArchive<R>, entry_path: &str) -
 /// 超限的条目按「读取失败」处理（该格式跳过，不影响其它条目）。
 const MAX_ZIP_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 
+/// 有上限地把 zip 条目解压进 `Vec`：声明长度或实读长度超过 [`MAX_ZIP_ENTRY_BYTES`] 即失败。
+///
+/// 两个上限都要卡：zip 头的 `size()` 可被构造得比实际解压量小，只看它会被解压炸弹绕过；
+/// 只看实读长度则要先读到超限为止，峰值内存已越界。故先查头部，读时再用 `take` 兜一道。
+/// 所有读取 zip 条目的地方都必须走这里，不能各自 `read_to_end`（评审 sourcery 指出
+/// `collect_nested_ids` 与 `.class` 扫描曾绕过上限）。
+fn read_zip_entry_bytes(entry: &mut impl Read, declared_size: u64) -> Result<Vec<u8>, ()> {
+    if declared_size > MAX_ZIP_ENTRY_BYTES {
+        return Err(());
+    }
+    let mut bytes = Vec::new();
+    entry
+        .take(MAX_ZIP_ENTRY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.len() as u64 > MAX_ZIP_ENTRY_BYTES {
+        return Err(());
+    }
+    Ok(bytes)
+}
+
 /// 读取 zip 内条目文本（源：ReadZipEntry + StreamReader）。
 /// - 无匹配条目 → `Ok(None)`（同源返回 null → 尝试下一格式）；
 /// - 条目存在但读取失败或解压后超过 [`MAX_ZIP_ENTRY_BYTES`] → `Err(())`；
@@ -915,19 +950,8 @@ fn read_zip_entry<R: Read + Seek>(
         None => return Ok(None),
     };
     let mut entry = archive.by_index(index).map_err(|_| ())?;
-    if entry.size() > MAX_ZIP_ENTRY_BYTES {
-        return Err(());
-    }
-    let mut bytes = Vec::new();
-    // 上限兜底：zip 头里的 size 可被构造得比实际解压量小，读的时候再卡一道
-    entry
-        .by_ref()
-        .take(MAX_ZIP_ENTRY_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| ())?;
-    if bytes.len() as u64 > MAX_ZIP_ENTRY_BYTES {
-        return Err(());
-    }
+    let declared = entry.size();
+    let bytes = read_zip_entry_bytes(&mut entry, declared)?;
     let mut content = String::from_utf8_lossy(&bytes).into_owned();
     if let Some(rest) = content.strip_prefix('\u{feff}') {
         content = rest.to_string();
@@ -951,19 +975,10 @@ fn extract_icon_from_archive<R: Read + Seek>(
         Ok(e) => e,
         Err(_) => return String::new(),
     };
-    if entry.size() > MAX_ZIP_ENTRY_BYTES {
+    let declared = entry.size();
+    let Ok(bytes) = read_zip_entry_bytes(&mut entry, declared) else {
         return String::new();
-    }
-    let mut bytes = Vec::new();
-    if entry
-        .by_ref()
-        .take(MAX_ZIP_ENTRY_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .is_err()
-        || bytes.len() as u64 > MAX_ZIP_ENTRY_BYTES
-    {
-        return String::new();
-    }
+    };
     if bytes.is_empty() {
         String::new()
     } else {
@@ -1371,10 +1386,10 @@ fn scan_legacy_forge_annotation_deps<R: Read + Seek>(
         let Ok(mut entry) = archive.by_index(index) else {
             continue;
         };
-        let mut bytes = Vec::new();
-        if entry.read_to_end(&mut bytes).is_err() {
+        let declared = entry.size();
+        let Ok(bytes) = read_zip_entry_bytes(&mut entry, declared) else {
             continue;
-        }
+        };
         drop(entry);
         // class 常量池字符串是修改版 UTF-8；依赖声明（modid/range）为 ASCII，
         // lossy 解码足够，也天然容错非 UTF-8 字节
@@ -1540,6 +1555,56 @@ mod dependency_tests {
         assert!(
             read_zip_entry(&mut archive, "fabric.mod.json").is_err(),
             "超过上限的条目应判为读取失败，不得整体读入内存"
+        );
+    }
+
+    #[test]
+    fn oversized_zip_entry_stops_reading_at_limit() {
+        // 评审 sourcery 指出：上一项只断言「返回 Err」——若实现先读完整个条目再判超限，
+        // 断言照样通过，但内存已经爆了。这里用计数 reader 断言**实际读取量被卡在上限**。
+        struct Counting<R> {
+            inner: R,
+            read: u64,
+        }
+        impl<R: Read> Read for Counting<R> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.inner.read(buf)?;
+                self.read += n as u64;
+                Ok(n)
+            }
+        }
+
+        // 声明的长度已经超限 → 一个字节都不该读
+        let payload = vec![0u8; 1024];
+        let mut declared_too_big = Counting {
+            inner: Cursor::new(payload.clone()),
+            read: 0,
+        };
+        assert!(
+            read_zip_entry_bytes(&mut declared_too_big, MAX_ZIP_ENTRY_BYTES + 1).is_err(),
+            "声明长度超限应直接失败"
+        );
+        assert_eq!(
+            declared_too_big.read, 0,
+            "声明长度超限时不应读取任何字节，实际读了 {} 字节",
+            declared_too_big.read
+        );
+
+        // 声明长度撒谎（报小、实际很大）→ 读取量也必须停在上限附近，而不是读完
+        let huge = vec![0u8; (MAX_ZIP_ENTRY_BYTES as usize) * 3];
+        let mut lying = Counting {
+            inner: Cursor::new(huge),
+            read: 0,
+        };
+        assert!(
+            read_zip_entry_bytes(&mut lying, 1).is_err(),
+            "实读超限也必须失败"
+        );
+        assert!(
+            lying.read <= MAX_ZIP_ENTRY_BYTES + 1,
+            "实读超限时应停止读取，实际读了 {} 字节（上限 {}）",
+            lying.read,
+            MAX_ZIP_ENTRY_BYTES
         );
     }
 
