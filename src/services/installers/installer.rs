@@ -331,7 +331,12 @@ impl InstallerBase {
                 message: format!("读取ZIP失败（{path}）：{e}"),
                 source: Some(Box::new(e)),
             })?;
-            if entry.name().eq_ignore_ascii_case(file_name) {
+            // zip 9：`name()` 返回 `ZipResult<Cow<str>>`（8 之前直接是 &str）
+            let entry_name = entry.name().map_err(|e| Error::Params {
+                message: format!("读取ZIP失败（{path}）：{e}"),
+                source: Some(Box::new(e)),
+            })?;
+            if entry_name.eq_ignore_ascii_case(file_name) {
                 let mut buf = Vec::new();
                 std::io::Read::read_to_end(&mut entry, &mut buf).map_err(|e| Error::Params {
                     message: format!("读取ZIP失败（{path}）：{e}"),

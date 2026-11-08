@@ -93,7 +93,8 @@ fn extract_zip(zip_file_path: &str, target_dir: &str) -> zip::result::ZipResult<
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        let out_path = Path::new(target_dir).join(entry.mangled_name());
+        // zip 9：`mangled_name()` 返回 `ZipResult<PathBuf>`（8 之前直接是 PathBuf）
+        let out_path = Path::new(target_dir).join(entry.mangled_name()?);
 
         if entry.is_dir() {
             fs::create_dir_all(&out_path).map_err(zip::result::ZipError::Io)?;

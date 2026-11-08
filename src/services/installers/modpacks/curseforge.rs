@@ -113,7 +113,10 @@ impl CurseForgeModpackInstaller {
             let mut entry = archive
                 .by_index(i)
                 .map_err(|e| zip_io_err(&self.modpack_file_path, e))?;
-            let full_name = entry.name();
+            // zip 9：`name()` 返回 `ZipResult<Cow<str>>`（8 之前直接是 &str）
+            let full_name = entry
+                .name()
+                .map_err(|e| zip_io_err(&self.modpack_file_path, e))?;
             // 源：entry.FullName.StartsWith($"{overrideName}/", OrdinalIgnoreCase)
             if !full_name
                 .get(..prefix.len())
@@ -124,12 +127,17 @@ impl CurseForgeModpackInstaller {
             // 源：var relativePath = entry.FullName.Substring($"{overrideName}/".Length);
             let relative_path = &full_name[prefix.len()..];
             // 源：var destinationPath = Path.Combine(versionDir, relativePath);
-            let destination_path = version_dir.join(relative_path);
+            // ⚠️ 偏离源：relativePath 来自不可信 zip，源直接 Combine 会被
+            // `overrides/../../x` 写到安装目录之外；这里拒绝越界条目。
+            let Some(destination_path) = super::safe_join_under(&version_dir, relative_path) else {
+                continue;
+            };
 
             // 源：if (string.IsNullOrEmpty(entry.Name)) —— .NET ZipArchiveEntry.Name 为
-            // FullName 末段，目录条目（尾部 '/'）→ 空串；zip crate 无该属性，按 '/' 取末段
-            let last_segment = full_name.rsplit('/').next().unwrap_or("");
-            if last_segment.is_empty() {
+            // FullName 末段，目录条目（尾部 '/'）→ 空串。
+            // ⚠️ 偏离源：这里两种分隔符都认——`subdir\` 若只按 '/' 取末段会得到非空文件名，
+            // 随后被当文件创建，等子条目写入才失败（评审 sourcery 指出）。
+            if super::is_directory_entry(&full_name) {
                 // 源：Directory.CreateDirectory(destinationPath)
                 std::fs::create_dir_all(&destination_path)
                     .map_err(|e| file_io_err(&self.modpack_file_path, e))?;
