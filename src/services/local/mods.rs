@@ -700,7 +700,8 @@ fn collect_nested_ids<R: Read + Seek>(
             continue;
         };
         let declared = entry.size();
-        let Ok(bytes) = read_zip_entry_bytes(&mut entry, declared) else {
+        let Ok(bytes) = read_zip_entry_bytes(&mut entry, declared, MAX_ZIP_BINARY_ENTRY_BYTES)
+        else {
             continue;
         };
         drop(entry);
@@ -718,48 +719,65 @@ fn collect_nested_ids<R: Read + Seek>(
 /// 嵌套 jar 同样可能是双端 jar，两侧声明不同 id；若固定读 Fabric 侧，Forge 实例会把
 /// 另一端的 id 记进 `provides_ids`，导致真实的 Forge 侧依赖被判缺失（评审 sourcery 指出）。
 /// 与顶层一致：同侧优先，另一侧兜底。
+///
+/// 逐个读取、命中即返回：三个条目各有上限，若同时留三份字符串，一个嵌套 jar 就可能
+/// 占住数倍内存，并发扫描下会放大成内存压力（评审 sourcery 指出）。
 fn nested_jar_id(bytes: &[u8], side: LoaderSide) -> Option<String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes)).ok()?;
-    // 先把三个条目读成字符串（每次读取单独借 archive，读完即释放），再按侧解析
-    let fabric_json = read_zip_entry(&mut archive, "fabric.mod.json")
-        .ok()
-        .flatten();
-    let forge_toml = read_zip_entry(&mut archive, "META-INF/mods.toml")
-        .ok()
-        .flatten();
-    let neoforge_toml = read_zip_entry(&mut archive, "META-INF/neoforge.mods.toml")
-        .ok()
-        .flatten();
 
-    let fabric_id = || -> Option<String> {
-        let Value::Object(obj) = serde_json::from_str::<Value>(fabric_json.as_deref()?).ok()?
-        else {
-            return None;
+    // 按侧优先顺序排列待读条目；读到第一个可用的 id 就返回
+    let order: [&str; 3] = match side {
+        LoaderSide::NeoForge => [
+            "META-INF/neoforge.mods.toml",
+            "META-INF/mods.toml",
+            "fabric.mod.json",
+        ],
+        LoaderSide::Forge => [
+            "META-INF/mods.toml",
+            "META-INF/neoforge.mods.toml",
+            "fabric.mod.json",
+        ],
+        LoaderSide::Fabric => [
+            "fabric.mod.json",
+            "META-INF/mods.toml",
+            "META-INF/neoforge.mods.toml",
+        ],
+    };
+
+    for entry_name in order {
+        // 每次循环只持有一份内容，进入下一轮前即释放
+        let Ok(content) = read_zip_entry(&mut archive, entry_name) else {
+            continue;
         };
-        json_str(&obj, "id").filter(|s| !s.trim().is_empty())
-    };
-    let toml_id = |content: Option<&str>| -> Option<String> {
-        let value: toml::Value = content?.parse().ok()?;
-        let mods = value.as_table()?.get("mods")?.as_array()?;
-        let first = mods.first()?.as_table()?;
-        match first.get("modId") {
-            Some(toml::Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
-            _ => None,
+        let Some(content) = content else { continue };
+        let id = if entry_name == "fabric.mod.json" {
+            parse_fabric_id(&content)
+        } else {
+            parse_forge_mod_id(&content)
+        };
+        if id.is_some() {
+            return id;
         }
-    };
+    }
+    None
+}
 
-    // 同侧优先：Forge 读 mods.toml、NeoForge 读 neoforge.mods.toml、其余读 fabric.mod.json；
-    // 同侧读不到再试另一侧（两侧都认，只是顺序不同——嵌套 jar 里往往只有一份元数据）
-    match side {
-        LoaderSide::NeoForge => toml_id(neoforge_toml.as_deref())
-            .or_else(|| toml_id(forge_toml.as_deref()))
-            .or_else(fabric_id),
-        LoaderSide::Forge => toml_id(forge_toml.as_deref())
-            .or_else(|| toml_id(neoforge_toml.as_deref()))
-            .or_else(fabric_id),
-        LoaderSide::Fabric => fabric_id()
-            .or_else(|| toml_id(forge_toml.as_deref()))
-            .or_else(|| toml_id(neoforge_toml.as_deref())),
+/// 从 `fabric.mod.json` 文本取 `id`。
+fn parse_fabric_id(content: &str) -> Option<String> {
+    let Value::Object(obj) = serde_json::from_str::<Value>(content).ok()? else {
+        return None;
+    };
+    json_str(&obj, "id").filter(|s| !s.trim().is_empty())
+}
+
+/// 从 Forge/NeoForge TOML 文本取 `[[mods]]` 首元素的 `modId`。
+fn parse_forge_mod_id(content: &str) -> Option<String> {
+    let value: toml::Value = content.parse().ok()?;
+    let mods = value.as_table()?.get("mods")?.as_array()?;
+    let first = mods.first()?.as_table()?;
+    match first.get("modId") {
+        Some(toml::Value::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        _ => None,
     }
 }
 
@@ -908,7 +926,7 @@ fn find_entry_index<R: Read + Seek>(archive: &ZipArchive<R>, entry_path: &str) -
         .position(|n| n.is_ok_and(|n| n.eq_ignore_ascii_case(entry_path)))
 }
 
-/// 单个 zip 条目允许解压出的最大字节数。
+/// 单个 zip 条目允许解压出的最大字节数（文本类：元数据）。
 ///
 /// 模组元数据是大几百字节到几十 KB 的文本（真实样本里 `fabric.mod.json` 最大约 120 KB），
 /// 图标通常 < 1 MB。一个几十 KB 的 zip 条目却声明解压后数 GB，就是解压炸弹：扫描会把
@@ -916,22 +934,33 @@ fn find_entry_index<R: Read + Seek>(archive: &ZipArchive<R>, entry_path: &str) -
 /// 超限的条目按「读取失败」处理（该格式跳过，不影响其它条目）。
 const MAX_ZIP_ENTRY_BYTES: u64 = 8 * 1024 * 1024;
 
-/// 有上限地把 zip 条目解压进 `Vec`：声明长度或实读长度超过 [`MAX_ZIP_ENTRY_BYTES`] 即失败。
+/// 二进制类条目的上限（嵌套 jar、`.class`）。
+///
+/// 这两类都是有意义的整块数据，8 MiB 的文本上限会把合法的「大号嵌套 jar」判为损坏，
+/// 从而漏掉它声明的 id / 注解依赖（评审 sourcery 指出）。给一个仍能挡住解压炸弹、
+/// 又不误伤真实文件的上限：真实模组里嵌套 jar 罕有超过几 MiB，`.class` 更大者属异常。
+const MAX_ZIP_BINARY_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+
+/// 有上限地把 zip 条目解压进 `Vec`：声明长度或实读长度超过 `limit` 即失败。
 ///
 /// 两个上限都要卡：zip 头的 `size()` 可被构造得比实际解压量小，只看它会被解压炸弹绕过；
-/// 只看实读长度则要先读到超限为止，峰值内存已越界。故先查头部，读时再用 `take` 兜一道。
-/// 所有读取 zip 条目的地方都必须走这里，不能各自 `read_to_end`（评审 sourcery 指出
-/// `collect_nested_ids` 与 `.class` 扫描曾绕过上限）。
-fn read_zip_entry_bytes(entry: &mut impl Read, declared_size: u64) -> Result<Vec<u8>, ()> {
-    if declared_size > MAX_ZIP_ENTRY_BYTES {
+/// 只看实读长度则要先读到超限为止，峰值内存已越界。所有读取 zip 条目的地方都必须走这里，
+/// 不能各自 `read_to_end`（评审 sourcery 指出 `collect_nested_ids` 与 `.class` 扫描
+/// 曾绕过上限）。
+fn read_zip_entry_bytes(
+    entry: &mut impl Read,
+    declared_size: u64,
+    limit: u64,
+) -> Result<Vec<u8>, ()> {
+    if declared_size > limit {
         return Err(());
     }
     let mut bytes = Vec::new();
     entry
-        .take(MAX_ZIP_ENTRY_BYTES + 1)
+        .take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| ())?;
-    if bytes.len() as u64 > MAX_ZIP_ENTRY_BYTES {
+    if bytes.len() as u64 > limit {
         return Err(());
     }
     Ok(bytes)
@@ -951,7 +980,7 @@ fn read_zip_entry<R: Read + Seek>(
     };
     let mut entry = archive.by_index(index).map_err(|_| ())?;
     let declared = entry.size();
-    let bytes = read_zip_entry_bytes(&mut entry, declared)?;
+    let bytes = read_zip_entry_bytes(&mut entry, declared, MAX_ZIP_ENTRY_BYTES)?;
     let mut content = String::from_utf8_lossy(&bytes).into_owned();
     if let Some(rest) = content.strip_prefix('\u{feff}') {
         content = rest.to_string();
@@ -976,7 +1005,7 @@ fn extract_icon_from_archive<R: Read + Seek>(
         Err(_) => return String::new(),
     };
     let declared = entry.size();
-    let Ok(bytes) = read_zip_entry_bytes(&mut entry, declared) else {
+    let Ok(bytes) = read_zip_entry_bytes(&mut entry, declared, MAX_ZIP_ENTRY_BYTES) else {
         return String::new();
     };
     if bytes.is_empty() {
@@ -1387,7 +1416,8 @@ fn scan_legacy_forge_annotation_deps<R: Read + Seek>(
             continue;
         };
         let declared = entry.size();
-        let Ok(bytes) = read_zip_entry_bytes(&mut entry, declared) else {
+        let Ok(bytes) = read_zip_entry_bytes(&mut entry, declared, MAX_ZIP_BINARY_ENTRY_BYTES)
+        else {
             continue;
         };
         drop(entry);
@@ -1559,6 +1589,34 @@ mod dependency_tests {
     }
 
     #[test]
+    fn binary_entry_limit_is_higher_than_text_limit() {
+        // 评审 sourcery 指出：单一 8 MiB 上限会把**合法**的大号嵌套 jar / .class 判为损坏，
+        // 从而漏掉它声明的 id 与注解依赖。现按内容性质分两级：文本元数据 8 MiB、
+        // 二进制条目 64 MiB。本用例固定这个关系，防止有人把两级并回一级。
+        assert!(
+            MAX_ZIP_BINARY_ENTRY_BYTES > MAX_ZIP_ENTRY_BYTES,
+            "二进制条目上限必须高于文本条目上限，否则大号嵌套 jar 会被误判为损坏"
+        );
+        // 介于两者之间的条目：文本读取应失败，二进制读取应成功
+        let between = MAX_ZIP_ENTRY_BYTES + 1024;
+        assert!(between < MAX_ZIP_BINARY_ENTRY_BYTES);
+        let payload = vec![0u8; between as usize];
+        assert!(
+            read_zip_entry_bytes(&mut Cursor::new(&payload), between, MAX_ZIP_ENTRY_BYTES).is_err(),
+            "文本上限应拒绝 {between} 字节的条目"
+        );
+        assert!(
+            read_zip_entry_bytes(
+                &mut Cursor::new(&payload),
+                between,
+                MAX_ZIP_BINARY_ENTRY_BYTES
+            )
+            .is_ok(),
+            "二进制上限应接受 {between} 字节的条目（合法的大号嵌套 jar 不该被丢）"
+        );
+    }
+
+    #[test]
     fn oversized_zip_entry_stops_reading_at_limit() {
         // 评审 sourcery 指出：上一项只断言「返回 Err」——若实现先读完整个条目再判超限，
         // 断言照样通过，但内存已经爆了。这里用计数 reader 断言**实际读取量被卡在上限**。
@@ -1581,7 +1639,12 @@ mod dependency_tests {
             read: 0,
         };
         assert!(
-            read_zip_entry_bytes(&mut declared_too_big, MAX_ZIP_ENTRY_BYTES + 1).is_err(),
+            read_zip_entry_bytes(
+                &mut declared_too_big,
+                MAX_ZIP_ENTRY_BYTES + 1,
+                MAX_ZIP_ENTRY_BYTES
+            )
+            .is_err(),
             "声明长度超限应直接失败"
         );
         assert_eq!(
@@ -1597,7 +1660,7 @@ mod dependency_tests {
             read: 0,
         };
         assert!(
-            read_zip_entry_bytes(&mut lying, 1).is_err(),
+            read_zip_entry_bytes(&mut lying, 1, MAX_ZIP_ENTRY_BYTES).is_err(),
             "实读超限也必须失败"
         );
         assert!(

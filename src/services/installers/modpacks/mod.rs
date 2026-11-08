@@ -23,11 +23,15 @@ pub mod modrinth;
 /// 整合包的 overrides 条目名来自**不可信的 zip**：`overrides/../../x` 这类名字在去掉
 /// 前缀后仍是相对路径，直接 `base.join()` 会写到安装目录之外。这里逐段过滤，
 /// 拒绝 `..`、盘符段与空段，并在拼完后复核结果仍在 `base` 之内。
+///
+/// `C:payload` 这类**盘符相对**段也必须拒绝：`PathBuf::push` 遇到它会把整条路径替换成
+/// 「当前 C 盘目录下的 payload」，`starts_with(base)` 拦不住（评审 sourcery 指出）。
 pub(crate) fn safe_join_under(
     base: &std::path::Path,
     relative_path: &str,
 ) -> Option<std::path::PathBuf> {
     let mut out = base.to_path_buf();
+    // 两种分隔符都可能是分隔符（zip 规范要求 `/`，实际样本里 `\` 也出现）
     for segment in relative_path.split(['/', '\\']) {
         if segment.is_empty() || segment == "." {
             continue;
@@ -35,8 +39,8 @@ pub(crate) fn safe_join_under(
         if segment == ".." {
             return None;
         }
-        // Windows 盘符（`C:`）不是合法子目录名，允许它就会脱离 base
-        if segment.len() == 2 && segment.as_bytes()[1] == b':' {
+        // 盘符前缀（`C:`、`C:payload`）与 UNC 共享名都是绝对/盘符相对的起点
+        if has_drive_prefix(segment) {
             return None;
         }
         out.push(segment);
@@ -46,6 +50,20 @@ pub(crate) fn safe_join_under(
     } else {
         None
     }
+}
+
+/// 该段是否带 Windows 盘符前缀（`C:` 或 `C:rest`）。
+fn has_drive_prefix(segment: &str) -> bool {
+    let bytes = segment.as_bytes();
+    bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
+}
+
+/// zip 条目名是否为目录条目（按 `/` 或 `\` 结尾）。
+///
+/// 必须两种分隔符都认：`overrides/subdir\` 若只按 `/` 取末段会得到非空文件名，
+/// 随后被当成文件用 `File::create` 创建，等它的子条目写入时才失败（评审 sourcery 指出）。
+pub(crate) fn is_directory_entry(entry_name: &str) -> bool {
+    entry_name.ends_with(['/', '\\'])
 }
 
 #[cfg(test)]
@@ -76,10 +94,43 @@ mod tests {
         }
         // Windows 盘符段不允许（否则 `C:x` 会脱离 base）
         assert!(safe_join_under(base, "C:/x.jar").is_none());
+        // 盘符相对段（`C:payload`）也必须拒绝：PathBuf::push 会整条替换，
+        // 末尾的 starts_with(base) 拦不住（评审 sourcery 指出）
+        for evil in ["C:payload", "mods/D:escape.jar", "C:payload/x.jar"] {
+            assert!(
+                safe_join_under(base, evil).is_none(),
+                "{evil:?} 属盘符相对路径，应被拒绝"
+            );
+        }
         // 空段与 `.` 折叠掉，不越界
         assert_eq!(
             safe_join_under(base, "./mods//a.jar"),
             Some(base.join("mods/a.jar"))
         );
+    }
+
+    #[test]
+    fn is_directory_entry_accepts_both_separators() {
+        use super::is_directory_entry;
+        // 两种分隔符结尾都算目录条目；否则 `subdir\` 会被当文件创建，
+        // 等子条目写入时才失败（评审 sourcery 指出）
+        assert!(is_directory_entry("overrides/subdir/"));
+        assert!(is_directory_entry("overrides/subdir\\"));
+        assert!(!is_directory_entry("overrides/subdir/file.jar"));
+        assert!(!is_directory_entry("overrides/file.jar"));
+    }
+
+    #[test]
+    fn has_drive_prefix_covers_drive_relative_segments() {
+        use super::has_drive_prefix;
+        // 盘符相对段（`C:payload`）必须被识别：这类段交给 PathBuf::push 会整条替换。
+        // 在 Windows 上末尾的 starts_with 恰好也能拦，但依赖路径当前形态并不可靠
+        // （base 为绝对路径时行为不同），故显式判定。
+        for evil in ["C:", "C:payload", "D:escape.jar", "z:dir"] {
+            assert!(has_drive_prefix(evil), "{evil:?} 应判为盘符前缀");
+        }
+        for ok in ["mods", "a.jar", "C", "dir:", ""] {
+            assert!(!has_drive_prefix(ok), "{ok:?} 不应判为盘符前缀");
+        }
     }
 }

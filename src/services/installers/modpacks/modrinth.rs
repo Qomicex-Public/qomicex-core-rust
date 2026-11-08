@@ -129,9 +129,10 @@ impl ModrinthModpackInstaller {
             };
 
             // 源：if (string.IsNullOrEmpty(entry.Name)) —— .NET ZipArchiveEntry.Name 为
-            // FullName 末段，目录条目（尾部 '/'）→ 空串；zip crate 无该属性，按 '/' 取末段
-            let last_segment = full_name.rsplit('/').next().unwrap_or("");
-            if last_segment.is_empty() {
+            // FullName 末段，目录条目（尾部 '/'）→ 空串。
+            // ⚠️ 偏离源：这里两种分隔符都认——`subdir\` 若只按 '/' 取末段会得到非空文件名，
+            // 随后被当文件创建，等子条目写入才失败（评审 sourcery 指出）。
+            if super::is_directory_entry(&full_name) {
                 // 源：Directory.CreateDirectory(destinationPath)
                 std::fs::create_dir_all(&destination_path).map_err(|e| file_io_err(zip_path, e))?;
             } else {
