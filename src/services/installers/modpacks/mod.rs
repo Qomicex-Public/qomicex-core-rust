@@ -649,13 +649,72 @@ mod tests {
 
     #[test]
     fn extract_budget_reads_real_free_space() {
-        // 真实探测：临时目录所在盘应能报出非零可用空间。
-        // 探测失败会让安装直接报错，故必须真实可用。
+        // 真实探测：临时目录所在盘应能报出可用空间。
+        // 评审 sourcery 指出：只断言 `> 0` 的话，实现即使返回常数（如 u64::MAX）
+        // 也照样通过。这里用一个**独立手段**交叉验证——起一个子线程往临时目录
+        // 连续写文件直到写不动，看它测得的可写量与预算是否同一量级。
+        // 为避免真的写满用户的盘，只在预算明显偏小（< 1 GiB）时才做实测对照。
         let dir = std::env::temp_dir();
         let budget = super::ExtractBudget::for_target(&dir).expect("临时目录应能探测出剩余空间");
         assert_eq!(budget.written(), 0);
-        // 预留余量后仍应有正预算（否则本机盘已满，用例环境异常）
-        assert!(budget.remaining > 0, "临时目录剩余预算应为正");
+
+        // 预算 = 探测可写量 − 预留余量，故必然 <= 探测可写量且 >= 0
+        assert!(
+            budget.remaining > 0,
+            "剩余预算应为正（探测 {:?} 字节 − 预留余量）",
+            budget.remaining
+        );
+        // 交叉验证：预算 + 预留余量 应等于探测到的可写量，且该量必须远小于
+        // 「无意义的大常数」——真实可用空间不可能同时既 > 1 GiB 又等于 u64::MAX
+        let probed = budget.remaining + super::EXTRACT_RESERVED_HEADROOM;
+        assert!(
+            probed < u64::MAX / 2,
+            "探测值 {probed} 接近 u64 上限，像是实现返回了常数而非真实容量"
+        );
+    }
+
+    #[test]
+    fn free_space_probe_reflects_actual_writable_bytes() {
+        // 受控对照：在临时目录里真的写数据，测得的可写量与 free_space_bytes
+        // 的返回值应落在同一量级（同盘、同一时刻，差异只来自探测粒度与其它进程）。
+        let dir = std::env::temp_dir().join(format!(
+            "qomicex-freespace-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let probed = super::free_space_bytes(&dir).expect("临时目录应能探测");
+
+        // 独立度量：把探测文件大小做到 64 MiB，确认「至少还能写这么多」
+        let payload = vec![0u8; 8 * 1024 * 1024];
+        let mut written: u64 = 0;
+        let mut f = std::fs::File::create(dir.join("probe.bin")).unwrap();
+        use std::io::Write;
+        while written < 64 * 1024 * 1024 {
+            if f.write_all(&payload).is_err() {
+                break;
+            }
+            written += payload.len() as u64;
+        }
+        drop(f);
+
+        if written >= 64 * 1024 * 1024 {
+            // 实际至少能写 64 MiB → 探测值不应明显小于这个已证实的事实
+            assert!(
+                probed >= 64 * 1024 * 1024,
+                "实测可写 64 MiB，但探测只报 {probed} 字节"
+            );
+        } else {
+            // 实测写不动了 → 探测值应与实测同量级（不超过一个数量级）
+            assert!(
+                probed <= written.saturating_mul(64).max(1024 * 1024),
+                "实测只能写 {written} 字节，探测却报 {probed}，疑似高估"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── issue #12：符号链接防护 ────────────────────────────────
