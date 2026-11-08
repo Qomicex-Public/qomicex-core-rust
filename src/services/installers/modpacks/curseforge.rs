@@ -144,8 +144,11 @@ impl CurseForgeModpackInstaller {
         })();
 
         if result.is_err() {
-            // 半成品清理：本次已创建的文件/目录全删掉，避免留下残缺安装（issue #12）
+            // 失败：删本次新建的文件、还原被覆盖文件的原内容（issue #12）
             extractor.rollback();
+        } else {
+            // 成功：删掉覆盖备份
+            extractor.commit();
         }
         result.map_err(|msg| file_io_err(&self.modpack_file_path, std::io::Error::other(msg)))?;
         Ok(())

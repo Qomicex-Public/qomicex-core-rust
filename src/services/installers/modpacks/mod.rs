@@ -18,6 +18,8 @@ pub mod curseforge;
 pub mod ftb;
 pub mod modrinth;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 /// 把 zip 条目名解析成 `base` 之下的安全路径；越界（路径穿越 / 绝对路径）→ None。
 ///
 /// 整合包的 overrides 条目名来自**不可信的 zip**：`overrides/../../x` 这类名字在去掉
@@ -114,11 +116,7 @@ impl ExtractBudget {
 
     /// 声明该条目将写出 `declared` 字节；超限返回 Err（调用方据此让整包安装失败）。
     pub(crate) fn reserve(&mut self, declared: u64) -> Result<(), String> {
-        if declared > MAX_SINGLE_ENTRY_BYTES {
-            return Err(format!(
-                "单个条目声明解压 {declared} 字节，超过上限 {MAX_SINGLE_ENTRY_BYTES} 字节"
-            ));
-        }
+        check_single_entry_limit(declared)?;
         if declared > self.remaining {
             return Err(format!(
                 "解压所需空间不足：本条需 {declared} 字节，剩余预算 {} 字节",
@@ -135,6 +133,49 @@ impl ExtractBudget {
     pub(crate) fn written(&self) -> u64 {
         self.written
     }
+}
+
+/// 用 `src` 替换 `dst`（`dst` 可能已存在）。
+///
+/// `std::fs::rename` 在 Unix 上是原子替换；Windows 上它同样覆盖已存在目标
+/// （`MoveFileExW` + `MOVEFILE_REPLACE_EXISTING`）。但目标被占用（杀软扫描、
+/// 文本编辑器打开）时会失败——此时退一步：先把旧文件改名为 `.qml-old`，
+/// 再 rename，最后删旧文件。仍然不行则如实报错，不静默吞掉。
+fn replace_file(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::rename(src, dst) {
+        Ok(()) => return Ok(()),
+        Err(first) => {
+            if !dst.exists() {
+                return Err(first);
+            }
+        }
+    }
+    let mut old_name = dst.file_name().unwrap_or_default().to_os_string();
+    old_name.push(".qml-old");
+    let old_path = dst.with_file_name(old_name);
+    let _ = std::fs::remove_file(&old_path);
+    std::fs::rename(dst, &old_path)?;
+    match std::fs::rename(src, dst) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&old_path);
+            Ok(())
+        }
+        Err(e) => {
+            // 放回旧文件，避免把用户原有文件弄丢
+            let _ = std::fs::rename(&old_path, dst);
+            Err(e)
+        }
+    }
+}
+
+/// 单个条目上限的独立检查（预算探测失败时仍要生效，不能因为拿不到剩余空间就放弃限制）。
+pub(crate) fn check_single_entry_limit(declared: u64) -> Result<(), String> {
+    if declared > MAX_SINGLE_ENTRY_BYTES {
+        return Err(format!(
+            "单个条目声明解压 {declared} 字节，超过上限 {MAX_SINGLE_ENTRY_BYTES} 字节"
+        ));
+    }
+    Ok(())
 }
 
 /// 目标目录所在盘的可用字节数。
@@ -168,39 +209,52 @@ fn free_space_bytes(dir: &std::path::Path) -> Option<u64> {
 
 #[cfg(unix)]
 fn free_space_bytes(dir: &std::path::Path) -> Option<u64> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
+    use std::io::{Seek, SeekFrom, Write};
 
-    #[repr(C)]
-    struct StatVfs {
-        f_bsize: u64,
-        f_frsize: u64,
-        f_blocks: u64,
-        f_bfree: u64,
-        f_bavail: u64,
-        // 其余字段布局随平台而异，本函数不读它们，留足空间避免越界写
-        _reserved: [u64; 11],
-    }
+    // ⚠️ 不用手写 `struct statvfs` + extern "C"：该结构各平台字段宽度与尾部
+    // （macOS 的 f_fstypename/f_mntonname/f_mntfromname 等）都不同，按最大平台猜一个
+    // 固定大小，在 macOS 上会越界写约 2 KB 栈内存。项目也没有 libc 直接依赖。
+    //
+    // 改为「稀疏文件探测」：创建探针文件后直接 seek 到目标偏移再写 1 字节——
+    // 文件系统为稀疏文件不会真的分配中间块，但写超出可用空间时会失败。
+    // 二分查找「能成功写入的最大偏移」，把探测代价从「写满可用空间」降到
+    // 「log2(容量) 次单字节写」。
+    const PROBE_CAP: u64 = 1 << 40; // 上限 1 TiB：够覆盖常见盘，又不做无意义的深搜
 
-    unsafe extern "C" {
-        fn statvfs(path: *const std::ffi::c_char, buf: *mut StatVfs) -> i32;
-    }
+    let probe_path = dir.join(format!(".qml-space-probe.{}", std::process::id()));
+    let Ok(mut file) = std::fs::File::create(&probe_path) else {
+        return None;
+    };
 
-    let c_path = CString::new(dir.as_os_str().as_bytes()).ok()?;
-    let mut buf = std::mem::MaybeUninit::<StatVfs>::zeroed();
-    // SAFETY: `c_path` 以 NUL 结尾；buf 提供足够大的可写区域（Linux 上 struct statvfs 更小）。
-    let rc = unsafe { statvfs(c_path.as_ptr(), buf.as_mut_ptr()) };
-    if rc != 0 {
+    // 在 offset 处写 1 字节是否成功
+    let can_write_at = |file: &mut std::fs::File, offset: u64| -> bool {
+        if file.seek(SeekFrom::Start(offset)).is_err() {
+            return false;
+        }
+        file.write_all(&[0u8]).is_ok()
+    };
+
+    let mut ok: u64 = 0; // 已知可写的最大偏移
+    let mut ng: u64 = PROBE_CAP; // 已知不可写（或未验证）
+    if !can_write_at(&mut file, 0) {
+        let _ = std::fs::remove_file(&probe_path);
         return None;
     }
-    // SAFETY: rc == 0 表示调用成功并已填充 buf
-    let vfs = unsafe { buf.assume_init() };
-    let block = if vfs.f_frsize != 0 {
-        vfs.f_frsize
-    } else {
-        vfs.f_bsize
-    };
-    Some(vfs.f_bavail.saturating_mul(block))
+    // 二分：找「可写/不可写」的边界
+    while ng - ok > 1024 * 1024 {
+        let mid = ok + (ng - ok) / 2;
+        if can_write_at(&mut file, mid) {
+            ok = mid;
+        } else {
+            ng = mid;
+        }
+    }
+
+    let _ = file.seek(SeekFrom::Start(0));
+    drop(file);
+    let _ = std::fs::remove_file(&probe_path);
+
+    if ok == 0 { None } else { Some(ok) }
 }
 
 #[cfg(not(any(windows, unix)))]
@@ -246,8 +300,9 @@ pub(crate) struct OverrideExtractor<'a> {
     budget: ExtractBudget,
     /// 本次新建的文件与目录：失败时删除（这些删掉不损失用户数据）
     created: Vec<std::path::PathBuf>,
-    /// 本次**覆盖**的既有文件：失败时保留，不能删——删了才是真丢用户数据
-    overwritten: Vec<std::path::PathBuf>,
+    /// 本次**覆盖**的既有文件及其备份：(原路径, 备份路径)。
+    /// 失败时用备份还原原内容；成功时删除备份。
+    overwritten: Vec<(std::path::PathBuf, std::path::PathBuf)>,
 }
 
 impl<'a> OverrideExtractor<'a> {
@@ -267,6 +322,33 @@ impl<'a> OverrideExtractor<'a> {
         })
     }
 
+    /// 解析掉符号链接后的根目录（用于 `resolves_within_root` 比对）。
+    fn real_root(&self) -> std::path::PathBuf {
+        self.root
+            .canonicalize()
+            .unwrap_or_else(|_| self.root.to_path_buf())
+    }
+
+    /// `create_dir_all` 并记录**每一层**新建的目录，供回滚逐层删除。
+    ///
+    /// 只记最深层会把中间层留在盘上（评审 sourcery 指出）。
+    fn create_dirs_tracked(&mut self, dir: &std::path::Path) -> Result<(), String> {
+        // 自顶向下找出「第一个不存在的祖先」，它及其下都是本次新建
+        let mut missing: Vec<std::path::PathBuf> = Vec::new();
+        let mut probe = Some(dir);
+        while let Some(p) = probe {
+            if p.exists() {
+                break;
+            }
+            missing.push(p.to_path_buf());
+            probe = p.parent();
+        }
+        std::fs::create_dir_all(dir).map_err(|e| format!("创建目录失败 {}: {e}", dir.display()))?;
+        // 记录从深到浅，回滚时逆序即先深后浅
+        self.created.extend(missing);
+        Ok(())
+    }
+
     /// 释放一条 overrides 条目。
     ///
     /// 越界条目**整包失败**（issue #12 选定策略）：静默跳过会让调用方误以为安装完整，
@@ -280,8 +362,9 @@ impl<'a> OverrideExtractor<'a> {
         let relative_path = &full_name[prefix_len..];
         let destination_path = safe_join_under(self.root, relative_path)
             .ok_or_else(|| format!("整合包条目越界，拒绝解压：{full_name}"))?;
-        // 词法通过还不够：安装目录里可能已被放置指向外部的符号链接
-        if !resolves_within_root(self.root, &destination_path) {
+        // 词法通过还不够：安装目录里可能已被放置指向外部的符号链接。
+        // 用 real_root 比对（root 自身可能也是链接，先解析掉）
+        if !resolves_within_root(&self.real_root(), &destination_path) {
             return Err(format!(
                 "整合包条目解引用后越出安装目录，拒绝解压：{full_name}"
             ));
@@ -289,9 +372,7 @@ impl<'a> OverrideExtractor<'a> {
 
         if is_directory_entry(full_name) {
             if !destination_path.exists() {
-                std::fs::create_dir_all(&destination_path)
-                    .map_err(|e| format!("创建目录失败 {}: {e}", destination_path.display()))?;
-                self.created.push(destination_path);
+                self.create_dirs_tracked(&destination_path)?;
             }
             return Ok(());
         }
@@ -303,18 +384,20 @@ impl<'a> OverrideExtractor<'a> {
         if let Some(parent) = destination_path.parent()
             && !parent.exists()
         {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("创建目录失败 {}: {e}", parent.display()))?;
-            self.created.push(parent.to_path_buf());
+            self.create_dirs_tracked(parent)?;
         }
         // 覆盖语义与源一致（ExtractToFile(overwrite: true)），但**不能先删原文件**：
         // 中途失败会连带丢掉用户原有的配置（ADR-124「失败不丢弃用户文件」）。
-        // 改为写同目录临时文件再 rename 覆盖——要么仍是旧内容，要么是新内容。
+        // 改为写同目录临时文件再替换——要么仍是旧内容，要么是新内容。
+        // 临时名带进程内自增序号：同进程内并发解压同一路径时不会互相撞名
+        // （评审 sourcery 指出：只用 pid 时并发会 create_new 冲突）。
+        static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let mut tmp_name = destination_path
             .file_name()
             .unwrap_or_default()
             .to_os_string();
-        tmp_name.push(format!(".{}.qml-tmp", std::process::id()));
+        tmp_name.push(format!(".{}.{seq}.qml-tmp", std::process::id()));
         let tmp_path = destination_path.with_file_name(&tmp_name);
         // create_new：不跟随符号链接（临时名可预测，缓存目录可能被低权限用户写入）
         let mut out = std::fs::OpenOptions::new()
@@ -341,18 +424,44 @@ impl<'a> OverrideExtractor<'a> {
         }
         // 记录目标是否本来存在：只有本次新建的才在回滚时删除
         let was_new = !destination_path.exists();
-        if let Err(e) = std::fs::rename(&tmp_path, &destination_path) {
+        // 覆盖既有文件前先备份其原内容：安装失败要能还原，而不只是「不删」
+        // （评审 sourcery 指出：只保留文件、内容已被替换，等于用户配置已丢）
+        let backup = if was_new {
+            None
+        } else {
+            let Some(b) = self.backup_path(&destination_path, seq) else {
+                let _ = std::fs::remove_file(&tmp_path);
+                return Err(format!(
+                    "无法为将被覆盖的文件建立备份：{}",
+                    destination_path.display()
+                ));
+            };
+            if std::fs::copy(&destination_path, &b).is_err() {
+                let _ = std::fs::remove_file(&tmp_path);
+                let _ = std::fs::remove_file(&b);
+                return Err(format!("备份既有文件失败：{}", destination_path.display()));
+            }
+            Some(b)
+        };
+        if let Err(e) = replace_file(&tmp_path, &destination_path) {
             let _ = std::fs::remove_file(&tmp_path);
+            if let Some(b) = backup {
+                let _ = std::fs::remove_file(&b);
+            }
             return Err(format!("落盘失败 {}: {e}", destination_path.display()));
         }
-        if was_new {
-            self.created.push(destination_path);
-        } else {
-            // 覆盖了用户原有文件：内容已被换掉，无法还原旧内容。
-            // 记下来便于失败时至少不误删该文件（删除才是真正的数据丢失）。
-            self.overwritten.push(destination_path);
+        match backup {
+            None => self.created.push(destination_path),
+            Some(b) => self.overwritten.push((destination_path, b)),
         }
         Ok(())
+    }
+
+    /// 覆盖前备份文件的落点（与原文件同目录，带唯一后缀）。
+    fn backup_path(&self, destination: &std::path::Path, seq: u64) -> Option<std::path::PathBuf> {
+        let mut name = destination.file_name()?.to_os_string();
+        name.push(format!(".{}.{seq}.qml-bak", std::process::id()));
+        Some(destination.with_file_name(name))
     }
 
     /// 本次已写字节数。
@@ -361,11 +470,10 @@ impl<'a> OverrideExtractor<'a> {
         self.budget.written()
     }
 
-    /// 删除本次安装**新建**的文件与目录（失败时调用，避免留下半成品）。
+    /// 失败回滚：删除本次新建的文件与目录，并用备份还原被覆盖的既有文件。
     ///
-    /// 只删 `created`：`overwritten` 里是被本次覆盖的用户既有文件，删掉等于丢用户数据
-    /// （ADR-124 已确立「安装失败不丢用户文件」）。它们的旧内容无法还原，但保留现状
-    /// 仍好于删除——用户至少还有一份可用文件。
+    /// 只删 `created`：那些是本次新建的，删掉不损失用户数据。
+    /// `overwritten` 里每个条目带备份——把原内容写回，然后删备份。
     /// 逆序删除：先文件后其父目录。
     pub(crate) fn rollback(&mut self) {
         for path in self.created.drain(..).rev() {
@@ -375,7 +483,26 @@ impl<'a> OverrideExtractor<'a> {
                 let _ = std::fs::remove_file(&path);
             }
         }
-        self.overwritten.clear();
+        for (original, backup) in self.overwritten.drain(..).rev() {
+            // 还原原内容；失败则至少把备份留在原地，不静默丢弃用户数据
+            if std::fs::copy(&backup, &original).is_ok() {
+                let _ = std::fs::remove_file(&backup);
+            } else {
+                eprintln!(
+                    "还原被覆盖文件失败：{}（原内容备份保留在 {}）",
+                    original.display(),
+                    backup.display()
+                );
+            }
+        }
+    }
+
+    /// 成功收尾：删除所有备份文件（此时新内容已确认可用）。
+    pub(crate) fn commit(&mut self) {
+        for (_, backup) in self.overwritten.drain(..) {
+            let _ = std::fs::remove_file(&backup);
+        }
+        self.created.clear();
     }
 }
 
@@ -667,9 +794,26 @@ mod tests {
             game_dir.join("existing.txt").exists(),
             "回滚不得删除用户原有文件"
         );
+        // 关键断言：原**内容**必须还原，仅文件存在不算（评审 sourcery 指出第一版漏了这层）
+        assert_eq!(
+            std::fs::read_to_string(game_dir.join("existing.txt")).unwrap(),
+            "user-config",
+            "回滚必须还原被覆盖文件的原内容，而不是留下整合包的内容"
+        );
         assert!(
             !game_dir.join("new.txt").exists(),
             "本次新建的文件应被回滚删除"
+        );
+        // 备份/临时文件也要清理干净，不能留在用户目录里
+        let leftovers: Vec<String> = std::fs::read_dir(&game_dir)
+            .unwrap()
+            .flatten()
+            .filter_map(|e| e.file_name().to_str().map(str::to_owned))
+            .filter(|n| n.contains("qml-bak") || n.contains("qml-tmp"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "回滚后不应残留备份/临时文件: {leftovers:?}"
         );
         let _ = std::fs::remove_dir_all(&game_dir);
     }
