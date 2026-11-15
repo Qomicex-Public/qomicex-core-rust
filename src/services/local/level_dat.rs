@@ -839,6 +839,38 @@ mod tests {
         cleanup(&dir);
     }
 
+    /// 模组整合包（如 ATM10）的 level.dat 含 TAG_Byte_Array：读设置不能报
+    /// Unsupported NBT tag type 7，写回必须逐字节保留该字段
+    #[test]
+    fn byte_array_field_is_read_and_preserved() {
+        let dir = temp_save_dir("byte_array");
+        let mut data = NbtCompound::new();
+        data.insert(
+            "LevelName".to_string(),
+            NbtValue::String("Modded".to_string()),
+        );
+        let blob = vec![0u8, 1, 127, 128, 255];
+        data.insert("modBlob".to_string(), NbtValue::ByteArray(blob.clone()));
+        let mut root = NbtCompound::new();
+        root.insert("Data".to_string(), NbtValue::Compound(data));
+        std::fs::write(dir.join("level.dat"), nbt::write_gzip(&root).unwrap()).unwrap();
+
+        let mut s = read_settings(&dir).expect("含字节数组的 level.dat 必须能读");
+        assert_eq!(s.level_name, "Modded");
+
+        s.level_name = "Modded Renamed".to_string();
+        update_settings(&dir, &s).expect("写回失败");
+
+        let bytes = std::fs::read(dir.join("level.dat")).unwrap();
+        let root = nbt::read(&bytes).expect("写回后解析失败");
+        let data = match root.get("Data") {
+            Some(NbtValue::Compound(d)) => d,
+            _ => panic!("Data 复合缺失"),
+        };
+        assert_eq!(data.get("modBlob"), Some(&NbtValue::ByteArray(blob)));
+        cleanup(&dir);
+    }
+
     #[test]
     fn v2_format_difficulty_and_spawn_roundtrip() {
         let dir = temp_save_dir("v2");

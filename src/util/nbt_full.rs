@@ -8,7 +8,8 @@
 //! （level.dat NBT 编辑）等场景复用，避免重复实现。
 //!
 //! 覆盖标签类型：Byte/Short/Int/Long/Float/Double/String/List/Compound/
-//! IntArray/LongArray（ByteArray(7) 源声明但读路径 switch 无分支 → 保留报错语义）。
+//! IntArray/LongArray/ByteArray（标准 NBT 0..=12 全覆盖）。ByteArray 源 switch 缺分支，
+//! 但模组整合包的 level.dat 会用（如 ATM10），缺失会导致存档设置读写直接失败。
 //! 读取：gzip 魔数探测（0x1F 0x8B → 解压，否则原样）。写出：`write_gzip` 恒 gzip
 //! 压缩（level.dat 语义，Minecraft 客户端不支持未压缩 level.dat）。
 //!
@@ -27,8 +28,6 @@ const TAG_INT: u8 = 3;
 const TAG_LONG: u8 = 4;
 const TAG_FLOAT: u8 = 5;
 const TAG_DOUBLE: u8 = 6;
-/// 源声明但读路径不支持（switch 无该分支 → 落入 default 抛异常 → 保留）
-#[allow(dead_code)] // 源声明但读路径不支持（同源）
 const TAG_BYTE_ARRAY: u8 = 7;
 const TAG_STRING: u8 = 8;
 const TAG_LIST: u8 = 9;
@@ -46,6 +45,8 @@ pub enum NbtValue {
     Long(i64),
     Float(f32),
     Double(f64),
+    /// 原始字节（不做有符号解释，写回与源文件逐字节一致）
+    ByteArray(Vec<u8>),
     String(String),
     List(NbtList),
     Compound(NbtCompound),
@@ -63,6 +64,7 @@ impl NbtValue {
             NbtValue::Long(_) => TAG_LONG,
             NbtValue::Float(_) => TAG_FLOAT,
             NbtValue::Double(_) => TAG_DOUBLE,
+            NbtValue::ByteArray(_) => TAG_BYTE_ARRAY,
             NbtValue::String(_) => TAG_STRING,
             NbtValue::List(_) => TAG_LIST,
             NbtValue::Compound(_) => TAG_COMPOUND,
@@ -139,6 +141,9 @@ pub enum NbtError {
     /// 源 ReadListPayload：NBT list length cannot be negative.
     #[error("NBT list length cannot be negative.")]
     NegativeListLength,
+    /// ReadByteArrayPayload（源无对应）：NBT byte array length cannot be negative.
+    #[error("NBT byte array length cannot be negative.")]
+    NegativeByteArrayLength,
     /// 源 ReadIntArrayPayload：NBT int array length cannot be negative.
     #[error("NBT int array length cannot be negative.")]
     NegativeIntArrayLength,
@@ -212,7 +217,7 @@ fn read_compound_payload<R: Read>(reader: &mut R) -> Result<NbtCompound, NbtErro
     }
 }
 
-/// 对应源 ReadTagPayload 的 switch（10 种类型；源 ByteArray(7) 等未支持类型 →
+/// 对应源 ReadTagPayload 的 switch（源缺 ByteArray 分支，见模块头；其余未知类型 →
 /// switch default 抛 InvalidDataException）
 fn read_tag_payload<R: Read>(reader: &mut R, tag_type: u8) -> Result<NbtValue, NbtError> {
     match tag_type {
@@ -222,6 +227,7 @@ fn read_tag_payload<R: Read>(reader: &mut R, tag_type: u8) -> Result<NbtValue, N
         TAG_LONG => Ok(NbtValue::Long(read_i64_big_endian(reader)?)),
         TAG_FLOAT => Ok(NbtValue::Float(read_f32_big_endian(reader)?)),
         TAG_DOUBLE => Ok(NbtValue::Double(read_f64_big_endian(reader)?)),
+        TAG_BYTE_ARRAY => Ok(NbtValue::ByteArray(read_byte_array_payload(reader)?)),
         TAG_STRING => Ok(NbtValue::String(read_string(reader)?)),
         TAG_LIST => Ok(NbtValue::List(read_list_payload(reader)?)),
         TAG_COMPOUND => Ok(NbtValue::Compound(read_compound_payload(reader)?)),
@@ -248,6 +254,19 @@ fn read_list_payload<R: Read>(reader: &mut R) -> Result<NbtList, NbtError> {
         element_type,
         items,
     })
+}
+
+/// ReadByteArrayPayload（源无对应）：大端 i32 长度（负数抛异常）+ 原始字节
+fn read_byte_array_payload<R: Read>(reader: &mut R) -> Result<Vec<u8>, NbtError> {
+    let length = read_i32_big_endian(reader)?;
+    if length < 0 {
+        return Err(NbtError::NegativeByteArrayLength);
+    }
+    let mut array = vec![0u8; length as usize];
+    reader
+        .read_exact(&mut array)
+        .map_err(|_| NbtError::UnexpectedEndOfStream)?;
+    Ok(array)
 }
 
 /// 对应源 ReadIntArrayPayload：大端 i32 长度（负数抛异常）+ 大端 i32 元素
@@ -307,6 +326,10 @@ fn write_tag_value<W: Write>(writer: &mut W, tag: &NbtValue) -> Result<(), NbtEr
         NbtValue::Long(value) => write_i64_big_endian(writer, *value)?,
         NbtValue::Float(value) => write_f32_big_endian(writer, *value)?,
         NbtValue::Double(value) => write_f64_big_endian(writer, *value)?,
+        NbtValue::ByteArray(array) => {
+            write_i32_big_endian(writer, array.len() as i32)?;
+            writer.write_all(array)?;
+        }
         NbtValue::String(value) => write_string(writer, value)?,
         NbtValue::List(list) => {
             // 源：写 ElementType + 大端 i32 长度 + 逐元素负载
