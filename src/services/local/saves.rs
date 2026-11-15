@@ -6,7 +6,8 @@
 //! 对应源文件：Services/Expansion/Local/Saves.cs（`Saves : LocalResourceBase`，518 行）。
 //! 语义要点：
 //! - 扫描：saves 目录（版本分段 `{gameDirectory}/versions/{version}/saves`，否则
-//!   `{gameDirectory}/saves`），目录不存在 → 空列表；
+//!   `{gameDirectory}/saves`），目录不存在 → 空列表；一级子目录中只有含 `level.dat`
+//!   的才算存档（模组会在 saves 下建自己的数据目录，如 NEI，见 #339）；
 //! - level.dat 解析：NBT 读写统一走公共模块 `util/nbt_full`（gzip 魔数探测 + 全类型）——
 //!   原私有解析器（B10 按源 Saves.cs 移植）已提升为该公共模块（见 util/nbt_full.rs 头）；
 //! - 信息读取：LevelName（缺失/类型不符/任何异常 → None → 目录名兜底）、LastPlayed
@@ -76,6 +77,8 @@ impl Saves {
     /// 扫描存档目录（源：GetSaveFolders）：
     /// 版本分段 → `{gameDirectory}/versions/{version}/saves`，否则 `{gameDirectory}/saves`；
     /// 目录不存在 → 空列表（源 Directory.Exists 前置检查）。
+    /// 差异说明：源只按目录判定，模组数据目录（如 NEI）会被误判为存档（#339）→
+    /// 此处额外要求含 `level.dat`（正常存档必有，游戏也以此识别）。
     /// 差异说明：源 Directory.GetDirectories 的 IO 异常向上抛出 → 此处 panic!
     /// （契约返回 Vec 无错误通道，见模块头"异常语义"）
     fn get_save_folders(&self) -> Vec<String> {
@@ -100,7 +103,8 @@ impl Saves {
                 panic!("读取存档目录项失败: {}: {e}", saves_directory.display())
             });
             let path = entry.path();
-            if path.is_dir() {
+            // 缺 level.dat 的目录不是存档（NEI 等模组会往 saves 下写自己的数据目录，#339）
+            if path.join("level.dat").is_file() {
                 // 源 Directory.GetDirectories 返回完整路径
                 folders.push(path.to_string_lossy().into_owned());
             }
@@ -382,5 +386,38 @@ fn copy_directory_recursive(source_dir: &Path, dest_dir: &Path) {
     for dir in dirs {
         let dest_sub_dir = dest_dir.join(dir.file_name().unwrap_or_default());
         copy_directory_recursive(&dir, &dest_sub_dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #339：saves 下缺 level.dat 的目录（NEI 等模组数据目录）不算存档
+    #[test]
+    fn get_save_folders_skips_dirs_without_level_dat() {
+        let root = std::env::temp_dir().join(format!("qomicex-saves-339-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let saves = root.join("saves");
+        std::fs::create_dir_all(saves.join("World")).unwrap();
+        std::fs::write(saves.join("World").join("level.dat"), b"").unwrap();
+        std::fs::create_dir_all(saves.join("NEI")).unwrap();
+
+        let manager = Saves::new(
+            reqwest::Client::new(),
+            root.to_string_lossy().into_owned(),
+            "1.7.10".to_string(),
+            false,
+            String::new(),
+        );
+        let mut names: Vec<String> = manager
+            .get_save_folders()
+            .iter()
+            .map(|folder| folder_name(folder))
+            .collect();
+
+        let _ = std::fs::remove_dir_all(&root);
+        names.sort();
+        assert_eq!(names, vec!["World".to_string()]);
     }
 }
