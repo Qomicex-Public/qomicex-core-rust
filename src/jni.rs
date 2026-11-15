@@ -1875,7 +1875,7 @@ pub extern "system" fn Java_com_qomicex_launcher_core_CoreBridge_instanceFilesMe
     let result: Value = match category.as_str() {
         "mods" => match block_on(
             factory
-                .create_mods_with_loader(&game_dir, &version_name, version_segmented, "", None)
+                .create_mods(&game_dir, &version_name, version_segmented, "", None)
                 .get_mod_list(None),
         ) {
             Ok(list) => json!(
