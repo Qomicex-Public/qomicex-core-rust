@@ -87,10 +87,12 @@ pub struct ModInfo {
     /// 强制前置依赖列表（issue #165）；无声明 → 空列表。
     #[serde(default)]
     pub dependencies: Vec<ModDependencyInfo>,
-    /// 本 jar 额外提供的 mod id（issue #165：嵌套 Jar-in-Jar 子模块）。
-    /// 容器 jar（典型：`fabric-api`）顶层只声明自己的 id，但其 `META-INF/jars/`
-    /// 或 `META-INF/jarjar/` 下的嵌套 jar 提供了大量子模块 id；依赖判定必须把它们
-    /// 一并算作「已提供」，否则会出现「装了前置却报缺失」的误报。不含自身 mod_id。
+    /// 本 jar 额外提供的 mod id（issue #165 / #373）：嵌套 Jar-in-Jar 子模块 +
+    /// 元数据里声明的 `provides` 别名。容器 jar（典型：`fabric-api`）顶层只声明自己的
+    /// id，但其 `META-INF/jars/` 或 `META-INF/jarjar/` 下的嵌套 jar 提供了大量子模块
+    /// id；Forgified Fabric API 则用 mods.toml 的 `provides = ["fabric", "fabric-api"]`
+    /// 声明别名。依赖判定必须把它们一并算作「已提供」，否则会出现「装了前置却报缺失」
+    /// 的误报。不含自身 mod_id。
     #[serde(default)]
     pub provides_ids: Vec<String>,
 }
