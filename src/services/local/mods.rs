@@ -199,7 +199,9 @@ struct CachedModMeta {
 /// 产物（Forge 实例里存着 fabric.mod.json 的 `fabric` 依赖），必须失效重扫。
 /// v5：缓存身份由 size+mtime 改为文件身份 `fileKey`（见 [`jar_file_key`]）——
 /// 同名替换而 size 与毫秒 mtime 不变时，旧条目会被采信（评审 sourcery 指出）。
-const MOD_META_CACHE_VERSION: u32 = 5;
+/// v6：新增 `provides` 解析（issue #373）——旧缓存的 providesIds 只有嵌套 jar id，
+/// FFAPI 声明的 `fabric` / `fabric-api` 别名匹配不上，必须失效重扫。
+const MOD_META_CACHE_VERSION: u32 = 6;
 
 /// jar 的文件身份：创建时间与最后写时间（均为纳秒精度）的组合哈希。
 ///
@@ -822,6 +824,7 @@ fn parse_metadata(file_bytes: &[u8], info: &mut ModInfo, side: LoaderSide) {
         try_parse_mod_metadata(&mut archive, info, side),
         MetadataOutcome::Parsed
     ) {
+        finalize_provides_ids(info);
         return;
     }
 
@@ -833,6 +836,31 @@ fn parse_metadata(file_bytes: &[u8], info: &mut ModInfo, side: LoaderSide) {
     if let Some(content) = mcmod {
         parse_mcmod_json(&mut archive, &content, info);
     }
+    finalize_provides_ids(info);
+}
+
+/// `provides` 与嵌套 jar id 合并后的收尾：trim、排除自身 id、大小写不敏感去重。
+///
+/// `fabric.mod.json` / `mods.toml` 的 `provides` 是模组声明的别名 id，和嵌套 jar id
+/// 同属「本 jar 额外提供的 id」，因此并入 `provides_ids`。真实案例：Forgified Fabric API
+/// 的 mods.toml 声明 `provides = ["fabric", "fabric-api"]`，不解析它就会把 Forge 实例里
+/// 所有 Fabric 模组的 `fabric-api` 依赖误报成缺失（issue #373）。
+///
+/// 自身 id 必须排除：否则前端会把「自己提供自己」当成依赖已满足。
+fn finalize_provides_ids(info: &mut ModInfo) {
+    let self_id = info.mod_id.trim();
+    let mut kept: Vec<String> = Vec::new();
+    for id in info.provides_ids.drain(..) {
+        let id = id.trim();
+        if id.is_empty() || id.eq_ignore_ascii_case(self_id) {
+            continue;
+        }
+        if kept.iter().any(|x| x.eq_ignore_ascii_case(id)) {
+            continue;
+        }
+        kept.push(id.to_string());
+    }
+    info.provides_ids = kept;
 }
 
 /// 元数据解析结果的两种去向。
@@ -1054,6 +1082,15 @@ fn parse_fabric_json<R: Read + Seek>(
     }
     info.mod_id = json_str(&obj, "id").unwrap_or_default();
     info.dependencies = extract_fabric_depends(obj.get("depends"));
+    // `provides`（Fabric 规范：字符串数组，声明本模组额外提供的 mod id）。
+    // 与 mods.toml 的同名字段语义一致，见 finalize_provides_ids。
+    if let Some(Value::Array(items)) = obj.get("provides") {
+        for item in items {
+            if let Some(id) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                info.provides_ids.push(id.to_string());
+            }
+        }
+    }
     true
 }
 
@@ -1240,6 +1277,15 @@ fn parse_forge_toml<R: Read + Seek>(
     let self_id = toml_get("modId", "");
     if !self_id.is_empty() {
         info.mod_id = self_id.clone();
+    }
+    // `provides`（Forge 规范：`[[mods]]` 下的字符串数组，别名 id）。真实案例：
+    // Forgified Fabric API 用它同时提供 `fabric` / `fabric-api`（issue #373）。
+    if let Some(toml::Value::Array(items)) = mod_table.get("provides") {
+        for item in items {
+            if let Some(id) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                info.provides_ids.push(id.to_string());
+            }
+        }
     }
     let dep_key = if self_id.is_empty() {
         // 无 modId 时无法定位依赖表归属 → 不猜，直接放弃（宁可漏报也不误报）
@@ -2338,6 +2384,57 @@ modId="m"
         );
         // 自身 id 不应混进 provides_ids（避免重复计入）
         assert!(!provided.contains(&"fabric-api"), "{provided:?}");
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_forge_provides_aliases_are_collected() {
+        // 真实形状（FFAPI 0.92.6 的 META-INF/mods.toml）：provides 声明别名 id。
+        // 不解析它，Forge 实例里 Fabric 模组的 `fabric-api` 依赖永远匹配不上（issue #373）。
+        let (game_dir, mods_dir) = temp_game_dir("forge-provides");
+        write_jar(
+            &mods_dir.join("fabric-api-0.92.6.jar"),
+            &[(
+                "META-INF/mods.toml",
+                r#"modLoader = "javafml"
+loaderVersion = "[47,)"
+license = "Apache-2.0"
+
+[[mods]]
+  modId = "fabric_api"
+  version = "0.92.6"
+  displayName = "Forgified Fabric API"
+  provides = ["fabric", "Fabric", "fabric-api", "fabric_api", "  "]
+"#,
+            )],
+        );
+
+        let list = scan(&game_dir, Some("forge"));
+        let api = find(&list, "fabric-api-0.92.6.jar");
+        assert_eq!(api.mod_id, "fabric_api");
+        assert_eq!(
+            api.provides_ids,
+            vec!["fabric".to_string(), "fabric-api".to_string()],
+            "provides 必须并入 providesIds，去重且排除自身 id"
+        );
+        let _ = std::fs::remove_dir_all(&game_dir);
+    }
+
+    #[test]
+    fn e2e_fabric_provides_aliases_are_collected() {
+        // fabric.mod.json 的 provides 同样是别名 id（bundle 型模组常用）。
+        let (game_dir, mods_dir) = temp_game_dir("fabric-provides");
+        write_jar(
+            &mods_dir.join("bundle-1.0.jar"),
+            &[(
+                "fabric.mod.json",
+                r#"{"id":"bundle","name":"Bundle","provides":["wom","WOM","","bundle"]}"#,
+            )],
+        );
+
+        let list = scan(&game_dir, Some("fabric"));
+        let bundle = find(&list, "bundle-1.0.jar");
+        assert_eq!(bundle.provides_ids, vec!["wom".to_string()]);
         let _ = std::fs::remove_dir_all(&game_dir);
     }
 

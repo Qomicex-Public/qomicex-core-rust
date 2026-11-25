@@ -494,6 +494,15 @@ impl LaunchExecutor {
             jvm_list.push("-Dfml.ignoreInvalidMinecraftCertificates=True".to_string());
             jvm_list.push("-Dfml.ignorePatchDiscrepancies=True".to_string());
             jvm_list.push("-Dlog4j2.formatMsgNoLookups=true".to_string());
+            // 游戏 stdout/stderr 默认走系统代码页（中文 Windows = GBK），后端按 UTF-8
+            // lossy 解码 → 实时日志中文变乱码（issue #386）。这两个管道由启动器独占，
+            // 强制 UTF-8：JDK 8–17 读 `sun.stdout.encoding`，JDK 18+（JEP 400）读
+            // `stdout.encoding`，两套都写，旧 JDK 忽略不认识的属性。
+            // 刻意不设 `-Dfile.encoding`：那会改变模组读写文件时的默认字符集。
+            jvm_list.push("-Dsun.stdout.encoding=UTF-8".to_string());
+            jvm_list.push("-Dsun.stderr.encoding=UTF-8".to_string());
+            jvm_list.push("-Dstdout.encoding=UTF-8".to_string());
+            jvm_list.push("-Dstderr.encoding=UTF-8".to_string());
 
             if let Some(extra) = &options.java_options {
                 if let Some(args) = &extra.extra_jvm_args {
@@ -909,7 +918,7 @@ fn windows_major_version() -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::apply_max_memory;
+    use super::{LaunchExecutor, apply_max_memory};
 
     #[test]
     fn appends_max_memory_when_json_has_none() {
@@ -926,5 +935,41 @@ mod tests {
         let mut args = vec!["-Xmx4G".to_string(), "-Dfoo=bar".to_string()];
         apply_max_memory(&mut args, 7936);
         assert_eq!(args, vec!["-Dfoo=bar".to_string(), "-Xmx7936m".to_string()]);
+    }
+
+    /// issue #386：实时日志乱码的根因是游戏 stdout 走系统代码页。默认参数必须给
+    /// JDK 8–17（`sun.*`）与 JDK 18+（JEP 400，无前缀）两套属性；只给一套会让
+    /// 另一半 JDK 继续输出 GBK。
+    #[test]
+    fn default_params_force_utf8_console_encoding() {
+        let dir = std::env::temp_dir().join(format!(
+            "qomicex-jvm-encoding-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let version_dir = dir.join("versions").join("1.20.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(
+            version_dir.join("1.20.1.json"),
+            r#"{"id":"1.20.1","arguments":{"jvm":[],"game":[]},"assetIndex":{"id":"1"}}"#,
+        )
+        .unwrap();
+
+        let executor =
+            LaunchExecutor::new("Qomicex".to_string(), dir.to_string_lossy().into_owned());
+        let options = crate::models::launch::LaunchOptions {
+            version: "1.20.1".to_string(),
+            ..Default::default()
+        };
+        let args = executor.get_jvm_params(&options).unwrap();
+        for prop in [
+            "-Dsun.stdout.encoding=UTF-8",
+            "-Dsun.stderr.encoding=UTF-8",
+            "-Dstdout.encoding=UTF-8",
+            "-Dstderr.encoding=UTF-8",
+        ] {
+            assert!(args.iter().any(|a| a == prop), "缺少 {prop}: {args:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
