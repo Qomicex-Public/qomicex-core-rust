@@ -633,6 +633,8 @@ impl LaunchExecutor {
                 parent_options.version = parent.clone();
                 parent_options.join_server = None;
                 parent_options.join_world = None;
+                // 额外参数只在最外层追加一次，继承链重复会生成重复的 --width。
+                parent_options.extra_game_args = None;
                 game_list.extend(self.get_game_params(&parent_options)?);
             }
         }
@@ -723,6 +725,13 @@ impl LaunchExecutor {
             if is_quick_play_supported(config.asset_index_id.as_deref()) {
                 game_list.push("--quickPlaySingleplayer".to_string());
                 game_list.push(normalized_world);
+            }
+        }
+
+        // 启动器注入的游戏参数（窗口大小 / 全屏等）放最后，同名参数后出现者生效。
+        if let Some(extra) = &options.extra_game_args {
+            for arg in extra {
+                game_list.push(normalize_arg(arg));
             }
         }
 
@@ -970,6 +979,50 @@ mod tests {
         ] {
             assert!(args.iter().any(|a| a == prop), "缺少 {prop}: {args:?}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 启动器注入的窗口参数只追加一次，且位于继承链生成的参数之后
+    /// （同名参数后者生效，不能被父版本参数盖回）。
+    #[test]
+    fn extra_game_args_appended_once_after_inherited_params() {
+        let dir = std::env::temp_dir().join(format!(
+            "qomicex-extra-game-args-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let versions = dir.join("versions");
+        std::fs::create_dir_all(versions.join("parent")).unwrap();
+        std::fs::create_dir_all(versions.join("child")).unwrap();
+        std::fs::write(
+            versions.join("parent").join("parent.json"),
+            r#"{"id":"parent","arguments":{"game":["--parent-arg"]},"assetIndex":{"id":"1"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            versions.join("child").join("child.json"),
+            r#"{"id":"child","inheritsFrom":"parent","arguments":{"game":["--child-arg"]},"assetIndex":{"id":"1"}}"#,
+        )
+        .unwrap();
+
+        let executor =
+            LaunchExecutor::new("Qomicex".to_string(), dir.to_string_lossy().into_owned());
+        let options = crate::models::launch::LaunchOptions {
+            version: "child".to_string(),
+            extra_game_args: Some(vec![
+                "--width".to_string(),
+                "1280".to_string(),
+                "--height".to_string(),
+                "720".to_string(),
+            ]),
+            ..Default::default()
+        };
+        let args = executor.get_game_params(&options).unwrap();
+        assert_eq!(
+            &args[args.len() - 4..],
+            ["--width", "1280", "--height", "720"]
+        );
+        assert_eq!(args.iter().filter(|a| *a == "--width").count(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
