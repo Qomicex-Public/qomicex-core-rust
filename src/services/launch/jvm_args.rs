@@ -633,6 +633,8 @@ impl LaunchExecutor {
                 parent_options.version = parent.clone();
                 parent_options.join_server = None;
                 parent_options.join_world = None;
+                // 额外参数只在最外层追加一次，继承链重复会生成重复的 --width。
+                parent_options.extra_game_args = None;
                 game_list.extend(self.get_game_params(&parent_options)?);
             }
         }
@@ -652,6 +654,8 @@ impl LaunchExecutor {
                 };
                 // C# string.Split(' ') 保留空元素（无 RemoveEmptyEntries），split(' ') 同语义
                 game_list.extend(minecraft_arguments.split(' ').map(String::from));
+                // legacy 版本在 match 内提前返回，注入参数必须在这之前追加。
+                append_extra_game_args(&mut game_list, options);
                 return Ok(game_list);
             }
             Some(args) => {
@@ -725,6 +729,9 @@ impl LaunchExecutor {
                 game_list.push(normalized_world);
             }
         }
+
+        // 启动器注入的游戏参数（窗口大小 / 全屏等）放最后，同名参数后出现者生效。
+        append_extra_game_args(&mut game_list, options);
 
         Ok(game_list)
     }
@@ -832,6 +839,28 @@ pub(crate) fn name_to_uuid(name: &str) -> String {
 
 /// 参数规范化（源：NormalizeArg，786-793 行，实例方法）：空 → ""；Trim；
 /// 含空格且首尾均非双引号 → 加双引号
+/// 追加启动器注入的游戏参数。
+///
+/// `split_command_line` 按所有空白字符拆分，而 [`normalize_arg`] 只识别 ASCII 空格：
+/// 含其它空白（如制表符）的整段必须自己加引号；空条目直接丢弃，否则会变成无法解析的
+/// 空标记。
+fn append_extra_game_args(game_list: &mut Vec<String>, options: &LaunchOptions) {
+    let Some(extra) = &options.extra_game_args else {
+        return;
+    };
+    for arg in extra {
+        let trimmed = arg.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.chars().any(char::is_whitespace) && !trimmed.starts_with('"') {
+            game_list.push(format!("\"{trimmed}\""));
+        } else {
+            game_list.push(normalize_arg(trimmed));
+        }
+    }
+}
+
 pub(crate) fn normalize_arg(value: &str) -> String {
     if value.is_empty() {
         return String::new();
@@ -970,6 +999,119 @@ mod tests {
         ] {
             assert!(args.iter().any(|a| a == prop), "缺少 {prop}: {args:?}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 启动器注入的窗口参数只追加一次，且位于继承链生成的参数之后
+    /// （同名参数后者生效，不能被父版本参数盖回）。
+    #[test]
+    fn extra_game_args_appended_once_after_inherited_params() {
+        let dir = std::env::temp_dir().join(format!(
+            "qomicex-extra-game-args-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let versions = dir.join("versions");
+        std::fs::create_dir_all(versions.join("parent")).unwrap();
+        std::fs::create_dir_all(versions.join("child")).unwrap();
+        std::fs::write(
+            versions.join("parent").join("parent.json"),
+            r#"{"id":"parent","arguments":{"game":["--parent-arg"]},"assetIndex":{"id":"1"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            versions.join("child").join("child.json"),
+            r#"{"id":"child","inheritsFrom":"parent","arguments":{"game":["--child-arg"]},"assetIndex":{"id":"1"}}"#,
+        )
+        .unwrap();
+
+        let executor =
+            LaunchExecutor::new("Qomicex".to_string(), dir.to_string_lossy().into_owned());
+        let options = crate::models::launch::LaunchOptions {
+            version: "child".to_string(),
+            extra_game_args: Some(vec![
+                "--width".to_string(),
+                "1280".to_string(),
+                "--height".to_string(),
+                "720".to_string(),
+            ]),
+            ..Default::default()
+        };
+        let args = executor.get_game_params(&options).unwrap();
+        assert_eq!(
+            &args[args.len() - 4..],
+            ["--width", "1280", "--height", "720"]
+        );
+        assert_eq!(args.iter().filter(|a| *a == "--width").count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 旧版 `minecraftArguments` 分支提前 return，注入参数也必须追加。
+    #[test]
+    fn extra_game_args_are_appended_for_legacy_minecraft_arguments() {
+        let dir = std::env::temp_dir().join(format!(
+            "qomicex-legacy-extra-args-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let version_dir = dir.join("versions").join("legacy");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(
+            version_dir.join("legacy.json"),
+            r#"{"id":"legacy","minecraftArguments":"--username ${auth_player_name}"}"#,
+        )
+        .unwrap();
+
+        let executor =
+            LaunchExecutor::new("Qomicex".to_string(), dir.to_string_lossy().into_owned());
+        let options = crate::models::launch::LaunchOptions {
+            version: "legacy".to_string(),
+            extra_game_args: Some(vec![
+                "--width".to_string(),
+                "1280".to_string(),
+                "--height".to_string(),
+                "720".to_string(),
+            ]),
+            ..Default::default()
+        };
+        let args = executor.get_game_params(&options).unwrap();
+        assert_eq!(
+            &args[args.len() - 4..],
+            ["--width", "1280", "--height", "720"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 含非 ASCII 空白的参数必须整体加引号；空条目直接丢弃。
+    #[test]
+    fn extra_game_args_quote_whitespace_and_drop_empty() {
+        let dir = std::env::temp_dir().join(format!(
+            "qomicex-extra-args-quote-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let version_dir = dir.join("versions").join("1.20.1");
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(
+            version_dir.join("1.20.1.json"),
+            r#"{"id":"1.20.1","arguments":{"game":[]},"assetIndex":{"id":"1"}}"#,
+        )
+        .unwrap();
+
+        let executor =
+            LaunchExecutor::new("Qomicex".to_string(), dir.to_string_lossy().into_owned());
+        let options = crate::models::launch::LaunchOptions {
+            version: "1.20.1".to_string(),
+            extra_game_args: Some(vec![
+                "--title".to_string(),
+                "a\tb".to_string(),
+                String::new(),
+                "   ".to_string(),
+            ]),
+            ..Default::default()
+        };
+        let args = executor.get_game_params(&options).unwrap();
+        assert_eq!(&args[args.len() - 2..], ["--title", "\"a\tb\""]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

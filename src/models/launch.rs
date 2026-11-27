@@ -58,6 +58,10 @@ pub struct LaunchOptions {
     pub java_options: Option<JavaOptions>,
     pub auth_options: Option<AuthOptions>,
     pub game_root: Option<String>,
+    /// 额外游戏参数（如 `--width` / `--height` / `--fullscreen`），追加在版本 JSON
+    /// 生成的游戏参数之后；不参与 includesFrom 递归，避免每条继承链重复追加。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_game_args: Option<Vec<String>>,
     /// 启动细分阶段回调（非源字段，不参与序列化）。
     #[serde(skip)]
     pub on_stage: Option<LaunchStageCallback>,
@@ -73,6 +77,7 @@ impl Default for LaunchOptions {
             java_options: None,
             auth_options: None,
             game_root: None,
+            extra_game_args: None,
             on_stage: None,
         }
     }
@@ -88,6 +93,7 @@ impl std::fmt::Debug for LaunchOptions {
             .field("java_options", &self.java_options)
             .field("auth_options", &self.auth_options)
             .field("game_root", &self.game_root)
+            .field("extra_game_args", &self.extra_game_args)
             .finish_non_exhaustive()
     }
 }
@@ -101,5 +107,6 @@ impl PartialEq for LaunchOptions {
             && self.java_options == other.java_options
             && self.auth_options == other.auth_options
             && self.game_root == other.game_root
+            && self.extra_game_args == other.extra_game_args
     }
 }
